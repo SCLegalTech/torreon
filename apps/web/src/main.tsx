@@ -1,20 +1,30 @@
 import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
+import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
-import type { Quest, QuestStep, RealmSnapshot } from "./types";
+import { mobileApi } from "./mobile-store";
+import { Sprite } from "./Sprite";
+import type { Quest, RealmSnapshot } from "./types";
 import "./styles.css";
 
 type Screen = "menu" | "bastion" | "battle";
 
-const currency = new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 });
-
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error ?? "La operación no pudo completarse.");
-  return body as T;
+  const request = async (base = "") => {
+    const response = await fetch(`${base}${path}`, {
+      ...init,
+      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error ?? "La operación no pudo completarse.");
+    return body as T;
+  };
+  if (!Capacitor.isNativePlatform()) return request();
+  try {
+    return await request("http://127.0.0.1:3000");
+  } catch (error) {
+    if (error instanceof TypeError) return mobileApi<T>(path, init);
+    throw error;
+  }
 }
 
 function Codex({ speaking = false }: { speaking?: boolean }) {
@@ -31,7 +41,14 @@ function Codex({ speaking = false }: { speaking?: boolean }) {
 function Menu({ onStart }: { onStart: () => void }) {
   return (
     <main className="scene menu-scene">
-      <div className="vignette" />
+      <div className="moon" />
+      <div className="distant-castle" aria-hidden="true"><i /><i /><i /></div>
+      <div className="march-ground" />
+      <section className="game-title">
+        <span>LA MARCA DESPIERTA</span>
+        <h1>TORREÓN</h1>
+        <p>La vida es la campaña. Cada resultado real cambia el reino.</p>
+      </section>
       <section className="menu-actions" aria-label="Menú principal">
         <button className="banner-button primary" onClick={onStart}>INICIAR</button>
         <button className="banner-button" disabled>OPCIONES</button>
@@ -42,20 +59,17 @@ function Menu({ onStart }: { onStart: () => void }) {
   );
 }
 
-function FinancialFront({ snapshot }: { snapshot: RealmSnapshot }) {
-  const f = snapshot.realm.financial;
-  const safety = Math.max(0, Math.min(100, 50 + snapshot.projectedMargin / Math.max(1, f.reserveTarget) * 50));
+function CoreLoop() {
   return (
-    <article className="parchment finance-card">
-      <p className="eyebrow">LÍNEA DEL FRENTE</p>
-      <h2>{snapshot.projectedMargin >= 0 ? "La marca resiste" : "La horda avanza"}</h2>
-      <div className="frontline"><span style={{ width: `${safety}%` }} /></div>
-      <dl>
-        <div><dt>Disponible</dt><dd>{currency.format(f.availableBalance)}</dd></div>
-        <div><dt>Ingresos esperados</dt><dd>{currency.format(f.expectedIncome)}</dd></div>
-        <div><dt>Compromisos</dt><dd>{currency.format(f.committedExpenses)}</dd></div>
-        <div className="margin"><dt>Margen proyectado</dt><dd>{currency.format(snapshot.projectedMargin)}</dd></div>
-      </dl>
+    <article className="parchment core-loop">
+      <p className="eyebrow">SLICE 1 · REAL GAMEPLAY</p>
+      <h2>La realidad mueve la batalla</h2>
+      <ol>
+        <li><b>1</b><span>PROPÓSITO</span></li>
+        <li><b>2</b><span>QUEST</span></li>
+        <li><b>3</b><span>EVIDENCIA</span></li>
+        <li><b>4</b><span>IMPACTO</span></li>
+      </ol>
     </article>
   );
 }
@@ -76,13 +90,17 @@ function Bastion({
   const quest = snapshot.currentQuest;
   return (
     <main className="scene bastion-scene">
-      <div className="vignette" />
       <header className="player-bar glass-panel">
         <div className="crest">Φ</div>
         <div><strong>{snapshot.realm.player.displayName}</strong><small>{snapshot.realm.player.title}</small></div>
-        <span className="coin">{currency.format(snapshot.realm.financial.availableBalance)}</span>
+        <span className="bridge-live"><i /> CÓDICE · MCP LOCAL</span>
       </header>
-      <FinancialFront snapshot={snapshot} />
+      <section className="bastion-world" aria-label="La Marca">
+        <div className="keep" aria-hidden="true"><i /><i /><i /><span>TORREÓN</span></div>
+        <div className="road" />
+        <div className="nest" aria-hidden="true"><i /><i /><i /><span>NIDO</span></div>
+      </section>
+      <CoreLoop />
       <section className="quest-callout glass-panel">
         <Codex speaking />
         <div>
@@ -96,9 +114,9 @@ function Bastion({
           ) : (
             <>
               <h2>La mesa está vacía</h2>
-              <p>Conecta ChatGPT por MCP o invoca la misión demostrativa para probar la campaña.</p>
+              <p>Háblale a Códice desde Codex: dile cualquier tarea real. Él negociará el resultado y la convertirá en quest.</p>
               <button className="gold-button" disabled={busy} onClick={onDemo}>
-                {busy ? "INVOCANDO…" : "INVOCAR MISIÓN DE PRUEBA"}
+                {busy ? "INVOCANDO…" : "CARGAR QUEST DEMOSTRATIVA"}
               </button>
             </>
           )}
@@ -125,7 +143,6 @@ function Battle({
   onBack,
   onAccept,
   onStart,
-  onComplete,
 }: {
   snapshot: RealmSnapshot;
   busy: boolean;
@@ -133,7 +150,6 @@ function Battle({
   onBack: () => void;
   onAccept: () => void;
   onStart: () => void;
-  onComplete: (step: QuestStep) => void;
 }) {
   const quest = snapshot.currentQuest;
   if (!quest) return null;
@@ -141,7 +157,6 @@ function Battle({
   const health = battle?.enemyHealth ?? 100;
   return (
     <main className={`scene battle-scene ${impact ? "impact" : ""}`}>
-      <div className="vignette" />
       <header className="battle-header glass-panel">
         <button className="back" onClick={onBack}>‹</button>
         <div><p className="eyebrow">{quest.campaignTitle}</p><h1>{quest.title}</h1></div>
@@ -154,10 +169,11 @@ function Battle({
       </section>
 
       <section className="battlefield" aria-label="Campo de batalla">
-        <div className="codex-position"><Codex speaking={quest.status === "active"} /><small>CÓDICE</small></div>
-        <div className="marquis-token"><span>Φ</span><small>MARQUÉS</small></div>
-        <div className="wolf-token"><span>◆</span><small>LOBO</small></div>
-        <div className="horde-token"><span>☠</span><small>HORDA</small></div>
+        <div className="battle-line" />
+        <div className="codex-position"><Sprite actor="codex" motion={battle?.isKo ? "victory" : "idle"} label="CÓDICE" /></div>
+        <div className="marquis-token"><Sprite actor="marquis" motion={battle?.isKo ? "victory" : impact ? "attack" : "idle"} label="MARQUÉS" /></div>
+        <div className="wolf-token"><Sprite actor="wolf" motion={battle?.isKo ? "victory" : "idle"} label="LOBO" /></div>
+        <div className="horde-token"><Sprite actor="horde" motion={impact ? "hurt" : "idle"} label="HORDA" /></div>
         {impact ? <div className="damage-number">−{impact}</div> : null}
         {battle?.isKo ? <div className="ko">KO</div> : null}
       </section>
@@ -180,11 +196,8 @@ function Battle({
             <article className={`step ${step.status}`} key={step.id}>
               <span className="step-number">{step.status === "completed" ? "✓" : index + 1}</span>
               <div><strong>{step.title}</strong><small>{step.actor.toUpperCase()} · {step.evidence}</small></div>
-              <b>{step.weight}</b>
-              <button
-                disabled={busy || quest.status !== "active" || step.status === "completed"}
-                onClick={() => onComplete(step)}
-              >ATACAR</button>
+              <b>{step.impactAwarded}/{step.weight}</b>
+              {quest.status === "active" && step.status !== "completed" ? <em>ENTREGA EVIDENCIA A CÓDICE</em> : null}
             </article>
           ))}
         </div>
@@ -260,11 +273,6 @@ function App() {
           onBack={() => setScreen("bastion")}
           onAccept={() => quest && void act(() => api(`/api/quests/${quest.id}/accept`, { method: "POST", body: JSON.stringify({ userAccepted: true }) }))}
           onStart={() => quest && void act(() => api(`/api/quests/${quest.id}/start`, { method: "POST" }))}
-          onComplete={(step) => {
-            if (!quest) return;
-            const evidenceNote = window.prompt(`Evidencia para «${step.title}»:`, step.evidence);
-            if (evidenceNote) void act(() => api(`/api/quests/${quest.id}/steps/${step.id}/complete`, { method: "POST", body: JSON.stringify({ evidenceNote }) }));
-          }}
         />
       )}
       {error ? <div className="error-toast" role="alert">{error}</div> : null}

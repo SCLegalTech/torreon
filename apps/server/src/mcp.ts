@@ -35,7 +35,7 @@ export function createMcpServer(service: QuestService): McpServer {
     { name: "torreon", version: "0.1.0" },
     {
       instructions:
-        "Actúa como el Códice de la Marca. Antes de crear una quest, mejora la intención, define un resultado verificable, restricciones de bienestar, evidencia y pasos cuyos pesos sumen 100. Negocia en la conversación y no llames create_quest_draft hasta resumir el contrato. accept_quest exige aceptación explícita; start_quest solo cuando el usuario quiera comenzar. El tiempo no causa daño: solo complete_quest_step con evidencia.",
+        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño: evalúa evidencia y usa submit_quest_evidence; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante.",
     },
   );
 
@@ -43,7 +43,7 @@ export function createMcpServer(service: QuestService): McpServer {
     "get_realm_state",
     {
       title: "Consultar el reino",
-      description: "Consulta el estado financiero, la quest actual y la batalla antes de aconsejar, planear o informar progreso.",
+      description: "Consulta la quest, evidencias, eventos del mundo real y batalla antes de aconsejar, evaluar o informar progreso.",
       inputSchema: {},
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
@@ -113,10 +113,37 @@ export function createMcpServer(service: QuestService): McpServer {
   );
 
   server.registerTool(
+    "submit_quest_evidence",
+    {
+      title: "Evaluar evidencia de una quest",
+      description: "Registra el hecho real y el veredicto razonado de Códice; solo el impacto validado se transforma en ataque.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        stepId: z.string().uuid(),
+        summary: z.string().min(3).max(2000).describe("Resumen concreto de la evidencia observada o aportada."),
+        source: z.enum(["user_declaration", "file", "mcp", "integration", "api"]),
+        verdict: z.enum(["rejected", "partial", "accepted"]),
+        reasoning: z.string().min(3).max(1000).describe("Por qué la evidencia satisface nada, parte o toda la condición pactada."),
+        impactAwarded: z.number().int().min(0).max(100).describe("Daño concedido. Debe respetar el veredicto y el impacto restante del paso."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const result = await service.submitEvidence(args.questId, args.stepId, args);
+      const message = result.battle.isKo
+        ? `KO. «${result.quest.title}» fue completada con evidencia validada.`
+        : args.impactAwarded > 0
+          ? `Impacto validado: ${args.impactAwarded}. La horda conserva ${result.battle.enemyHealth} puntos.`
+          : "Evidencia registrada sin impacto; Códice explicó qué falta.";
+      return toolResult(message, result);
+    },
+  );
+
+  server.registerTool(
     "complete_quest_step",
     {
       title: "Completar un paso",
-      description: "Marca un paso de la quest activa como completado cuando existe evidencia suficiente y aplica su daño a la horda.",
+      description: "Compatibilidad del MVP: acepta toda la evidencia restante de un paso. Prefiere submit_quest_evidence para evaluaciones nuevas.",
       inputSchema: {
         questId: z.string().uuid(),
         stepId: z.string().uuid(),
@@ -149,4 +176,3 @@ export function createMcpServer(service: QuestService): McpServer {
 
   return server;
 }
-

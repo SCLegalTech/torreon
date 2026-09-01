@@ -1,6 +1,8 @@
 export type QuestStatus = "draft" | "accepted" | "active" | "completed" | "abandoned";
-export type StepStatus = "pending" | "completed";
+export type StepStatus = "pending" | "in_progress" | "completed";
 export type StepActor = "user" | "codex" | "shared";
+export type EvidenceSource = "user_declaration" | "file" | "mcp" | "integration" | "api";
+export type EvidenceVerdict = "rejected" | "partial" | "accepted";
 
 export interface QuestStepInput {
   title: string;
@@ -13,6 +15,8 @@ export interface QuestStepInput {
 export interface QuestStep extends QuestStepInput {
   id: string;
   status: StepStatus;
+  impactAwarded: number;
+  evidenceIds: string[];
   evidenceNote?: string;
   completedAt?: string;
 }
@@ -57,6 +61,40 @@ export interface RealmEvent {
   createdAt: string;
 }
 
+export interface EvidenceRecord {
+  id: string;
+  questId: string;
+  stepId: string;
+  summary: string;
+  source: EvidenceSource;
+  verdict: EvidenceVerdict;
+  reasoning: string;
+  impactAwarded: number;
+  createdAt: string;
+}
+
+export interface LifeEvent {
+  id: string;
+  type: "evidence_submitted";
+  questId: string;
+  stepId: string;
+  evidenceId: string;
+  verdict: EvidenceVerdict;
+  impactAwarded: number;
+  createdAt: string;
+}
+
+export interface GameEvent {
+  id: string;
+  type: "quest_attack";
+  sourceLifeEventId: string;
+  questId: string;
+  stepId: string;
+  damage: number;
+  message: string;
+  createdAt: string;
+}
+
 export interface RealmState {
   version: 1;
   player: {
@@ -66,6 +104,9 @@ export interface RealmState {
   financial: FinancialState;
   quests: Quest[];
   events: RealmEvent[];
+  evidence: EvidenceRecord[];
+  lifeEvents: LifeEvent[];
+  gameEvents: GameEvent[];
   updatedAt: string;
 }
 
@@ -85,4 +126,3 @@ export interface RealmSnapshot {
   battle: BattleState | null;
   projectedMargin: number;
 }
-

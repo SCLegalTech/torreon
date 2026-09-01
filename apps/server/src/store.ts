@@ -20,6 +20,9 @@ export function createInitialState(): RealmState {
     },
     quests: [],
     events: [],
+    evidence: [],
+    lifeEvents: [],
+    gameEvents: [],
     updatedAt: now(),
   };
 }
@@ -40,7 +43,17 @@ export class JsonRealmStore {
 
   async read(): Promise<RealmState> {
     const raw = await readFile(this.statePath, "utf8");
-    return JSON.parse(raw) as RealmState;
+    const state = JSON.parse(raw) as RealmState;
+    state.evidence ??= [];
+    state.lifeEvents ??= [];
+    state.gameEvents ??= [];
+    for (const quest of state.quests) {
+      for (const step of quest.steps) {
+        step.impactAwarded ??= step.status === "completed" ? step.weight : 0;
+        step.evidenceIds ??= [];
+      }
+    }
+    return state;
   }
 
   async mutate<T>(mutation: (state: RealmState) => T | Promise<T>): Promise<{ result: T; state: RealmState }> {
@@ -72,4 +85,3 @@ export class JsonRealmStore {
     await rename(tempPath, this.statePath);
   }
 }
-

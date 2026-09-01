@@ -9,6 +9,13 @@ import { demoQuest, QuestService } from "./quest-service.js";
 export function createHttpApp(service: QuestService) {
   const app = express();
   app.disable("x-powered-by");
+  app.use((_req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    next();
+  });
+  app.options("*splat", (_req, res) => res.sendStatus(204));
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/health", async (_req, res) => {
@@ -61,6 +68,20 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
+  app.post("/api/quests/:questId/steps/:stepId/evidence", async (req, res, next) => {
+    try {
+      res.json(await service.submitEvidence(req.params.questId, req.params.stepId, {
+        summary: String(req.body?.summary ?? ""),
+        source: req.body?.source ?? "user_declaration",
+        verdict: req.body?.verdict ?? "rejected",
+        reasoning: String(req.body?.reasoning ?? ""),
+        impactAwarded: Number(req.body?.impactAwarded ?? 0),
+      }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/reset", async (_req, res, next) => {
     try {
       res.json(await service.reset());
@@ -103,4 +124,3 @@ export function createHttpApp(service: QuestService) {
 
   return app;
 }
-

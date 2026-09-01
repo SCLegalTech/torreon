@@ -7,8 +7,10 @@ export interface QuestStep {
   actor: "user" | "codex" | "shared";
   evidence: string;
   evidenceNote?: string;
+  evidenceIds: string[];
+  impactAwarded: number;
   weight: number;
-  status: "pending" | "completed";
+  status: "pending" | "in_progress" | "completed";
 }
 
 export interface Quest {
@@ -36,6 +38,9 @@ export interface RealmSnapshot {
       reserveTarget: number;
     };
     events: Array<{ id: string; message: string; createdAt: string }>;
+    evidence: Array<{ id: string; stepId: string; verdict: "rejected" | "partial" | "accepted"; impactAwarded: number; reasoning: string }>;
+    lifeEvents: Array<{ id: string; evidenceId: string; impactAwarded: number }>;
+    gameEvents: Array<{ id: string; sourceLifeEventId: string; damage: number; message: string }>;
   };
   currentQuest: Quest | null;
   battle: null | {
@@ -47,4 +52,3 @@ export interface RealmSnapshot {
   };
   projectedMargin: number;
 }
-

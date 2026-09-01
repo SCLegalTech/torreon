@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type {
   BattleState,
+  EvidenceSource,
+  EvidenceVerdict,
   Quest,
   QuestPlanInput,
   RealmEvent,
@@ -37,9 +39,7 @@ function addEvent(state: RealmState, event: Omit<RealmEvent, "id" | "createdAt">
 
 export function battleFor(quest: Quest | null): BattleState | null {
   if (!quest) return null;
-  const damage = quest.steps
-    .filter((step) => step.status === "completed")
-    .reduce((sum, step) => sum + step.weight, 0);
+  const damage = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
   const completedSteps = quest.steps.filter((step) => step.status === "completed").length;
   return {
     questId: quest.id,
@@ -91,6 +91,8 @@ export class QuestService {
           ...step,
           id: randomUUID(),
           status: "pending",
+          impactAwarded: 0,
+          evidenceIds: [],
         })),
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -108,7 +110,7 @@ export class QuestService {
       const quest = requireQuest(state, questId);
       if (quest.status !== "draft") throw new Error("Solo se puede reformular una quest en borrador.");
       Object.assign(quest, plan, {
-        steps: plan.steps.map((step) => ({ ...step, id: randomUUID(), status: "pending" as const })),
+        steps: plan.steps.map((step) => ({ ...step, id: randomUUID(), status: "pending" as const, impactAwarded: 0, evidenceIds: [] })),
         updatedAt: now(),
       });
       addEvent(state, { type: "quest_revised", questId, message: `El contrato de «${quest.title}» fue reformulado.` });
@@ -144,24 +146,65 @@ export class QuestService {
     return result;
   }
 
-  async completeStep(questId: string, stepId: string, evidenceNote: string): Promise<{ quest: Quest; battle: BattleState }> {
+  async submitEvidence(
+    questId: string,
+    stepId: string,
+    input: {
+      summary: string;
+      source: EvidenceSource;
+      verdict: EvidenceVerdict;
+      reasoning: string;
+      impactAwarded: number;
+    },
+  ): Promise<{ quest: Quest; battle: BattleState; evidenceId: string; lifeEventId: string; gameEventId: string | null }> {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
-      if (quest.status !== "active") throw new Error("La quest debe estar activa para completar pasos.");
+      if (quest.status !== "active") throw new Error("La quest debe estar activa para evaluar evidencia.");
       const step = quest.steps.find((candidate) => candidate.id === stepId);
       if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
-      if (step.status === "completed") {
-        return { quest, battle: battleFor(quest)! };
+      if (step.status === "completed") throw new Error("Este paso ya recibió todo su impacto.");
+      if (!input.summary.trim()) throw new Error("Describe brevemente la evidencia aportada.");
+      if (!input.reasoning.trim()) throw new Error("Códice debe explicar el veredicto.");
+      const remaining = step.weight - step.impactAwarded;
+      if (!Number.isInteger(input.impactAwarded) || input.impactAwarded < 0 || input.impactAwarded > remaining) {
+        throw new Error(`El impacto debe ser un entero entre 0 y ${remaining}.`);
       }
-      if (!evidenceNote.trim()) throw new Error("Describe brevemente la evidencia del paso.");
-      step.status = "completed";
-      step.evidenceNote = evidenceNote.trim();
-      step.completedAt = now();
-      quest.updatedAt = step.completedAt;
+      if (input.verdict === "rejected" && input.impactAwarded !== 0) {
+        throw new Error("La evidencia rechazada no puede causar daño.");
+      }
+      if (input.verdict === "partial" && (input.impactAwarded <= 0 || input.impactAwarded >= remaining)) {
+        throw new Error("La evidencia parcial debe conceder parte, pero no todo, del impacto restante.");
+      }
+      if (input.verdict === "accepted" && input.impactAwarded !== remaining) {
+        throw new Error("La evidencia aceptada debe conceder todo el impacto restante.");
+      }
+
+      const timestamp = now();
+      const evidenceId = randomUUID();
+      state.evidence.unshift({ id: evidenceId, questId, stepId, summary: input.summary.trim(), source: input.source, verdict: input.verdict, reasoning: input.reasoning.trim(), impactAwarded: input.impactAwarded, createdAt: timestamp });
+      state.evidence = state.evidence.slice(0, 200);
+
+      const lifeEventId = randomUUID();
+      state.lifeEvents.unshift({ id: lifeEventId, type: "evidence_submitted", questId, stepId, evidenceId, verdict: input.verdict, impactAwarded: input.impactAwarded, createdAt: timestamp });
+      state.lifeEvents = state.lifeEvents.slice(0, 200);
+
+      step.evidenceIds.push(evidenceId);
+      step.evidenceNote = input.summary.trim();
+      step.impactAwarded += input.impactAwarded;
+      step.status = step.impactAwarded === step.weight ? "completed" : step.impactAwarded > 0 ? "in_progress" : "pending";
+      if (step.status === "completed") step.completedAt = timestamp;
+      quest.updatedAt = timestamp;
+
+      let gameEventId: string | null = null;
+      if (input.impactAwarded > 0) {
+        gameEventId = randomUUID();
+        state.gameEvents.unshift({ id: gameEventId, type: "quest_attack", sourceLifeEventId: lifeEventId, questId, stepId, damage: input.impactAwarded, message: `${step.title}: ataque de ${input.impactAwarded}.`, createdAt: timestamp });
+        state.gameEvents = state.gameEvents.slice(0, 200);
+      }
       addEvent(state, {
         type: "step_completed",
         questId,
-        message: `${step.title}: impacto de ${step.weight} puntos.`,
+        message: input.impactAwarded > 0 ? `${step.title}: impacto validado de ${input.impactAwarded} puntos.` : `${step.title}: evidencia rechazada; sin impacto.`,
       });
       const battle = battleFor(quest)!;
       if (battle.isKo) {
@@ -170,9 +213,23 @@ export class QuestService {
         quest.updatedAt = quest.completedAt;
         addEvent(state, { type: "quest_completed", questId, message: `KO: «${quest.title}» fue completada.` });
       }
-      return { quest, battle };
+      return { quest, battle, evidenceId, lifeEventId, gameEventId };
     });
     return result;
+  }
+
+  async completeStep(questId: string, stepId: string, evidenceNote: string): Promise<{ quest: Quest; battle: BattleState }> {
+    const snapshot = await this.snapshot();
+    const step = snapshot.realm.quests.find((quest) => quest.id === questId)?.steps.find((candidate) => candidate.id === stepId);
+    if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
+    const result = await this.submitEvidence(questId, stepId, {
+      summary: evidenceNote,
+      source: "user_declaration",
+      verdict: "accepted",
+      reasoning: "Compatibilidad del MVP: evidencia declarada como suficiente.",
+      impactAwarded: step.weight - step.impactAwarded,
+    });
+    return { quest: result.quest, battle: result.battle };
   }
 
   async abandon(questId: string, reason: string): Promise<Quest> {
@@ -213,4 +270,3 @@ export const demoQuest: QuestPlanInput = {
     { title: "Cruzar las cinco puertas", description: "Enviar las cinco candidaturas.", actor: "user", evidence: "Confirmaciones de envío", weight: 40 },
   ],
 };
-

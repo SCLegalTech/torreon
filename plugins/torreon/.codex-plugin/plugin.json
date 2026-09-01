@@ -1,12 +1,12 @@
 {
   "name": "torreon",
   "version": "0.1.0",
-  "description": "Convierte objetivos financieros y de bienestar en quests verificables que avanzan una batalla en Torreón.",
+  "description": "Convierte propósitos reales en quests verificables que avanzan una batalla en Torreón.",
   "author": {
     "name": "Torreón"
   },
   "license": "UNLICENSED",
-  "keywords": ["finanzas", "productividad", "quests", "mcp"],
+  "keywords": ["real-gameplay", "productividad", "quests", "mcp"],
   "skills": "./skills/",
   "interface": {
     "displayName": "Torreón",
@@ -16,8 +16,8 @@
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
     "defaultPrompt": [
-      "Ayúdame a crear una quest financiera de una hora.",
-      "Revisa mi intención y conviértela en una misión verificable.",
+      "Códice, convierte esta tarea real en una quest.",
+      "Evalúa mi evidencia y actualiza la batalla.",
       "Muéstrame el estado de mi campaña activa."
     ],
     "brandColor": "#B87316"

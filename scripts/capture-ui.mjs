@@ -8,7 +8,12 @@ const output = resolve("artifacts/screenshots");
 
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ executablePath: edgePath, headless: true });
-const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+const page = await browser.newPage({
+  viewport: { width: 804, height: 360 },
+  deviceScaleFactor: 2,
+  isMobile: true,
+  hasTouch: true,
+});
 
 async function shot(name) {
   await page.screenshot({ path: resolve(output, name), fullPage: true });
@@ -23,7 +28,7 @@ try {
   await page.getByText("La mesa está vacía").waitFor();
   await shot("02-bastion.png");
 
-  await page.getByRole("button", { name: "INVOCAR MISIÓN DE PRUEBA" }).click();
+  await page.getByRole("button", { name: "CARGAR QUEST DEMOSTRATIVA" }).click();
   await page.getByRole("button", { name: "ABRIR QUEST" }).waitFor();
   await shot("03-bastion-quest.png");
 
@@ -37,14 +42,22 @@ try {
   await page.getByText("EN BATALLA").waitFor();
   await shot("05-battle-active.png");
 
-  while (await page.getByRole("button", { name: "ATACAR", disabled: false }).count()) {
-    const attacks = page.getByRole("button", { name: "ATACAR", disabled: false });
-    page.once("dialog", (dialog) => dialog.accept("Evidencia verificada por la prueba del MVP"));
-    await attacks.first().click();
-    await page.waitForTimeout(250);
+  const state = await (await page.request.get(`${baseUrl}/api/state`)).json();
+  for (const step of state.currentQuest.steps) {
+    await page.request.post(`${baseUrl}/api/quests/${state.currentQuest.id}/steps/${step.id}/evidence`, {
+      data: {
+        summary: `Evidencia verificada para ${step.title}`,
+        source: "api",
+        verdict: "accepted",
+        reasoning: "La prueba automatizada satisface la condición pactada.",
+        impactAwarded: step.weight,
+      },
+    });
+    await page.waitForTimeout(350);
   }
 
   await page.getByText("VICTORIA").waitFor();
+  await page.waitForTimeout(900);
   await shot("06-victory-ko.png");
   process.stdout.write(`Capturas creadas en ${output}\n`);
 } finally {
