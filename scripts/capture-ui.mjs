@@ -22,19 +22,17 @@ async function shot(name) {
 try {
   await page.request.post(`${baseUrl}/api/reset`);
   await page.goto(baseUrl, { waitUntil: "networkidle" });
-  await shot("01-menu.png");
+  await page.getByRole("button", { name: "CREAR QUEST DEMO" }).waitFor();
+  await shot("01-connection.png");
 
-  await page.getByRole("button", { name: "INICIAR" }).click();
+  await page.getByRole("button", { name: "ENTRAR AL BASTIÓN" }).click();
   await page.getByText("La mesa está vacía").waitFor();
   await shot("02-bastion.png");
 
-  await page.getByRole("button", { name: "CARGAR QUEST DEMOSTRATIVA" }).click();
-  await page.getByRole("button", { name: "ABRIR QUEST" }).waitFor();
-  await shot("03-bastion-quest.png");
-
-  await page.getByRole("button", { name: "ABRIR QUEST" }).click();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "CREAR QUEST DEMO" }).click();
   await page.getByRole("button", { name: "ACEPTAR CONTRATO" }).waitFor();
-  await shot("04-quest-draft.png");
+  await shot("03-quest-draft.png");
 
   await page.getByRole("button", { name: "ACEPTAR CONTRATO" }).click();
   await page.getByRole("button", { name: "INICIAR BATALLA" }).waitFor();

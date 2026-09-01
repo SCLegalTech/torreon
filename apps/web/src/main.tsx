@@ -6,7 +6,7 @@ import { Sprite } from "./Sprite";
 import type { Quest, RealmSnapshot } from "./types";
 import "./styles.css";
 
-type Screen = "menu" | "bastion" | "battle";
+type Screen = "gate" | "bastion" | "battle";
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const request = async (base = "") => {
@@ -38,6 +38,53 @@ function Codex({ speaking = false }: { speaking?: boolean }) {
   );
 }
 
+function ConnectionGate({
+  snapshot,
+  busy,
+  onEnter,
+  onDemo,
+  onOpenQuest,
+}: {
+  snapshot: RealmSnapshot | null;
+  busy: boolean;
+  onEnter: () => void;
+  onDemo: () => void;
+  onOpenQuest: () => void;
+}) {
+  const quest = snapshot?.currentQuest ?? null;
+  const progress = quest ? snapshot?.battle?.progress ?? 0 : 78;
+  return (
+    <main className="scene gate-scene">
+      <img className="gate-mockup" src="/assets/art/connection-mockup.png" alt="" aria-hidden="true" />
+      <div className="gate-vignette" />
+      <section className="gate-title" aria-label="Torreon">
+        <div className="gate-keep" aria-hidden="true"><i /></div>
+        <h1>TORREON</h1>
+        <p>LIFE IS THE CAMPAIGN</p>
+      </section>
+      <section className="gate-status left-status glass-panel">
+        <Codex speaking />
+        <div><strong>CÓDICE</strong><span>ONLINE</span></div>
+      </section>
+      <section className="gate-status right-status glass-panel">
+        <div className="mcp-sigil">M</div>
+        <div><strong>MCP</strong><span>SECURE LINK</span></div>
+      </section>
+      <section className="gate-link glass-panel">
+        <p className="eyebrow">{quest ? "QUEST SINCRONIZADA" : "CONECTANDO A CÓDICE"}</p>
+        <div className="gate-progress" aria-label={`Progreso ${progress}%`}><span style={{ width: `${progress}%` }} /></div>
+        <p>{quest ? quest.title : "Estableciendo enlace real con el Dungeon Master."}</p>
+        <div className="gate-actions">
+          <button className="gold-button" onClick={quest ? onOpenQuest : onDemo} disabled={busy}>
+            {quest ? "ABRIR QUEST" : busy ? "INVOCANDO..." : "CREAR QUEST DEMO"}
+          </button>
+          <button className="ghost-button" onClick={onEnter}>ENTRAR AL BASTIÓN</button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function Menu({ onStart }: { onStart: () => void }) {
   return (
     <main className="scene menu-scene">
@@ -46,7 +93,7 @@ function Menu({ onStart }: { onStart: () => void }) {
       <div className="march-ground" />
       <section className="game-title">
         <span>LA MARCA DESPIERTA</span>
-        <h1>TORREÓN</h1>
+        <h1>TORREON</h1>
         <p>La vida es la campaña. Cada resultado real cambia el reino.</p>
       </section>
       <section className="menu-actions" aria-label="Menú principal">
@@ -96,7 +143,7 @@ function Bastion({
         <span className="bridge-live"><i /> CÓDICE · MCP LOCAL</span>
       </header>
       <section className="bastion-world" aria-label="La Marca">
-        <div className="keep" aria-hidden="true"><i /><i /><i /><span>TORREÓN</span></div>
+        <div className="keep" aria-hidden="true"><i /><i /><i /><span>TORREON</span></div>
         <div className="road" />
         <div className="nest" aria-hidden="true"><i /><i /><i /><span>NIDO</span></div>
       </section>
@@ -208,7 +255,7 @@ function Battle({
 
 function App() {
   const requestedScreen = new URLSearchParams(window.location.search).get("screen");
-  const initialScreen: Screen = requestedScreen === "bastion" || requestedScreen === "battle" ? requestedScreen : "menu";
+  const initialScreen: Screen = requestedScreen === "bastion" || requestedScreen === "battle" ? requestedScreen : "gate";
   const [screen, setScreen] = useState<Screen>(initialScreen);
   const [snapshot, setSnapshot] = useState<RealmSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
@@ -251,7 +298,20 @@ function App() {
     }
   };
 
-  if (screen === "menu") return <Menu onStart={() => setScreen("bastion")} />;
+  if (screen === "gate") {
+    return (
+      <>
+        <ConnectionGate
+          snapshot={snapshot}
+          busy={busy}
+          onEnter={() => setScreen("bastion")}
+          onDemo={() => void act(() => api("/api/demo/quest", { method: "POST" })).then(() => setScreen("battle"))}
+          onOpenQuest={() => setScreen("battle")}
+        />
+        {error ? <div className="error-toast" role="alert">{error}</div> : null}
+      </>
+    );
+  }
   if (!snapshot) return <main className="loading"><Codex speaking /><p>El Códice despierta…</p>{error ? <strong>{error}</strong> : null}</main>;
 
   const quest = snapshot.currentQuest;
