@@ -50,10 +50,33 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 .gate-link { position: absolute; right: 50%; bottom: clamp(58px,9vh,110px); width: min(650px,44vw); transform: translateX(50%); padding: .75rem .9rem .9rem; text-align: center; background: linear-gradient(145deg, rgba(5,10,16,.82), rgba(2,5,7,.92)); }
 .gate-link .eyebrow { color: #73ffac; font-family: ui-monospace, "Cascadia Mono", monospace; font-size: clamp(.68rem,1.7vw,1rem); letter-spacing: .08em; }
 .gate-progress { height: 24px; margin: .45rem auto .5rem; overflow: hidden; border: 2px solid #715d3d; background: #07110d; box-shadow: inset 0 0 0 2px #030604, 0 0 15px #37f08b44; }
-.gate-progress span { display: block; height: 100%; background: linear-gradient(90deg, #1bbe67, #70ffc0 70%, #dffff2); box-shadow: 0 0 18px #51ffad; transition: width .55s ease; }
+.gate-progress span { display: block; width: 0; height: 100%; background: linear-gradient(90deg, #1bbe67, #70ffc0 70%, #dffff2); box-shadow: 0 0 18px #51ffad; animation: loadbar 2s ease-out forwards; }
 .gate-link p:not(.eyebrow) { margin: .35rem 0 .7rem; color: #a9b0c4; font-family: ui-monospace, "Cascadia Mono", monospace; font-size: .75rem; line-height: 1.35; }
 .gate-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; }
 .gate-actions .gold-button, .gate-actions .ghost-button { min-height: 42px; padding: .48rem .55rem; font-size: .62rem; }
+
+/* Menú del reino: la maqueta guía la pantalla y solo se activan los puntos del MVP. */
+.realm-scene { width: 100%; max-width: none; height: 100dvh; background: #07080a; }
+.realm-mockup { position: absolute; z-index: -2; inset: 0; width: 100%; height: 100%; object-fit: cover; image-rendering: pixelated; }
+.realm-hotspot, .realm-icon-button { position: absolute; cursor: pointer; border: 1px solid rgba(127,100,58,.86); color: #e9d19b; background: rgba(8,10,10,.72); box-shadow: inset 0 0 0 1px rgba(231,185,94,.12), 0 0 18px rgba(0,0,0,.72); text-shadow: 0 2px #000; }
+.realm-hotspot { display: grid; gap: .15rem; min-width: 156px; padding: .55rem .75rem; text-align: left; }
+.realm-hotspot strong, .realm-hotspot span { display: block; font-family: ui-monospace, "Cascadia Mono", monospace; }
+.realm-hotspot strong { color: #72ffb0; font-size: .78rem; letter-spacing: .06em; }
+.realm-hotspot span { color: #c9bda6; font-size: .62rem; }
+.realm-hotspot:active, .realm-icon-button:active { transform: translateY(2px); filter: brightness(1.2); }
+.campaign-hotspot { left: 1.1%; bottom: 2.5%; width: 15.3%; min-height: 10%; }
+.codex-hotspot { top: 12.2%; right: 2.1%; width: 12.5%; min-height: 17%; }
+.battle-hotspot { left: 58%; bottom: 17.6%; width: 14.2%; min-height: 6.5%; text-align: center; }
+.settings-hotspot { top: 1.4%; right: 1.1%; display: grid; place-items: center; width: 4.2%; min-width: 46px; aspect-ratio: 1; color: #f6d084; font-size: 1.25rem; }
+
+.modal-backdrop { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: max(14px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(14px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left)); background: rgba(0,0,0,.55); backdrop-filter: blur(2px); }
+.quest-composer { width: min(560px,92vw); padding: .9rem; }
+.composer-heading { display: grid; grid-template-columns: 78px 1fr; align-items: center; gap: .7rem; margin-bottom: .7rem; }
+.composer-heading h2 { margin: 0; color: #f5deb1; font-size: 1.25rem; }
+.quest-composer textarea, .step-detail textarea { width: 100%; min-height: 104px; resize: vertical; border: 1px solid #9c621d; color: #f7e6bf; background: #090806e8; padding: .7rem; font: .82rem/1.4 Georgia, "Times New Roman", serif; box-shadow: inset 0 0 20px #000; }
+.quest-composer textarea::placeholder, .step-detail textarea::placeholder { color: #8d806d; }
+.composer-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .65rem; margin-top: .7rem; }
+.composer-actions .gold-button, .composer-actions .ghost-button { min-height: 42px; font-size: .65rem; }
 
 /* Menú reconstruido con capas; ningún mockup se usa como fondo. */
 .menu-scene { display: flex; flex-direction: column; align-items: center; padding: max(28px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom)); background: radial-gradient(circle at 77% 16%, rgba(239,189,96,.2), transparent 13%), linear-gradient(#111c21 0 44%, #282016 45% 58%, #0a0907 59%); }
@@ -169,16 +192,25 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 .steps-panel { margin-top: .55rem; overflow: hidden; }
 .steps-heading { display: flex; justify-content: space-between; padding: .7rem; border-bottom: 1px solid var(--line); color: var(--gold-bright); font-size: .65rem; font-weight: 900; letter-spacing: .08em; }
 .steps-list { padding: .4rem; }
-.step { display: grid; grid-template-columns: 28px 1fr 28px; align-items: center; gap: .42rem; margin-bottom: .4rem; padding: .55rem; border: 1px solid #75501f55; background: #0c0b09cc; }
+.step { margin-bottom: .4rem; border: 1px solid #75501f55; background: #0c0b09cc; }
 .step.completed { opacity: .6; border-color: #56814f88; }
 .step.in_progress { border-color: #c38a2a; background: #211508cc; }
+.step.open { border-color: #d49b38; box-shadow: 0 0 14px #b7711840; }
+.step-summary { display: grid; grid-template-columns: 28px 1fr 34px; align-items: center; gap: .42rem; width: 100%; min-height: 0; padding: .55rem; border: 0; color: inherit; background: transparent; text-align: left; box-shadow: none; }
 .step-number { display: grid; place-items: center; width: 25px; height: 30px; color: #ffc85a; border: 1px solid #9a5f18; clip-path: polygon(50% 0,95% 17%,86% 76%,50% 100%,14% 76%,5% 17%); background: #1a0e06; font-size: .68rem; }
 .step strong, .step small { display: block; }
 .step strong { color: #f1d6a5; font-size: .7rem; }
 .step small { margin-top: .18rem; color: #978b78; font-size: .55rem; line-height: 1.3; }
 .step b { color: var(--gold-bright); font-size: .68rem; }
-.step em { grid-column: 2/4; color: #77cde7; font-size: .48rem; font-style: normal; font-weight: 900; letter-spacing: .08em; }
-.step button { grid-column: 2/4; min-height: 38px; cursor: pointer; border: 1px solid #8a5314; color: #eec26c; background: #2a1308; font-size: .58rem; font-weight: 900; letter-spacing: .08em; }
+.step-detail { padding: 0 .6rem .65rem 2.9rem; color: #d9c7a6; }
+.step-detail p { margin: 0 0 .55rem; font-size: .62rem; line-height: 1.35; }
+.step-detail dl { display: grid; gap: .35rem; margin: 0 0 .55rem; }
+.step-detail dl div { padding-left: .45rem; border-left: 2px solid #8a5314; }
+.step-detail dt { color: #72d7f1; font-size: .48rem; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+.step-detail dd { margin: .1rem 0 0; color: #d8c4a0; font-size: .57rem; line-height: 1.3; }
+.step-detail form { display: grid; gap: .4rem; }
+.step-detail textarea { min-height: 58px; padding: .45rem; font-size: .62rem; }
+.step-detail .gold-button { min-height: 34px; padding: .32rem .45rem; font-size: .5rem; }
 .step button:disabled { cursor: default; opacity: .3; }
 
 .error-toast { position: fixed; z-index: 100; right: max(12px,calc((100vw - 696px)/2)); bottom: max(12px,env(safe-area-inset-bottom)); left: max(12px,calc((100vw - 696px)/2)); padding: .8rem 1rem; border: 1px solid #d4422d; color: #ffd9d1; background: #310804f2; box-shadow: 0 8px 25px #000; font-size: .72rem; }
@@ -190,6 +222,7 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 @keyframes strike { 0% { transform: translateX(0); } 45% { transform: translateX(70px) scale(1.08); } 100% { transform: translateX(0); } }
 @keyframes hit { 0%,100% { transform: scale(1.08) translateX(0); } 35% { transform: scale(1.08) translateX(12px) rotate(6deg); filter: brightness(2); } 65% { transform: scale(1.08) translateX(-8px) rotate(-4deg); } }
 @keyframes ko { from { opacity: 0; transform: scale(2.4) rotate(-8deg); } to { opacity: 1; transform: scale(1) rotate(-8deg); } }
+@keyframes loadbar { from { width: 8%; } to { width: 86%; } }
 
 @media (min-width: 721px) { .scene, .loading { border-right: 1px solid #292217; border-left: 1px solid #292217; box-shadow: 0 0 70px #000; } .game-title { margin-top: 2vh; } }
 @media (max-width: 390px) { .player-bar { grid-template-columns: 42px 1fr; } .player-bar .coin { grid-column: 2; margin-top: .2rem; } .quest-callout { grid-template-columns: 68px 1fr; } .quest-callout .codex { transform: scale(.78); transform-origin: center; } .battlefield { height: 300px; } .sprite { width: 96px; height: 96px; } .actor { width: 100px; } }
@@ -255,12 +288,17 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
   .steps-panel { grid-column: 2; grid-row: 2/4; min-height: 0; margin: 0; }
   .steps-list { height: calc(100% - 34px); overflow-y: auto; }
   .steps-heading { padding: .5rem; }
-  .step { grid-template-columns: 24px 1fr 45px; gap: .3rem; margin-bottom: .25rem; padding: .35rem; }
+  .step { margin-bottom: .25rem; }
+  .step-summary { grid-template-columns: 24px 1fr 45px; gap: .3rem; padding: .35rem; }
   .step-number { width: 22px; height: 26px; }
   .step strong { font-size: .6rem; }
   .step small { font-size: .47rem; }
   .step b { text-align: right; font-size: .55rem; }
   .step em { font-size: .41rem; }
+  .step-detail { padding: 0 .4rem .45rem 2.55rem; }
+  .step-detail p { font-size: .5rem; }
+  .step-detail dd { font-size: .48rem; }
+  .step-detail textarea { min-height: 42px; font-size: .5rem; }
   .sprite { width: 82px; height: 82px; }
   .actor { width: 86px; }
   .actor small { font-size: .43rem; }

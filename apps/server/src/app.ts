@@ -44,6 +44,19 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
+  app.post("/api/quests/from-intent", async (req, res, next) => {
+    try {
+      const snapshot = await service.snapshot();
+      if (snapshot.currentQuest && !["completed", "abandoned"].includes(snapshot.currentQuest.status)) {
+        res.json({ quest: snapshot.currentQuest, reused: true });
+        return;
+      }
+      res.status(201).json({ quest: await service.createDraftFromIntent(String(req.body?.intent ?? "")), reused: false });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/quests/:questId/accept", async (req, res, next) => {
     try {
       res.json({ quest: await service.accept(req.params.questId, req.body?.userAccepted === true) });

@@ -22,17 +22,18 @@ async function shot(name) {
 try {
   await page.request.post(`${baseUrl}/api/reset`);
   await page.goto(baseUrl, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: "CREAR QUEST DEMO" }).waitFor();
-  await shot("01-connection.png");
+  await shot("01-loading.png");
 
-  await page.getByRole("button", { name: "ENTRAR AL BASTIÓN" }).click();
-  await page.getByText("La mesa está vacía").waitFor();
-  await shot("02-bastion.png");
+  await page.getByRole("button", { name: "CAMPAÑAS Crear quest" }).waitFor();
+  await shot("02-realm-menu.png");
 
-  await page.goto(baseUrl, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: "CREAR QUEST DEMO" }).click();
+  await page.getByRole("button", { name: "CAMPAÑAS Crear quest" }).click();
+  await page.getByPlaceholder("Ej: preparar y enviar tres propuestas comerciales antes de las 5 p.m.").fill("ordenar mi escritorio y dejar lista la agenda de mañana");
+  await shot("03-quest-composer.png");
+
+  await page.getByRole("button", { name: "FORJAR QUEST" }).click();
   await page.getByRole("button", { name: "ACEPTAR CONTRATO" }).waitFor();
-  await shot("03-quest-draft.png");
+  await shot("04-quest-draft.png");
 
   await page.getByRole("button", { name: "ACEPTAR CONTRATO" }).click();
   await page.getByRole("button", { name: "INICIAR BATALLA" }).waitFor();

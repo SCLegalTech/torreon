@@ -32,6 +32,69 @@ function validatePlan(plan: QuestPlanInput): void {
   }
 }
 
+function sentenceCase(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized ? normalized[0].toUpperCase() + normalized.slice(1) : "Avanzar una tarea real";
+}
+
+function titleFromIntent(intent: string): string {
+  const compact = sentenceCase(intent).replace(/[.?!]+$/g, "");
+  return compact.length > 46 ? `${compact.slice(0, 43).trim()}...` : compact;
+}
+
+export function questFromIntent(intent: string): QuestPlanInput {
+  const cleanIntent = sentenceCase(intent);
+  if (cleanIntent.length < 8) throw new Error("Describe una quest con un poco más de detalle.");
+  const title = titleFromIntent(cleanIntent);
+  return {
+    campaignTitle: "Campaña activa",
+    title,
+    intent: cleanIntent,
+    outcome: `Completar de forma verificable: ${cleanIntent}`,
+    rationale: "Códice local convirtió la intención en una misión corta con preparación, ejecución y evidencia. En el siguiente corte esto lo negociará el MCP con más inteligencia.",
+    durationMinutes: 45,
+    wellbeingConstraints: ["Mantener el alcance pequeño", "No aceptar progreso sin evidencia"],
+    allowedApps: ["Codex", "Navegador", "Archivos", "Aplicación necesaria para la tarea"],
+    steps: [
+      {
+        title: "Definir victoria",
+        description: "Escribe en una frase cómo se verá la tarea terminada y qué queda por fuera para no agrandar la misión.",
+        actor: "user",
+        evidence: "Resultado esperado redactado",
+        weight: 15,
+      },
+      {
+        title: "Reunir herramientas",
+        description: "Abre o prepara los documentos, enlaces, aplicaciones o materiales necesarios para ejecutar la tarea sin interrupciones.",
+        actor: "shared",
+        evidence: "Lista breve de recursos usados",
+        weight: 15,
+      },
+      {
+        title: "Ejecutar el núcleo",
+        description: "Realiza la acción principal de la quest. Esta es la parte que más cambia la realidad.",
+        actor: "user",
+        evidence: "Captura, enlace, archivo, texto final o confirmación del avance principal",
+        weight: 45,
+      },
+      {
+        title: "Entregar prueba",
+        description: "Resume lo hecho y adjunta o describe la evidencia que permita a Códice evaluar si la acción ocurrió.",
+        actor: "user",
+        evidence: "Evidencia entregada a Códice",
+        weight: 15,
+      },
+      {
+        title: "Cerrar aprendizaje",
+        description: "Anota el siguiente paso natural o la lección de la misión para que el reino conserve memoria útil.",
+        actor: "shared",
+        evidence: "Nota de cierre o siguiente acción",
+        weight: 10,
+      },
+    ],
+  };
+}
+
 function addEvent(state: RealmState, event: Omit<RealmEvent, "id" | "createdAt">): void {
   state.events.unshift({ id: randomUUID(), createdAt: now(), ...event });
   state.events = state.events.slice(0, 100);
@@ -102,6 +165,10 @@ export class QuestService {
       return quest;
     });
     return result;
+  }
+
+  async createDraftFromIntent(intent: string): Promise<Quest> {
+    return this.createDraft(questFromIntent(intent));
   }
 
   async reviseDraft(questId: string, plan: QuestPlanInput): Promise<Quest> {

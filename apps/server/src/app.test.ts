@@ -38,9 +38,21 @@ describe("HTTP app", () => {
     expect(impact.body.battle.enemyHealth).toBe(90);
   });
 
+  it("crea una quest desde una intención libre", async () => {
+    const created = await request(app)
+      .post("/api/quests/from-intent")
+      .send({ intent: "ordenar mi escritorio y dejar lista la agenda de mañana" })
+      .expect(201);
+
+    const quest = created.body.quest;
+    expect(quest.title).toContain("Ordenar mi escritorio");
+    expect(quest.steps).toHaveLength(5);
+    expect(quest.steps.reduce((sum: number, step: { weight: number }) => sum + step.weight, 0)).toBe(100);
+    expect(quest.steps[0].description).toContain("cómo se verá la tarea terminada");
+  });
+
   it("expone salud y rechaza MCP por GET", async () => {
     await request(app).get("/health").expect(200).expect(({ body }) => expect(body.server).toBe("torreon"));
     await request(app).get("/mcp").expect(405);
   });
 });
-

@@ -6,7 +6,7 @@ import { Sprite } from "./Sprite";
 import type { Quest, RealmSnapshot } from "./types";
 import "./styles.css";
 
-type Screen = "gate" | "bastion" | "battle";
+type Screen = "loading" | "realm" | "battle";
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const request = async (base = "") => {
@@ -38,21 +38,7 @@ function Codex({ speaking = false }: { speaking?: boolean }) {
   );
 }
 
-function ConnectionGate({
-  snapshot,
-  busy,
-  onEnter,
-  onDemo,
-  onOpenQuest,
-}: {
-  snapshot: RealmSnapshot | null;
-  busy: boolean;
-  onEnter: () => void;
-  onDemo: () => void;
-  onOpenQuest: () => void;
-}) {
-  const quest = snapshot?.currentQuest ?? null;
-  const progress = quest ? snapshot?.battle?.progress ?? 0 : 78;
+function LoadingGate() {
   return (
     <main className="scene gate-scene">
       <img className="gate-mockup" src="/assets/art/connection-mockup.png" alt="" aria-hidden="true" />
@@ -71,37 +57,44 @@ function ConnectionGate({
         <div><strong>MCP</strong><span>SECURE LINK</span></div>
       </section>
       <section className="gate-link glass-panel">
-        <p className="eyebrow">{quest ? "QUEST SINCRONIZADA" : "CONECTANDO A CÓDICE"}</p>
-        <div className="gate-progress" aria-label={`Progreso ${progress}%`}><span style={{ width: `${progress}%` }} /></div>
-        <p>{quest ? quest.title : "Estableciendo enlace real con el Dungeon Master."}</p>
-        <div className="gate-actions">
-          <button className="gold-button" onClick={quest ? onOpenQuest : onDemo} disabled={busy}>
-            {quest ? "ABRIR QUEST" : busy ? "INVOCANDO..." : "CREAR QUEST DEMO"}
-          </button>
-          <button className="ghost-button" onClick={onEnter}>ENTRAR AL BASTIÓN</button>
-        </div>
+        <p className="eyebrow">CONECTANDO A CÓDICE</p>
+        <div className="gate-progress" aria-label="Conectando"><span /></div>
+        <p>Estableciendo enlace real con el Dungeon Master.</p>
       </section>
     </main>
   );
 }
 
-function Menu({ onStart }: { onStart: () => void }) {
+function RealmMenu({
+  snapshot,
+  onCampaign,
+  onBattle,
+  onReset,
+}: {
+  snapshot: RealmSnapshot;
+  onCampaign: () => void;
+  onBattle: () => void;
+  onReset: () => void;
+}) {
+  const quest = snapshot.currentQuest;
   return (
-    <main className="scene menu-scene">
-      <div className="moon" />
-      <div className="distant-castle" aria-hidden="true"><i /><i /><i /></div>
-      <div className="march-ground" />
-      <section className="game-title">
-        <span>LA MARCA DESPIERTA</span>
-        <h1>TORREON</h1>
-        <p>La vida es la campaña. Cada resultado real cambia el reino.</p>
-      </section>
-      <section className="menu-actions" aria-label="Menú principal">
-        <button className="banner-button primary" onClick={onStart}>INICIAR</button>
-        <button className="banner-button" disabled>OPCIONES</button>
-        <button className="banner-button" disabled>SALIR</button>
-      </section>
-      <p className="build-mark">MVP · LA MARCA DESPIERTA</p>
+    <main className="scene realm-scene">
+      <img className="realm-mockup" src="/assets/art/realm-menu-mockup.png" alt="" aria-hidden="true" />
+      <button className="realm-hotspot campaign-hotspot" onClick={onCampaign}>
+        <strong>{quest ? "CAMPAÑA ACTIVA" : "CAMPAÑAS"}</strong>
+        <span>{quest ? quest.title : "Crear quest"}</span>
+      </button>
+      <button className="realm-hotspot codex-hotspot" onClick={onCampaign}>
+        <strong>CÓDICE</strong>
+        <span>Dungeon Master</span>
+      </button>
+      {quest ? (
+        <button className="realm-hotspot battle-hotspot" onClick={onBattle}>
+          <strong>FRENTE DE BATALLA</strong>
+          <span>{snapshot.battle?.progress ?? 0}% avance</span>
+        </button>
+      ) : null}
+      <button className="realm-icon-button settings-hotspot" onClick={onReset} aria-label="Reiniciar">↻</button>
     </main>
   );
 }
@@ -178,6 +171,49 @@ function Bastion({
   );
 }
 
+function QuestComposer({
+  busy,
+  onClose,
+  onSubmit,
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (intent: string) => void;
+}) {
+  const [intent, setIntent] = useState("");
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Declarar quest">
+      <form
+        className="quest-composer glass-panel"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit(intent);
+        }}
+      >
+        <div className="composer-heading">
+          <Codex speaking />
+          <div>
+            <p className="eyebrow">CÓDICE ESCUCHA</p>
+            <h2>Declara tu quest</h2>
+          </div>
+        </div>
+        <textarea
+          value={intent}
+          onChange={(event) => setIntent(event.currentTarget.value)}
+          placeholder="Ej: preparar y enviar tres propuestas comerciales antes de las 5 p.m."
+          autoFocus
+        />
+        <div className="composer-actions">
+          <button className="ghost-button" type="button" onClick={onClose}>CANCELAR</button>
+          <button className="gold-button" type="submit" disabled={busy || intent.trim().length < 8}>
+            {busy ? "FORJANDO..." : "FORJAR QUEST"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function StatusBadge({ status }: { status: Quest["status"] }) {
   const names = { draft: "BORRADOR", accepted: "ACEPTADA", active: "EN BATALLA", completed: "VICTORIA", abandoned: "RETIRADA" };
   return <span className={`status ${status}`}>{names[status]}</span>;
@@ -190,6 +226,7 @@ function Battle({
   onBack,
   onAccept,
   onStart,
+  onValidateStep,
 }: {
   snapshot: RealmSnapshot;
   busy: boolean;
@@ -197,8 +234,11 @@ function Battle({
   onBack: () => void;
   onAccept: () => void;
   onStart: () => void;
+  onValidateStep: (stepId: string, note: string) => void;
 }) {
   const quest = snapshot.currentQuest;
+  const [openStepId, setOpenStepId] = useState<string | null>(quest?.steps[0]?.id ?? null);
+  const [evidenceNote, setEvidenceNote] = useState("");
   if (!quest) return null;
   const battle = snapshot.battle;
   const health = battle?.enemyHealth ?? 100;
@@ -239,14 +279,43 @@ function Battle({
       <section className="steps-panel glass-panel">
         <div className="steps-heading"><span>PASOS DE LA QUEST</span><strong>{battle?.completedSteps ?? 0}/{quest.steps.length}</strong></div>
         <div className="steps-list">
-          {quest.steps.map((step, index) => (
-            <article className={`step ${step.status}`} key={step.id}>
-              <span className="step-number">{step.status === "completed" ? "✓" : index + 1}</span>
-              <div><strong>{step.title}</strong><small>{step.actor.toUpperCase()} · {step.evidence}</small></div>
-              <b>{step.impactAwarded}/{step.weight}</b>
-              {quest.status === "active" && step.status !== "completed" ? <em>ENTREGA EVIDENCIA A CÓDICE</em> : null}
-            </article>
-          ))}
+          {quest.steps.map((step, index) => {
+            const isOpen = openStepId === step.id;
+            return (
+              <article className={`step ${step.status} ${isOpen ? "open" : ""}`} key={step.id}>
+                <button className="step-summary" type="button" onClick={() => setOpenStepId(isOpen ? null : step.id)}>
+                  <span className="step-number">{step.status === "completed" ? "✓" : index + 1}</span>
+                  <span><strong>{step.title}</strong><small>{step.actor.toUpperCase()} · {step.evidence}</small></span>
+                  <b>{step.impactAwarded}/{step.weight}</b>
+                </button>
+                {isOpen ? (
+                  <div className="step-detail">
+                    <p>{step.description || "Códice no dejó descripción para este paso."}</p>
+                    <dl>
+                      <div><dt>Qué hacer</dt><dd>{step.description || step.title}</dd></div>
+                      <div><dt>Qué entregar</dt><dd>{step.evidence}</dd></div>
+                    </dl>
+                    {quest.status === "active" && step.status !== "completed" ? (
+                      <form
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          onValidateStep(step.id, evidenceNote);
+                          setEvidenceNote("");
+                        }}
+                      >
+                        <textarea
+                          value={evidenceNote}
+                          onChange={(event) => setEvidenceNote(event.currentTarget.value)}
+                          placeholder="Describe o pega aquí la evidencia para Códice."
+                        />
+                        <button className="gold-button" type="submit" disabled={busy || evidenceNote.trim().length < 4}>VALIDAR EVIDENCIA MVP</button>
+                      </form>
+                    ) : null}
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
         </div>
       </section>
     </main>
@@ -255,12 +324,13 @@ function Battle({
 
 function App() {
   const requestedScreen = new URLSearchParams(window.location.search).get("screen");
-  const initialScreen: Screen = requestedScreen === "bastion" || requestedScreen === "battle" ? requestedScreen : "gate";
+  const initialScreen: Screen = requestedScreen === "battle" ? "battle" : requestedScreen === "bastion" || requestedScreen === "realm" ? "realm" : "loading";
   const [screen, setScreen] = useState<Screen>(initialScreen);
   const [snapshot, setSnapshot] = useState<RealmSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [impact, setImpact] = useState<number | null>(null);
+  const [composerOpen, setComposerOpen] = useState(false);
   const lastProgress = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -285,6 +355,12 @@ function App() {
     return () => window.clearInterval(interval);
   }, [refresh]);
 
+  useEffect(() => {
+    if (screen !== "loading") return;
+    const timeout = window.setTimeout(() => setScreen("realm"), 2100);
+    return () => window.clearTimeout(timeout);
+  }, [screen]);
+
   const act = async (operation: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
@@ -298,16 +374,10 @@ function App() {
     }
   };
 
-  if (screen === "gate") {
+  if (screen === "loading") {
     return (
       <>
-        <ConnectionGate
-          snapshot={snapshot}
-          busy={busy}
-          onEnter={() => setScreen("bastion")}
-          onDemo={() => void act(() => api("/api/demo/quest", { method: "POST" })).then(() => setScreen("battle"))}
-          onOpenQuest={() => setScreen("battle")}
-        />
+        <LoadingGate />
         {error ? <div className="error-toast" role="alert">{error}</div> : null}
       </>
     );
@@ -317,22 +387,48 @@ function App() {
   const quest = snapshot.currentQuest;
   return (
     <>
-      {screen === "bastion" ? (
-        <Bastion
+      {screen === "realm" ? (
+        <>
+        <RealmMenu
           snapshot={snapshot}
-          busy={busy}
-          onDemo={() => void act(() => api("/api/demo/quest", { method: "POST" }))}
-          onEnterQuest={() => setScreen("battle")}
+          onCampaign={() => setComposerOpen(true)}
+          onBattle={() => setScreen("battle")}
           onReset={() => void act(() => api("/api/reset", { method: "POST" }))}
         />
+        {composerOpen ? (
+          <QuestComposer
+            busy={busy}
+            onClose={() => setComposerOpen(false)}
+            onSubmit={(intent) => void act(() => api("/api/quests/from-intent", { method: "POST", body: JSON.stringify({ intent }) })).then(() => {
+              setComposerOpen(false);
+              setScreen("battle");
+            })}
+          />
+        ) : null}
+        </>
       ) : (
         <Battle
           snapshot={snapshot}
           busy={busy}
           impact={impact}
-          onBack={() => setScreen("bastion")}
+          onBack={() => setScreen("realm")}
           onAccept={() => quest && void act(() => api(`/api/quests/${quest.id}/accept`, { method: "POST", body: JSON.stringify({ userAccepted: true }) }))}
           onStart={() => quest && void act(() => api(`/api/quests/${quest.id}/start`, { method: "POST" }))}
+          onValidateStep={(stepId, note) => {
+            if (!quest) return;
+            const step = quest.steps.find((candidate) => candidate.id === stepId);
+            if (!step) return;
+            void act(() => api(`/api/quests/${quest.id}/steps/${stepId}/evidence`, {
+              method: "POST",
+              body: JSON.stringify({
+                summary: note,
+                source: "user_declaration",
+                verdict: "accepted",
+                reasoning: "Validación MVP desde la APK: la evidencia declarada satisface el paso seleccionado.",
+                impactAwarded: step.weight - step.impactAwarded,
+              }),
+            }));
+          }}
         />
       )}
       {error ? <div className="error-toast" role="alert">{error}</div> : null}
