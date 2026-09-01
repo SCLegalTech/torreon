@@ -1,0 +1,26 @@
+{
+  "name": "torreon",
+  "version": "0.1.0",
+  "description": "Convierte objetivos financieros y de bienestar en quests verificables que avanzan una batalla en Torreón.",
+  "author": {
+    "name": "Torreón"
+  },
+  "license": "UNLICENSED",
+  "keywords": ["finanzas", "productividad", "quests", "mcp"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Torreón",
+    "shortDescription": "Convierte una intención real en una quest verificable.",
+    "longDescription": "El Códice de la Marca ayuda a formular campañas, dividirlas en pasos verificables y sincronizar su progreso con la batalla de Torreón.",
+    "developerName": "Torreón",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Ayúdame a crear una quest financiera de una hora.",
+      "Revisa mi intención y conviértela en una misión verificable.",
+      "Muéstrame el estado de mi campaña activa."
+    ],
+    "brandColor": "#B87316"
+  },
+  "mcpServers": "./.mcp.json"
+}

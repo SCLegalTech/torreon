@@ -1,0 +1,27 @@
+{
+  "name": "torreon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/server",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c yellow,cyan \"npm run dev -w @torreon/server\" \"npm run dev -w @torreon/web\"",
+    "dev:server": "npm run dev -w @torreon/server",
+    "dev:web": "npm run dev -w @torreon/web",
+    "build": "npm run build -w @torreon/web && npm run build -w @torreon/server",
+    "start": "npm run start -w @torreon/server",
+    "test": "npm run test -w @torreon/server",
+    "typecheck": "npm run typecheck -w @torreon/server && npm run typecheck -w @torreon/web",
+    "capture:ui": "node scripts/capture-ui.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "playwright-core": "^1.62.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

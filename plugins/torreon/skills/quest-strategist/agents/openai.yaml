@@ -1,0 +1,4 @@
+interface:
+  display_name: "Códice de la Marca"
+  short_description: "Diseña y dirige quests verificables de Torreón"
+  default_prompt: "Convierte mi intención en una quest útil y verificable; no la actives hasta que yo acepte el contrato."

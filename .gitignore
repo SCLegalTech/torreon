@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.log
+**/data/torreon-state.json
+**/data/*.tmp
+artifacts/screenshots/
+.DS_Store
