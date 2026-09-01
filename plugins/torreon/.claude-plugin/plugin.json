@@ -1,0 +1,12 @@
+{
+  "name": "torreon",
+  "version": "0.1.0",
+  "description": "Convierte propósitos reales en quests verificables que avanzan una batalla en Torreón.",
+  "author": {
+    "name": "Torreón"
+  },
+  "license": "UNLICENSED",
+  "keywords": ["real-gameplay", "productividad", "quests", "mcp"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}

@@ -24,6 +24,17 @@ npm start
 
 Entonces la interfaz y MCP quedan servidos en `http://127.0.0.1:3000`.
 
+## El Códice como motor
+
+El Dungeon Master es un contrato, no una plantilla: `apps/server/src/codice.ts` define `plan` (objetivo libre -> contrato jugable) y `judge` (evidencia -> veredicto e impacto). Dos runtimes lo cumplen:
+
+- **`anthropic`**: con `ANTHROPIC_API_KEY` definida, el modelo razona dentro del servidor. Así el jugador puede declarar cualquier objetivo desde el propio juego, sin tener un chat abierto.
+- **`heuristico`**: sin credenciales, plantillas y reglas verificables. El MVP nunca se queda sin Dungeon Master.
+
+Cuando el jugador habla con Codex o Claude, el modelo del cliente cumple el mismo contrato desde fuera llamando a las herramientas MCP. El servidor conserva siempre las reglas de daño: el modelo propone importancia relativa, el servidor reparte exactamente 100 puntos; el modelo propone veredicto, el servidor lo acota a lo que el paso permite.
+
+`GET /health` informa qué motor está activo.
+
 ## Probar MCP
 
 Con el servidor activo:
@@ -34,7 +45,9 @@ npx @modelcontextprotocol/inspector@latest
 
 En el Inspector, seleccionar **Streamable HTTP** y usar `http://127.0.0.1:3000/mcp`.
 
-El endpoint local no tiene autenticación y escucha únicamente en loopback por defecto. No debe publicarse. Para ChatGPT se usará Developer Mode con un túnel seguro durante pruebas; el despliegue posterior tendrá aplicación Fly, secretos y almacenamiento separados de Opus.
+El endpoint local no tiene autenticación y escucha únicamente en loopback por defecto. Con `TORREON_MCP_TOKEN` definido, `/mcp` exige `Authorization: Bearer <token>`, que es lo que permite exponerlo por túnel a Claude Desktop o ChatGPT. El despliegue posterior tendrá aplicación Fly, secretos y almacenamiento separados de Opus.
+
+El mismo servidor sirve a Codex y a Claude: los pasos de conexión de cada cliente están en [docs/CONEXION-MCP.md](docs/CONEXION-MCP.md).
 
 ## Flujo demostrable
 
@@ -42,9 +55,12 @@ El endpoint local no tiene autenticación y escucha únicamente en loopback por 
 2. El Códice negocia propósito, restricciones, pasos y evidencia.
 3. Tras aprobación explícita llama `create_quest_draft`, `accept_quest` y `start_quest`.
 4. La interfaz detecta la misión activa.
-5. Códice evalúa evidencia con `submit_quest_evidence`: rechazada, parcial o aceptada.
-6. El servidor registra `Evidence → LifeEvent → GameEvent`; solo el impacto validado reduce la vida de la horda.
-7. Al alcanzar 100 puntos verificados, la quest termina en KO.
+5. El jugador entrega una prueba real con `attach_evidence_artifact`: un documento, un enlace o un texto. El servidor comprueba lo comprobable —existencia, tamaño, tipo, hash, extracto— y guarda copia del documento en `data/artifacts/`.
+6. Códice evalúa esa prueba con `submit_quest_evidence` (o `verify_step_evidence` si juzga el motor): rechazada, parcial o aceptada.
+7. El servidor registra `Evidence → LifeEvent → GameEvent`; solo el impacto validado reduce la vida de la horda, y la batalla muestra el ataque.
+8. Al alcanzar 100 puntos verificados, la quest termina en KO.
+
+El artefacto por sí solo nunca causa daño, y una declaración sin prueba comprobada no puede completar un paso. Esa es la diferencia entre actividad y progreso.
 
 La opción **Cargar quest demostrativa** permite recorrer el contrato sin conectar Codex.
 
@@ -61,9 +77,9 @@ npm run android:install
 
 La segunda orden compila, instala por ADB, crea el puente local y abre `com.solvecoagula.torreon`. La APK de depuración queda en `android/app/build/outputs/apk/debug/app-debug.apk`.
 
-## Plugin local de Codex
+## Plugin local de Codex y Claude
 
-El paquete `plugins/torreon` publica ocho herramientas MCP y la skill **Códice de la Marca**. Se mantiene separado del proyecto y del MCP de Opus; ambos procesos pueden evolucionar sin mezclar estado ni despliegues.
+El paquete `plugins/torreon` publica las herramientas MCP y la skill **Códice de la Marca**. El mismo directorio es plugin de Codex (`.codex-plugin/`) y de Claude Code (`.claude-plugin/`): comparten `.mcp.json` y `skills/`, así que la skill no se duplica. Se mantiene separado del proyecto y del MCP de Opus; ambos procesos pueden evolucionar sin mezclar estado ni despliegues.
 
 En el vivo V2436 de prueba, un administrador de seguridad llamado Cetro/Guard puede poner paquetes ADB nuevos en cuarentena. Si aparece **«Tu administrador borró este paquete»**, se debe autorizar `com.solvecoagula.torreon` en ese administrador y volver a ejecutar `npm run android:install`; el script confirma que la aplicación siga instalada antes de intentar abrirla.
 

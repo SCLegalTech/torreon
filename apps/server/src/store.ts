@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { RealmState } from "./domain.js";
@@ -7,6 +8,7 @@ const now = () => new Date().toISOString();
 export function createInitialState(): RealmState {
   return {
     version: 1,
+    realmId: randomUUID(),
     player: {
       displayName: "Marqués Phi",
       title: "Guardián de la Marca",
@@ -21,6 +23,7 @@ export function createInitialState(): RealmState {
     quests: [],
     events: [],
     evidence: [],
+    artifacts: [],
     lifeEvents: [],
     gameEvents: [],
     updatedAt: now(),
@@ -44,13 +47,17 @@ export class JsonRealmStore {
   async read(): Promise<RealmState> {
     const raw = await readFile(this.statePath, "utf8");
     const state = JSON.parse(raw) as RealmState;
+    // Reinos creados antes de que existiera la identidad reciben una al leerse.
+    state.realmId ??= randomUUID();
     state.evidence ??= [];
+    state.artifacts ??= [];
     state.lifeEvents ??= [];
     state.gameEvents ??= [];
     for (const quest of state.quests) {
       for (const step of quest.steps) {
         step.impactAwarded ??= step.status === "completed" ? step.weight : 0;
         step.evidenceIds ??= [];
+        step.artifactIds ??= [];
       }
     }
     return state;

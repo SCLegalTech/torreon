@@ -7,5 +7,7 @@ dist/
 *.log
 **/data/torreon-state.json
 **/data/*.tmp
+**/data/artifacts/
 artifacts/screenshots/
 .DS_Store
+secrets.local.txt

@@ -8,6 +8,15 @@ const stepShape = {
   description: z.string().max(500).optional(),
   actor: z.enum(["user", "codex", "shared"]).describe("Quién ejecuta principalmente el paso."),
   evidence: z.string().min(1).max(300).describe("Evidencia que demuestra que el paso ocurrió."),
+  evidenceKind: z
+    .enum(["file", "link", "screenshot", "number", "text", "declaration"])
+    .optional()
+    .describe("Qué clase de prueba espera el paso. Prefiere artefactos verificables sobre declaraciones."),
+  verificationHint: z
+    .string()
+    .max(300)
+    .optional()
+    .describe("Qué debe comprobarse en esa prueba antes de conceder impacto."),
   weight: z.number().int().min(1).max(100).describe("Daño causado al completarse; todos los pesos deben sumar 100."),
 };
 
@@ -35,7 +44,7 @@ export function createMcpServer(service: QuestService): McpServer {
     { name: "torreon", version: "0.1.0" },
     {
       instructions:
-        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño: evalúa evidencia y usa submit_quest_evidence; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante.",
+        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito —de cualquier dominio— en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño. La mejor partida es la que el jugador juega sin tocar el teléfono: la evidencia debe entrar por la conversación, no por la pantalla del juego. Si el archivo, la imagen o los datos están cargados en TU conversación, ábrelos, examínalos y regístralos con attest_evidence_artifact declarando qué viste. Si el archivo está en el disco donde corre este MCP, usa attach_evidence_artifact y el servidor comprobará los hechos (existe, tamaño, tipo, hash, extracto). Solo después emite el veredicto con submit_quest_evidence citando los artifactIds; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante. Un artefacto que el servidor no pudo comprobar nunca justifica accepted por sí solo.",
     },
   );
 
@@ -43,13 +52,32 @@ export function createMcpServer(service: QuestService): McpServer {
     "get_realm_state",
     {
       title: "Consultar el reino",
-      description: "Consulta la quest, evidencias, eventos del mundo real y batalla antes de aconsejar, evaluar o informar progreso.",
+      description:
+        "Consulta la quest activa, el paso accionable, el progreso validado, la batalla y la consistencia del reino antes de aconsejar, evaluar o informar progreso. Si el reino viene vacío pero el jugador afirma estar en campaña, lee consistency.instance: casi siempre significa que su partida vive en otra instancia de Torreón (local frente a nube), no que el estado se haya perdido. Pregúntale antes de concluir que hubo un fallo.",
       inputSchema: {},
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     async () => {
       const snapshot = await service.snapshot();
       return toolResult("Estado actual del reino recuperado.", { snapshot });
+    },
+  );
+
+  server.registerTool(
+    "get_quest_detail",
+    {
+      title: "Abrir el expediente de una misión",
+      description:
+        "Lee una misión completa: cada paso con su condición pactada, su impacto validado, los artefactos entregados y los veredictos emitidos. Úsala cuando el jugador pregunte en qué etapa va o qué le falta. get_realm_state responde qué ocurre en el reino; esta responde qué ocurre dentro de la misión.",
+      inputSchema: { questId: z.string().uuid() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId }) => {
+      const quest = await service.questDetail(questId);
+      const paso = quest.currentStep
+        ? `Paso actual: ${quest.currentStep.position}. ${quest.currentStep.title} (faltan ${quest.currentStep.remainingImpact} de ${quest.currentStep.weight}).`
+        : "No queda ningún paso pendiente.";
+      return toolResult(`«${quest.title}» va en ${quest.progress.percent}% validado. ${paso}`, { quest });
     },
   );
 
@@ -125,6 +153,11 @@ export function createMcpServer(service: QuestService): McpServer {
         verdict: z.enum(["rejected", "partial", "accepted"]),
         reasoning: z.string().min(3).max(1000).describe("Por qué la evidencia satisface nada, parte o toda la condición pactada."),
         impactAwarded: z.number().int().min(0).max(100).describe("Daño concedido. Debe respetar el veredicto y el impacto restante del paso."),
+        artifactIds: z
+          .array(z.string().uuid())
+          .max(20)
+          .optional()
+          .describe("Artefactos entregados con attach_evidence_artifact en los que se apoya este veredicto."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
@@ -157,6 +190,106 @@ export function createMcpServer(service: QuestService): McpServer {
         ? `KO. «${result.quest.title}» fue completada.`
         : `Impacto confirmado. La horda conserva ${result.battle.enemyHealth} puntos de vida.`;
       return toolResult(message, result);
+    },
+  );
+
+  server.registerTool(
+    "plan_quest_from_intent",
+    {
+      title: "Pedir al motor que descomponga un objetivo",
+      description:
+        "Deja que el motor de Códice del servidor convierta una intención libre en el borrador de una quest. Úsala cuando prefieras el plan del motor en vez de redactarlo tú; el borrador sigue necesitando aceptación explícita.",
+      inputSchema: {
+        intent: z.string().min(8).max(2000).describe("La intención tal como la expresó el jugador."),
+        minutesAvailable: z.number().int().min(5).max(240).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ intent, minutesAvailable }) => {
+      const quest = await service.createDraftFromIntent(intent, minutesAvailable);
+      return toolResult(`Borrador «${quest.title}» creado por el motor; falta la aceptación explícita del usuario.`, { quest });
+    },
+  );
+
+  server.registerTool(
+    "attach_evidence_artifact",
+    {
+      title: "Entregar un documento al Códice",
+      description:
+        "Entrega un hecho real —un archivo del disco, un enlace o un texto— como artefacto de un paso. El servidor comprueba lo comprobable (existencia, tamaño, tipo, hash, extracto) y devuelve esa comprobación. No causa daño por sí solo: después evalúa con submit_quest_evidence citando el artifactId.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        stepId: z.string().uuid(),
+        kind: z.enum(["file", "link", "text"]).describe("file usa una ruta local; link una URL; text un contenido literal."),
+        path: z.string().max(1000).optional().describe("Ruta local del documento cuando kind es file."),
+        url: z.string().max(2000).optional().describe("URL cuando kind es link."),
+        text: z.string().max(20000).optional().describe("Contenido literal cuando kind es text."),
+        label: z.string().max(200).optional().describe("Nombre corto del artefacto para el reino."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId, stepId, kind, path, url, text, label }) => {
+      const artifact = await service.attachArtifact(questId, stepId, { kind, path, url, text, label });
+      const message = artifact.verification.verified
+        ? `Artefacto comprobado por el servidor: ${artifact.verification.detail}`
+        : `Artefacto registrado sin comprobar: ${artifact.verification.detail}`;
+      return toolResult(message, { artifact });
+    },
+  );
+
+  server.registerTool(
+    "verify_step_evidence",
+    {
+      title: "Pedir el veredicto del motor",
+      description:
+        "Deja que el motor de Códice del servidor juzgue los artefactos ya entregados de un paso y aplique el impacto. Úsala cuando prefieras el veredicto del motor; si vas a juzgar tú la evidencia, usa submit_quest_evidence.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        stepId: z.string().uuid(),
+        note: z.string().max(2000).optional().describe("Declaración del jugador sobre lo que ocurrió."),
+        artifactIds: z.array(z.string().uuid()).max(20).optional().describe("Artefactos a considerar. Por defecto, todos los del paso."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId, stepId, note, artifactIds }) => {
+      const result = await service.verifyStep(questId, stepId, { note, artifactIds });
+      const message = result.battle.isKo
+        ? `KO. «${result.quest.title}» fue completada con evidencia validada.`
+        : `Veredicto ${result.judgement.verdict}: ${result.judgement.reasoning} La horda conserva ${result.battle.enemyHealth} puntos.`;
+      return toolResult(message, { ...result });
+    },
+  );
+
+  server.registerTool(
+    "attest_evidence_artifact",
+    {
+      title: "Atestiguar una prueba que tienes delante",
+      description:
+        "Usa esta herramienta cuando TÚ tengas el archivo, la imagen o los datos cargados en tu propia conversación y puedas examinarlos. Ábrelo, míralo de verdad y declara qué contiene. El jugador no debe tener que abrir el juego para entregar una prueba: la mejor partida es la que se juega sin tocar el teléfono. Después emite el veredicto con submit_quest_evidence citando este artifactId.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        stepId: z.string().uuid(),
+        kind: z.enum(["file", "link", "text"]),
+        label: z.string().min(1).max(200).describe("Nombre del artefacto examinado, por ejemplo «constancia-enero.pdf»."),
+        observed: z
+          .string()
+          .min(10)
+          .max(4000)
+          .describe(
+            "Qué viste literalmente al abrirlo: fechas, nombres, cifras, estados, lo que aparece en la pantalla o en el documento. No escribas lo que el jugador afirma, escribe lo que TÚ observaste.",
+          ),
+        witness: z.string().min(1).max(60).describe("Quién examinó el artefacto: chatgpt, codex, claude."),
+        url: z.string().max(2000).optional(),
+        mimeType: z.string().max(120).optional(),
+        bytes: z.number().int().min(0).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId, stepId, kind, label, observed, witness, url, mimeType, bytes }) => {
+      const artifact = await service.attestArtifact(questId, stepId, { kind, label, observed, witness, url, mimeType, bytes });
+      return toolResult(`Artefacto atestiguado por ${witness}: ${artifact.label}. Ya puedes emitir el veredicto citando su artifactId.`, {
+        artifact,
+      });
     },
   );
 

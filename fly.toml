@@ -1,0 +1,36 @@
+# Aplicación Fly propia de Torreón. Comparte infraestructura con Opus pero
+# no comparte aplicación, secretos ni almacenamiento: son proyectos distintos.
+app = "torreon"
+# Fly no tiene región en Colombia; Dallas es la de menor latencia disponible.
+primary_region = "dfw"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  HOST = "0.0.0.0"
+  PORT = "8080"
+  TORREON_STATE_PATH = "/data/torreon-state.json"
+
+# El reino y los artefactos entregados persisten aquí.
+[[mounts]]
+  source = "torreon_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

@@ -6,8 +6,11 @@ export interface QuestStep {
   description?: string;
   actor: "user" | "codex" | "shared";
   evidence: string;
+  evidenceKind?: "file" | "link" | "screenshot" | "number" | "text" | "declaration";
+  verificationHint?: string;
   evidenceNote?: string;
   evidenceIds: string[];
+  artifactIds: string[];
   impactAwarded: number;
   weight: number;
   status: "pending" | "in_progress" | "completed";
@@ -38,7 +41,14 @@ export interface RealmSnapshot {
       reserveTarget: number;
     };
     events: Array<{ id: string; message: string; createdAt: string }>;
-    evidence: Array<{ id: string; stepId: string; verdict: "rejected" | "partial" | "accepted"; impactAwarded: number; reasoning: string }>;
+    evidence: Array<{ id: string; stepId: string; verdict: "rejected" | "partial" | "accepted"; impactAwarded: number; reasoning: string; artifactIds?: string[] }>;
+    artifacts: Array<{
+      id: string;
+      stepId: string;
+      kind: "file" | "link" | "text";
+      label: string;
+      verification: { verified: boolean; detail: string };
+    }>;
     lifeEvents: Array<{ id: string; evidenceId: string; impactAwarded: number }>;
     gameEvents: Array<{ id: string; sourceLifeEventId: string; damage: number; message: string }>;
   };

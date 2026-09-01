@@ -17,6 +17,7 @@ function freshSnapshot(): RealmSnapshot {
       },
       events: [],
       evidence: [],
+      artifacts: [],
       lifeEvents: [],
       gameEvents: [],
     },
@@ -61,7 +62,7 @@ function demoQuest(): Quest {
     allowedApps: ["Gmail", "Drive", "LinkedIn", "Navegador"],
     status: "draft",
     steps: steps.map(([title, description, actor, evidence, weight]) => ({
-      id: makeId(), title, description, actor, evidence, weight, status: "pending", impactAwarded: 0, evidenceIds: [],
+      id: makeId(), title, description, actor, evidence, weight, status: "pending", impactAwarded: 0, evidenceIds: [], artifactIds: [],
     })),
   };
 }
@@ -127,6 +128,78 @@ export async function mobileApi<T>(path: string, init?: RequestInit): Promise<T>
     snapshot = withBattle({ ...snapshot, currentQuest: { ...quest, steps, status: progress === 100 ? "completed" : "active" } });
     write(snapshot);
     return { quest: snapshot.currentQuest, battle: snapshot.battle } as T;
+  }
+
+  const artifacts = path.match(/^\/api\/quests\/([^/]+)\/steps\/([^/]+)\/artifacts$/);
+  if (artifacts && method === "POST") {
+    const quest = questFrom(snapshot, artifacts[1]);
+    const body = JSON.parse(String(init?.body ?? "{}")) as { kind?: "file" | "link" | "text"; url?: string; text?: string; label?: string };
+    const artifact = {
+      id: makeId(),
+      stepId: artifacts[2],
+      kind: body.kind ?? "text",
+      label: body.label ?? body.url ?? "Texto declarado",
+      verification: {
+        verified: false,
+        detail: "Modo sin conexión: el teléfono registra el artefacto, pero solo el servidor puede comprobarlo.",
+      },
+    };
+    const steps = quest.steps.map((step) =>
+      step.id === artifacts[2] ? { ...step, artifactIds: [...step.artifactIds, artifact.id] } : step,
+    );
+    snapshot = withBattle({
+      ...snapshot,
+      realm: { ...snapshot.realm, artifacts: [artifact, ...snapshot.realm.artifacts] },
+      currentQuest: { ...quest, steps },
+    });
+    write(snapshot);
+    return { artifact } as T;
+  }
+
+  const verify = path.match(/^\/api\/quests\/([^/]+)\/steps\/([^/]+)\/verify$/);
+  if (verify && method === "POST") {
+    const quest = questFrom(snapshot, verify[1]);
+    const body = JSON.parse(String(init?.body ?? "{}")) as { note?: string };
+    const step = quest.steps.find((candidate) => candidate.id === verify[2]);
+    if (!step) throw new Error("Paso no encontrado.");
+    const remaining = step.weight - step.impactAwarded;
+    const note = (body.note ?? "").trim();
+    const half = Math.max(1, Math.floor(remaining / 2));
+    // Sin servidor no hay comprobación posible: el teléfono nunca concede el
+    // impacto completo por su cuenta.
+    const grant = note.length >= 12 && half < remaining ? half : 0;
+    const judgement = {
+      verdict: grant > 0 ? ("partial" as const) : ("rejected" as const),
+      impactAwarded: grant,
+      reasoning:
+        grant > 0
+          ? "Modo sin conexión: Códice registra la declaración como avance parcial. Conecta el servidor para que la prueba pueda comprobarse."
+          : "Modo sin conexión: hace falta una declaración más concreta o la conexión con el servidor para comprobar la prueba.",
+    };
+    const steps = quest.steps.map((candidate) =>
+      candidate.id === step.id
+        ? {
+            ...candidate,
+            impactAwarded: candidate.impactAwarded + grant,
+            evidenceNote: note || candidate.evidenceNote,
+            status: (candidate.impactAwarded + grant >= candidate.weight ? "completed" : grant > 0 ? "in_progress" : candidate.status) as Quest["steps"][number]["status"],
+          }
+        : candidate,
+    );
+    const progress = steps.reduce((sum, candidate) => sum + candidate.impactAwarded, 0);
+    snapshot = withBattle({
+      ...snapshot,
+      realm: {
+        ...snapshot.realm,
+        evidence: [
+          { id: makeId(), stepId: step.id, verdict: judgement.verdict, impactAwarded: grant, reasoning: judgement.reasoning, artifactIds: [] },
+          ...snapshot.realm.evidence,
+        ],
+      },
+      currentQuest: { ...quest, steps, status: progress === 100 ? "completed" : quest.status },
+    });
+    write(snapshot);
+    return { quest: snapshot.currentQuest, battle: snapshot.battle, judgement, artifacts: [] } as T;
   }
 
   throw new Error(`Operación local no soportada: ${method} ${path}`);

@@ -24,14 +24,15 @@ try {
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await shot("01-loading.png");
 
+  await page.getByRole("button", { name: "Encender Torreon" }).click();
   await page.getByRole("button", { name: "CAMPAÑAS Crear quest" }).waitFor();
   await shot("02-realm-menu.png");
 
   await page.getByRole("button", { name: "CAMPAÑAS Crear quest" }).click();
-  await page.getByPlaceholder("Ej: preparar y enviar tres propuestas comerciales antes de las 5 p.m.").fill("ordenar mi escritorio y dejar lista la agenda de mañana");
+  await page.getByPlaceholder("Escribe tu intención real. Ej: necesito enviar cinco hojas de vida.").fill("necesito enviar cinco hojas de vida");
   await shot("03-quest-composer.png");
 
-  await page.getByRole("button", { name: "FORJAR QUEST" }).click();
+  await page.getByRole("button", { name: "ABRIR CÓDICE" }).click();
   await page.getByRole("button", { name: "ACEPTAR CONTRATO" }).waitFor();
   await shot("04-quest-draft.png");
 

@@ -1,15 +1,23 @@
 import { randomUUID } from "node:crypto";
+import { ingestArtifact, witnessArtifact, type ArtifactInput, type WitnessInput } from "./artifacts.js";
+import { HeuristicCodice, questFromIntent, validatePlan, type CodicePlanner, type Judgement } from "./codice.js";
 import type {
   BattleState,
+  EvidenceArtifact,
   EvidenceSource,
   EvidenceVerdict,
   Quest,
+  QuestDetail,
   QuestPlanInput,
+  QuestStep,
   RealmEvent,
   RealmSnapshot,
   RealmState,
 } from "./domain.js";
+import { consistencyFor, currentStepFor, progressFor, questDetailFor } from "./read-models.js";
 import { JsonRealmStore } from "./store.js";
+
+export { questFromIntent } from "./codice.js";
 
 const now = () => new Date().toISOString();
 
@@ -17,82 +25,6 @@ function requireQuest(state: RealmState, questId: string): Quest {
   const quest = state.quests.find((candidate) => candidate.id === questId);
   if (!quest) throw new Error(`Quest no encontrada: ${questId}`);
   return quest;
-}
-
-function validatePlan(plan: QuestPlanInput): void {
-  if (plan.steps.length < 1 || plan.steps.length > 12) {
-    throw new Error("Una quest debe tener entre 1 y 12 pasos.");
-  }
-  const totalWeight = plan.steps.reduce((sum, step) => sum + step.weight, 0);
-  if (totalWeight !== 100) {
-    throw new Error(`Los pesos de los pasos deben sumar 100; actualmente suman ${totalWeight}.`);
-  }
-  if (plan.durationMinutes < 5 || plan.durationMinutes > 240) {
-    throw new Error("La duración debe estar entre 5 y 240 minutos.");
-  }
-}
-
-function sentenceCase(value: string): string {
-  const normalized = value.trim().replace(/\s+/g, " ");
-  return normalized ? normalized[0].toUpperCase() + normalized.slice(1) : "Avanzar una tarea real";
-}
-
-function titleFromIntent(intent: string): string {
-  const compact = sentenceCase(intent).replace(/[.?!]+$/g, "");
-  return compact.length > 46 ? `${compact.slice(0, 43).trim()}...` : compact;
-}
-
-export function questFromIntent(intent: string): QuestPlanInput {
-  const cleanIntent = sentenceCase(intent);
-  if (cleanIntent.length < 8) throw new Error("Describe una quest con un poco más de detalle.");
-  const title = titleFromIntent(cleanIntent);
-  return {
-    campaignTitle: "Campaña activa",
-    title,
-    intent: cleanIntent,
-    outcome: `Completar de forma verificable: ${cleanIntent}`,
-    rationale: "Códice local convirtió la intención en una misión corta con preparación, ejecución y evidencia. En el siguiente corte esto lo negociará el MCP con más inteligencia.",
-    durationMinutes: 45,
-    wellbeingConstraints: ["Mantener el alcance pequeño", "No aceptar progreso sin evidencia"],
-    allowedApps: ["Codex", "Navegador", "Archivos", "Aplicación necesaria para la tarea"],
-    steps: [
-      {
-        title: "Definir victoria",
-        description: "Escribe en una frase cómo se verá la tarea terminada y qué queda por fuera para no agrandar la misión.",
-        actor: "user",
-        evidence: "Resultado esperado redactado",
-        weight: 15,
-      },
-      {
-        title: "Reunir herramientas",
-        description: "Abre o prepara los documentos, enlaces, aplicaciones o materiales necesarios para ejecutar la tarea sin interrupciones.",
-        actor: "shared",
-        evidence: "Lista breve de recursos usados",
-        weight: 15,
-      },
-      {
-        title: "Ejecutar el núcleo",
-        description: "Realiza la acción principal de la quest. Esta es la parte que más cambia la realidad.",
-        actor: "user",
-        evidence: "Captura, enlace, archivo, texto final o confirmación del avance principal",
-        weight: 45,
-      },
-      {
-        title: "Entregar prueba",
-        description: "Resume lo hecho y adjunta o describe la evidencia que permita a Códice evaluar si la acción ocurrió.",
-        actor: "user",
-        evidence: "Evidencia entregada a Códice",
-        weight: 15,
-      },
-      {
-        title: "Cerrar aprendizaje",
-        description: "Anota el siguiente paso natural o la lección de la misión para que el reino conserve memoria útil.",
-        actor: "shared",
-        evidence: "Nota de cierre o siguiente acción",
-        weight: 10,
-      },
-    ],
-  };
 }
 
 function addEvent(state: RealmState, event: Omit<RealmEvent, "id" | "createdAt">): void {
@@ -115,6 +47,35 @@ export function battleFor(quest: Quest | null): BattleState | null {
   };
 }
 
+/** Pasos cuya condición pactada exige una prueba, no un relato. */
+const ARTIFACT_KINDS = new Set(["file", "link", "screenshot"]);
+
+/**
+ * El servidor —no el modelo— decide si un veredicto es admisible.
+ * Si el paso pactó una prueba y no llegó ninguna comprobada, ningún juez puede
+ * dar el paso por cerrado, por convincente que suene la declaración.
+ */
+export function enforceArtifactRule(
+  judgement: Judgement,
+  step: QuestStep,
+  artifacts: EvidenceArtifact[],
+  remainingImpact: number,
+): Judgement {
+  if (judgement.verdict !== "accepted") return judgement;
+  if (!step.evidenceKind || !ARTIFACT_KINDS.has(step.evidenceKind)) return judgement;
+  if (artifacts.some((artifact) => artifact.verification.verified)) return judgement;
+
+  const nota = `Este paso pactó una prueba (${step.evidenceKind}) y no llegó ninguna que el servidor pudiera comprobar, así que no puede cerrarse con una declaración.`;
+  if (remainingImpact <= 1) {
+    return { verdict: "rejected", impactAwarded: 0, reasoning: `${judgement.reasoning} ${nota}` };
+  }
+  return {
+    verdict: "partial",
+    impactAwarded: Math.max(1, Math.floor(remainingImpact / 2)),
+    reasoning: `${judgement.reasoning} ${nota}`,
+  };
+}
+
 function currentQuest(state: RealmState): Quest | null {
   return (
     state.quests.find((quest) => quest.status === "active") ??
@@ -125,8 +86,28 @@ function currentQuest(state: RealmState): Quest | null {
   );
 }
 
+export interface CodiceVerdictResult {
+  quest: Quest;
+  battle: BattleState;
+  evidenceId: string;
+  lifeEventId: string;
+  gameEventId: string | null;
+  judgement: Judgement;
+  artifacts: EvidenceArtifact[];
+}
+
 export class QuestService {
-  constructor(private readonly store: JsonRealmStore) {}
+  constructor(
+    private readonly store: JsonRealmStore,
+    private readonly codice: CodicePlanner = new HeuristicCodice(),
+    private readonly dataDir = "./data",
+    /** Etiqueta legible de esta instancia: distingue el reino local del de la nube. */
+    private readonly instance = process.env.TORREON_INSTANCE?.trim() || "torreon-local",
+  ) {}
+
+  get codiceName(): string {
+    return this.codice.name;
+  }
 
   async snapshot(): Promise<RealmSnapshot> {
     const realm = await this.store.read();
@@ -135,9 +116,21 @@ export class QuestService {
     return {
       realm,
       currentQuest: quest,
+      progress: progressFor(quest),
+      currentStep: currentStepFor(quest),
       battle: battleFor(quest),
+      consistency: consistencyFor(realm, this.instance, quest),
       projectedMargin: availableBalance + expectedIncome - committedExpenses - reserveTarget,
     };
+  }
+
+  /**
+   * Lectura detallada de una misión: pasos, artefactos y veredictos unidos.
+   * Responde «¿qué ocurre exactamente dentro de esta misión?», que es distinto
+   * de la panorámica que da snapshot().
+   */
+  async questDetail(questId: string): Promise<QuestDetail> {
+    return questDetailFor(await this.store.read(), questId);
   }
 
   async createDraft(plan: QuestPlanInput): Promise<Quest> {
@@ -156,6 +149,7 @@ export class QuestService {
           status: "pending",
           impactAwarded: 0,
           evidenceIds: [],
+          artifactIds: [],
         })),
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -167,8 +161,21 @@ export class QuestService {
     return result;
   }
 
-  async createDraftFromIntent(intent: string): Promise<Quest> {
-    return this.createDraft(questFromIntent(intent));
+  /**
+   * Cualquier objetivo, en cualquier dominio, entra por aquí. El Códice activo
+   * decide la descomposición; el servidor solo valida que el contrato sea jugable.
+   */
+  async createDraftFromIntent(intent: string, minutesAvailable?: number): Promise<Quest> {
+    const clean = intent.trim();
+    if (clean.length < 8) throw new Error("Describe una quest con un poco más de detalle.");
+    const realm = await this.store.read();
+    const plan = await this.codice.plan({
+      intent: clean,
+      playerTitle: `${realm.player.displayName}, ${realm.player.title}`,
+      activeCampaign: realm.quests.find((quest) => quest.status === "active")?.campaignTitle,
+      minutesAvailable,
+    });
+    return this.createDraft(plan);
   }
 
   async reviseDraft(questId: string, plan: QuestPlanInput): Promise<Quest> {
@@ -177,7 +184,7 @@ export class QuestService {
       const quest = requireQuest(state, questId);
       if (quest.status !== "draft") throw new Error("Solo se puede reformular una quest en borrador.");
       Object.assign(quest, plan, {
-        steps: plan.steps.map((step) => ({ ...step, id: randomUUID(), status: "pending" as const, impactAwarded: 0, evidenceIds: [] })),
+        steps: plan.steps.map((step) => ({ ...step, id: randomUUID(), status: "pending" as const, impactAwarded: 0, evidenceIds: [], artifactIds: [] })),
         updatedAt: now(),
       });
       addEvent(state, { type: "quest_revised", questId, message: `El contrato de «${quest.title}» fue reformulado.` });
@@ -222,6 +229,7 @@ export class QuestService {
       verdict: EvidenceVerdict;
       reasoning: string;
       impactAwarded: number;
+      artifactIds?: string[];
     },
   ): Promise<{ quest: Quest; battle: BattleState; evidenceId: string; lifeEventId: string; gameEventId: string | null }> {
     const { result } = await this.store.mutate((state) => {
@@ -248,7 +256,8 @@ export class QuestService {
 
       const timestamp = now();
       const evidenceId = randomUUID();
-      state.evidence.unshift({ id: evidenceId, questId, stepId, summary: input.summary.trim(), source: input.source, verdict: input.verdict, reasoning: input.reasoning.trim(), impactAwarded: input.impactAwarded, createdAt: timestamp });
+      const artifactIds = (input.artifactIds ?? []).filter((id) => state.artifacts.some((artifact) => artifact.id === id));
+      state.evidence.unshift({ id: evidenceId, questId, stepId, summary: input.summary.trim(), source: input.source, verdict: input.verdict, reasoning: input.reasoning.trim(), impactAwarded: input.impactAwarded, artifactIds, createdAt: timestamp });
       state.evidence = state.evidence.slice(0, 200);
 
       const lifeEventId = randomUUID();
@@ -283,6 +292,113 @@ export class QuestService {
       return { quest, battle, evidenceId, lifeEventId, gameEventId };
     });
     return result;
+  }
+
+  /**
+   * Entrega un hecho real al MCP: un documento, un enlace o un texto.
+   * El servidor comprueba lo comprobable y lo guarda en el reino. Todavía no
+   * causa daño: un artefacto es materia prima de un veredicto, no el veredicto.
+   */
+  async attachArtifact(questId: string, stepId: string, input: ArtifactInput): Promise<EvidenceArtifact> {
+    const state = await this.store.read();
+    const quest = requireQuest(state, questId);
+    if (["completed", "abandoned"].includes(quest.status)) {
+      throw new Error("Esta quest ya no admite evidencia.");
+    }
+    if (!quest.steps.some((step) => step.id === stepId)) throw new Error(`Paso no encontrado: ${stepId}`);
+
+    const artifact = await ingestArtifact(input, questId, stepId, this.dataDir);
+
+    const { result } = await this.store.mutate((fresh) => {
+      const freshQuest = requireQuest(fresh, questId);
+      const step = freshQuest.steps.find((candidate) => candidate.id === stepId);
+      if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
+      fresh.artifacts.unshift(artifact);
+      fresh.artifacts = fresh.artifacts.slice(0, 200);
+      step.artifactIds.push(artifact.id);
+      freshQuest.updatedAt = now();
+      addEvent(fresh, {
+        type: "evidence_attached",
+        questId,
+        message: `${step.title}: llegó ${artifact.label}${artifact.verification.verified ? " (comprobado)" : " (sin comprobar)"}.`,
+      });
+      return artifact;
+    });
+    return result;
+  }
+
+  /**
+   * Registra un artefacto que el Dungeon Master examinó donde vive el archivo.
+   * Permite jugar sin tocar el teléfono: la prueba nunca pasa por el juego.
+   */
+  async attestArtifact(questId: string, stepId: string, input: WitnessInput): Promise<EvidenceArtifact> {
+    const { result } = await this.store.mutate((state) => {
+      const quest = requireQuest(state, questId);
+      if (["completed", "abandoned"].includes(quest.status)) {
+        throw new Error("Esta quest ya no admite evidencia.");
+      }
+      const step = quest.steps.find((candidate) => candidate.id === stepId);
+      if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
+
+      const artifact = witnessArtifact(input, questId, stepId);
+      state.artifacts.unshift(artifact);
+      state.artifacts = state.artifacts.slice(0, 200);
+      step.artifactIds.push(artifact.id);
+      quest.updatedAt = now();
+      addEvent(state, {
+        type: "evidence_attached",
+        questId,
+        message: `${step.title}: ${artifact.verification.witness} examinó ${artifact.label}.`,
+      });
+      return artifact;
+    });
+    return result;
+  }
+
+  /**
+   * Cierra el bucle: Códice juzga la evidencia del paso y el veredicto se
+   * convierte en LifeEvent y, solo si hay impacto, en el ataque de la batalla.
+   */
+  async verifyStep(
+    questId: string,
+    stepId: string,
+    input: { note?: string; artifactIds?: string[]; attach?: ArtifactInput },
+  ): Promise<CodiceVerdictResult> {
+    if (input.attach) await this.attachArtifact(questId, stepId, input.attach);
+
+    const state = await this.store.read();
+    const quest = requireQuest(state, questId);
+    if (quest.status !== "active") throw new Error("La quest debe estar activa para evaluar evidencia.");
+    const step: QuestStep | undefined = quest.steps.find((candidate) => candidate.id === stepId);
+    if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
+    if (step.status === "completed") throw new Error("Este paso ya recibió todo su impacto.");
+
+    const wanted = input.artifactIds?.length ? new Set(input.artifactIds) : new Set(step.artifactIds);
+    const artifacts = state.artifacts.filter((artifact) => artifact.stepId === stepId && wanted.has(artifact.id));
+    const note = (input.note ?? "").trim();
+    if (!note && artifacts.length === 0) {
+      throw new Error("Entrega un artefacto o describe la evidencia antes de pedir el veredicto.");
+    }
+
+    const remainingImpact = step.weight - step.impactAwarded;
+    const raw = await this.codice.judge({ quest, step, remainingImpact, note, artifacts });
+    const judgement = enforceArtifactRule(raw, step, artifacts, remainingImpact);
+    const source: EvidenceSource = artifacts.some((artifact) => artifact.kind === "file")
+      ? "file"
+      : artifacts.length > 0
+        ? "mcp"
+        : "user_declaration";
+
+    const applied = await this.submitEvidence(questId, stepId, {
+      summary: note || artifacts.map((artifact) => artifact.label).join(", "),
+      source,
+      verdict: judgement.verdict,
+      reasoning: judgement.reasoning,
+      impactAwarded: judgement.impactAwarded,
+      artifactIds: artifacts.map((artifact) => artifact.id),
+    });
+
+    return { ...applied, judgement, artifacts };
   }
 
   async completeStep(questId: string, stepId: string, evidenceNote: string): Promise<{ quest: Quest; battle: BattleState }> {

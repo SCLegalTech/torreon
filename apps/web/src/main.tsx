@@ -6,7 +6,7 @@ import { Sprite } from "./Sprite";
 import type { Quest, RealmSnapshot } from "./types";
 import "./styles.css";
 
-type Screen = "loading" | "realm" | "battle";
+type Screen = "loading" | "realm" | "thinking" | "battle";
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const request = async (base = "") => {
@@ -38,29 +38,21 @@ function Codex({ speaking = false }: { speaking?: boolean }) {
   );
 }
 
-function LoadingGate() {
+function LoadingGate({ onStart }: { onStart: () => void }) {
+  const [powered, setPowered] = useState(false);
+  const start = () => {
+    if (powered) return;
+    setPowered(true);
+    window.setTimeout(onStart, 760);
+  };
   return (
-    <main className="scene gate-scene">
-      <img className="gate-mockup" src="/assets/art/connection-mockup.png" alt="" aria-hidden="true" />
+    <main className={`scene gate-scene ${powered ? "powered" : ""}`}>
+      <img className="gate-mockup" src="/assets/art/loading-bg.png" alt="" aria-hidden="true" />
       <div className="gate-vignette" />
-      <section className="gate-title" aria-label="Torreon">
-        <div className="gate-keep" aria-hidden="true"><i /></div>
-        <h1>TORREON</h1>
-        <p>LIFE IS THE CAMPAIGN</p>
-      </section>
-      <section className="gate-status left-status glass-panel">
-        <Codex speaking />
-        <div><strong>CÓDICE</strong><span>ONLINE</span></div>
-      </section>
-      <section className="gate-status right-status glass-panel">
-        <div className="mcp-sigil">M</div>
-        <div><strong>MCP</strong><span>SECURE LINK</span></div>
-      </section>
-      <section className="gate-link glass-panel">
-        <p className="eyebrow">CONECTANDO A CÓDICE</p>
-        <div className="gate-progress" aria-label="Conectando"><span /></div>
-        <p>Estableciendo enlace real con el Dungeon Master.</p>
-      </section>
+      <button className="power-logo" type="button" onClick={start} aria-label="Encender Torreon">
+        <img className="logo-off" src="/assets/art/torreon-logo-off.png" alt="Torreon" />
+        <img className="logo-on" src="/assets/art/torreon-on.png" alt="" aria-hidden="true" />
+      </button>
     </main>
   );
 }
@@ -173,50 +165,210 @@ function Bastion({
 
 function QuestComposer({
   busy,
-  onClose,
   onSubmit,
 }: {
   busy: boolean;
-  onClose: () => void;
   onSubmit: (intent: string) => void;
 }) {
   const [intent, setIntent] = useState("");
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Declarar quest">
+    <main className="scene codex-scene" role="dialog" aria-modal="true" aria-label="Declarar quest">
+      <img className="codex-book-bg" src="/assets/art/codex-book-mockup.png" alt="" aria-hidden="true" />
       <form
-        className="quest-composer glass-panel"
+        className="quest-composer"
         onSubmit={(event) => {
           event.preventDefault();
           onSubmit(intent);
         }}
       >
-        <div className="composer-heading">
-          <Codex speaking />
-          <div>
-            <p className="eyebrow">CÓDICE ESCUCHA</p>
-            <h2>Declara tu quest</h2>
-          </div>
-        </div>
         <textarea
           value={intent}
           onChange={(event) => setIntent(event.currentTarget.value)}
-          placeholder="Ej: preparar y enviar tres propuestas comerciales antes de las 5 p.m."
+          placeholder="Escribe tu intención real. Ej: necesito enviar cinco hojas de vida."
           autoFocus
         />
-        <div className="composer-actions">
-          <button className="ghost-button" type="button" onClick={onClose}>CANCELAR</button>
-          <button className="gold-button" type="submit" disabled={busy || intent.trim().length < 8}>
-            {busy ? "FORJANDO..." : "FORJAR QUEST"}
-          </button>
-        </div>
+        <button className="codex-submit" type="submit" disabled={busy || intent.trim().length < 8}>
+          {busy ? "CÓDICE PIENSA..." : "ABRIR CÓDICE"}
+        </button>
       </form>
-    </div>
+    </main>
   );
 }
+
+function ThinkingScreen({ intent }: { intent: string }) {
+  return (
+    <main className="scene thinking-scene">
+      <img className="codex-book-bg" src="/assets/art/codex-book-mockup.png" alt="" aria-hidden="true" />
+      <section className="thinking-panel glass-panel">
+        <Codex speaking />
+        <p className="eyebrow">CÓDICE INTERPRETA</p>
+        <h1>Forjando campaña</h1>
+        <p>{intent}</p>
+        <div className="thinking-runes" aria-hidden="true"><i /><i /><i /></div>
+      </section>
+    </main>
+  );
+}
+
+const verdictNames = { rejected: "RECHAZADA", partial: "PARCIAL", accepted: "ACEPTADA" } as const;
 
 function StatusBadge({ status }: { status: Quest["status"] }) {
   const names = { draft: "BORRADOR", accepted: "ACEPTADA", active: "EN BATALLA", completed: "VICTORIA", abandoned: "RETIRADA" };
   return <span className={`status ${status}`}>{names[status]}</span>;
+}
+
+function stepParts(description?: string) {
+  const value = description ?? "";
+  const match = value.match(/^Épica:\s*(.*?)\s*Real:\s*(.*)$/);
+  if (!match) return { epic: value, real: value };
+  return { epic: match[1], real: match[2] };
+}
+
+export interface PendingFile {
+  filename: string;
+  mimeType: string;
+  dataBase64: string;
+  bytes: number;
+}
+
+const MAX_EVIDENCE_BYTES = 20 * 1024 * 1024;
+
+/** Convierte lo que el jugador escoge o pega en bytes que el reino puede guardar. */
+async function toPendingFile(file: File): Promise<PendingFile> {
+  if (file.size > MAX_EVIDENCE_BYTES) {
+    throw new Error(`${file.name || "El archivo"} pesa mas de 20 MB.`);
+  }
+  const buffer = await file.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const chunk = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+  }
+  return {
+    filename: file.name || `captura-${Date.now()}.png`,
+    mimeType: file.type || "application/octet-stream",
+    dataBase64: btoa(binary),
+    bytes: file.size,
+  };
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * PREPARAR EXPEDICIÓN — trazada sobre el mockup de Diego.
+ *
+ * De la calca solo se implementa lo que tiene contraparte real en el dominio
+ * de hoy: quest seleccionada, victoria, duración pactada, ataque total,
+ * recomendación de Códice y consejo de bienestar.
+ *
+ * Queda como referencia, sin construir (no hay dato real detrás todavía):
+ *   - nivel, EXP, oro, gemas y energía del jugador  -> progresión, tajada futura
+ *   - modo enfoque y comportamiento del reino       -> fuera del Slice 1
+ *   - notificaciones                                -> fuera del Slice 1
+ *   - estimado de recursos y aura                   -> Slices 2 y 4
+ */
+function Expedition({
+  snapshot,
+  busy,
+  onBack,
+  onStart,
+}: {
+  snapshot: RealmSnapshot;
+  busy: boolean;
+  onBack: () => void;
+  onStart: () => void;
+}) {
+  const quest = snapshot.currentQuest;
+  if (!quest) return null;
+  const totalAttack = quest.steps.reduce((sum, step) => sum + step.weight, 0);
+
+  return (
+    <main className="scene expedition-scene">
+      <header className="expedition-top">
+        <div className="player-card">
+          <span className="player-crest">Φ</span>
+          <div>
+            <strong>{snapshot.realm.player.displayName}</strong>
+            <small>{snapshot.realm.player.title}</small>
+          </div>
+        </div>
+        <div className="campaign-banner">
+          <p className="eyebrow">CAMPAÑA ACTIVA</p>
+          <h2>{quest.campaignTitle}</h2>
+          <small>Quest: {quest.title}</small>
+        </div>
+      </header>
+
+      <section className="expedition-hero">
+        <h1>PREPARAR EXPEDICIÓN</h1>
+        <p>Sal del castillo. Tu reino luchará mientras trabajas en el mundo real.</p>
+      </section>
+
+      <section className="expedition-field" aria-label="El reino antes de la expedición">
+        <div className="field-line" />
+        <div className="field-marquis"><Sprite actor="marquis" motion="idle" label="MARQUÉS" /></div>
+        <div className="field-wolf"><Sprite actor="wolf" motion="idle" label="LOBO" /></div>
+        <div className="field-codex"><Sprite actor="codex" motion="idle" label="CÓDICE" /></div>
+        <div className="field-horde"><Sprite actor="horde" motion="idle" label="HORDA" /></div>
+      </section>
+
+      <section className="expedition-config">
+        <p className="eyebrow">CONFIGURACIÓN DE EXPEDICIÓN</p>
+        <div className="config-cards">
+          <article className="config-card">
+            <p className="eyebrow">DURACIÓN PACTADA</p>
+            <strong>{quest.durationMinutes} min</strong>
+            <small>Acordada en el contrato</small>
+          </article>
+          <article className="config-card">
+            <p className="eyebrow">OBJETIVO</p>
+            <strong>{quest.steps.length} pasos</strong>
+            <small>{quest.intent}</small>
+          </article>
+          <article className="config-card">
+            <p className="eyebrow">ATAQUE TOTAL</p>
+            <strong>{totalAttack}</strong>
+            <small>Solo la evidencia validada lo cobra</small>
+          </article>
+        </div>
+      </section>
+
+      <aside className="expedition-brief parchment">
+        <p className="eyebrow">QUEST SELECCIONADA</p>
+        <h2>{quest.title}</h2>
+
+        <p className="eyebrow">VICTORIA</p>
+        <p className="brief-text">{quest.outcome}</p>
+
+        <p className="eyebrow">RECOMENDACIÓN DE CÓDICE</p>
+        <p className="brief-text">{quest.rationale}</p>
+
+        {quest.wellbeingConstraints.length > 0 ? (
+          <>
+            <p className="eyebrow">CONSEJO</p>
+            <ul className="brief-advice">
+              {quest.wellbeingConstraints.map((advice) => (
+                <li key={advice}>{advice}</li>
+              ))}
+            </ul>
+          </>
+        ) : null}
+      </aside>
+
+      <nav className="expedition-actions">
+        <button className="back-button" type="button" onClick={onBack}>← ATRÁS</button>
+        <button className="gold-button start-expedition" type="button" disabled={busy} onClick={onStart}>
+          <strong>INICIAR EXPEDICIÓN</strong>
+          <small>El reino entrará en batalla mientras trabajas.</small>
+        </button>
+      </nav>
+    </main>
+  );
 }
 
 function Battle({
@@ -226,7 +378,7 @@ function Battle({
   onBack,
   onAccept,
   onStart,
-  onValidateStep,
+  onDeliverEvidence,
 }: {
   snapshot: RealmSnapshot;
   busy: boolean;
@@ -234,11 +386,13 @@ function Battle({
   onBack: () => void;
   onAccept: () => void;
   onStart: () => void;
-  onValidateStep: (stepId: string, note: string) => void;
+  onDeliverEvidence: (stepId: string, note: string, link: string, files: PendingFile[]) => void;
 }) {
   const quest = snapshot.currentQuest;
   const [openStepId, setOpenStepId] = useState<string | null>(quest?.steps[0]?.id ?? null);
   const [evidenceNote, setEvidenceNote] = useState("");
+  const [evidenceLink, setEvidenceLink] = useState("");
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   if (!quest) return null;
   const battle = snapshot.battle;
   const health = battle?.enemyHealth ?? 100;
@@ -281,6 +435,9 @@ function Battle({
         <div className="steps-list">
           {quest.steps.map((step, index) => {
             const isOpen = openStepId === step.id;
+            const parts = stepParts(step.description);
+            const stepArtifacts = snapshot.realm.artifacts?.filter((artifact) => artifact.stepId === step.id) ?? [];
+            const stepVerdicts = snapshot.realm.evidence.filter((record) => record.stepId === step.id);
             return (
               <article className={`step ${step.status} ${isOpen ? "open" : ""}`} key={step.id}>
                 <button className="step-summary" type="button" onClick={() => setOpenStepId(isOpen ? null : step.id)}>
@@ -290,25 +447,100 @@ function Battle({
                 </button>
                 {isOpen ? (
                   <div className="step-detail">
-                    <p>{step.description || "Códice no dejó descripción para este paso."}</p>
+                    <p>{parts.epic || "Códice no dejó descripción para este paso."}</p>
                     <dl>
-                      <div><dt>Qué hacer</dt><dd>{step.description || step.title}</dd></div>
+                      <div><dt>Qué hacer</dt><dd>{parts.real || step.title}</dd></div>
                       <div><dt>Qué entregar</dt><dd>{step.evidence}</dd></div>
                     </dl>
+                    {stepArtifacts.length > 0 ? (
+                      <ul className="artifact-list">
+                        {stepArtifacts.map((artifact) => (
+                          <li key={artifact.id} className={artifact.verification.verified ? "verified" : "unverified"}>
+                            <strong>{artifact.verification.verified ? "✓" : "○"} {artifact.label}</strong>
+                            <small>{artifact.verification.detail}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {stepVerdicts.length > 0 ? (
+                      <ul className="verdict-list">
+                        {stepVerdicts.map((record) => (
+                          <li key={record.id} className={record.verdict}>
+                            <strong>{verdictNames[record.verdict]} · {record.impactAwarded}</strong>
+                            <small>{record.reasoning}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                     {quest.status === "active" && step.status !== "completed" ? (
                       <form
                         onSubmit={(event) => {
                           event.preventDefault();
-                          onValidateStep(step.id, evidenceNote);
+                          onDeliverEvidence(step.id, evidenceNote, evidenceLink, pendingFiles);
                           setEvidenceNote("");
+                          setEvidenceLink("");
+                          setPendingFiles([]);
                         }}
                       >
                         <textarea
                           value={evidenceNote}
                           onChange={(event) => setEvidenceNote(event.currentTarget.value)}
-                          placeholder="Describe o pega aquí la evidencia para Códice."
+                          onPaste={(event) => {
+                            const items = Array.from(event.clipboardData?.files ?? []);
+                            if (items.length === 0) return;
+                            event.preventDefault();
+                            void Promise.all(items.map(toPendingFile))
+                              .then((ready) => setPendingFiles((current) => [...current, ...ready]))
+                              .catch(() => undefined);
+                          }}
+                          placeholder="Describe qué ocurrió y pega aquí tu captura (Ctrl+V). Códice juzga la prueba, no el esfuerzo."
                         />
-                        <button className="gold-button" type="submit" disabled={busy || evidenceNote.trim().length < 4}>VALIDAR EVIDENCIA MVP</button>
+                        {pendingFiles.length > 0 ? (
+                          <ul className="pending-files">
+                            {pendingFiles.map((file, index) => (
+                              <li key={`${file.filename}-${index}`}>
+                                <span>{file.filename}</span>
+                                <small>{formatBytes(file.bytes)}</small>
+                                <button
+                                  type="button"
+                                  onClick={() => setPendingFiles((current) => current.filter((_, at) => at !== index))}
+                                  aria-label={`Quitar ${file.filename}`}
+                                >
+                                  ×
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        <label className="evidence-file">
+                          <input
+                            type="file"
+                            multiple
+                            accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md"
+                            onChange={(event) => {
+                              const chosen = Array.from(event.currentTarget.files ?? []);
+                              event.currentTarget.value = "";
+                              if (chosen.length === 0) return;
+                              void Promise.all(chosen.map(toPendingFile))
+                                .then((ready) => setPendingFiles((current) => [...current, ...ready]))
+                                .catch(() => undefined);
+                            }}
+                          />
+                          <span>ADJUNTAR PRUEBA</span>
+                        </label>
+                        <input
+                          className="evidence-link"
+                          value={evidenceLink}
+                          onChange={(event) => setEvidenceLink(event.currentTarget.value)}
+                          placeholder="Enlace de la prueba (opcional)"
+                        />
+                        <button
+                          className="gold-button"
+                          type="submit"
+                          disabled={busy || (evidenceNote.trim().length < 4 && evidenceLink.trim().length < 8 && pendingFiles.length === 0)}
+                        >
+                          {busy ? "CÓDICE EXAMINA..." : "ENTREGAR AL CÓDICE"}
+                        </button>
                       </form>
                     ) : null}
                   </div>
@@ -331,6 +563,8 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [impact, setImpact] = useState<number | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
+  const [pendingIntent, setPendingIntent] = useState("");
+  const [verdict, setVerdict] = useState<string | null>(null);
   const lastProgress = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -355,12 +589,6 @@ function App() {
     return () => window.clearInterval(interval);
   }, [refresh]);
 
-  useEffect(() => {
-    if (screen !== "loading") return;
-    const timeout = window.setTimeout(() => setScreen("realm"), 2100);
-    return () => window.clearTimeout(timeout);
-  }, [screen]);
-
   const act = async (operation: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
@@ -377,11 +605,12 @@ function App() {
   if (screen === "loading") {
     return (
       <>
-        <LoadingGate />
+        <LoadingGate onStart={() => setScreen("realm")} />
         {error ? <div className="error-toast" role="alert">{error}</div> : null}
       </>
     );
   }
+  if (screen === "thinking") return <ThinkingScreen intent={pendingIntent} />;
   if (!snapshot) return <main className="loading"><Codex speaking /><p>El Códice despierta…</p>{error ? <strong>{error}</strong> : null}</main>;
 
   const quest = snapshot.currentQuest;
@@ -398,14 +627,24 @@ function App() {
         {composerOpen ? (
           <QuestComposer
             busy={busy}
-            onClose={() => setComposerOpen(false)}
-            onSubmit={(intent) => void act(() => api("/api/quests/from-intent", { method: "POST", body: JSON.stringify({ intent }) })).then(() => {
-              setComposerOpen(false);
-              setScreen("battle");
-            })}
+            onSubmit={(intent) => {
+              setPendingIntent(intent);
+              setScreen("thinking");
+              void act(() => api("/api/quests/from-intent", { method: "POST", body: JSON.stringify({ intent }) })).then(() => {
+                setComposerOpen(false);
+                window.setTimeout(() => setScreen("battle"), 520);
+              });
+            }}
           />
         ) : null}
         </>
+      ) : quest && quest.status === "accepted" ? (
+        <Expedition
+          snapshot={snapshot}
+          busy={busy}
+          onBack={() => setScreen("realm")}
+          onStart={() => void act(() => api(`/api/quests/${quest.id}/start`, { method: "POST" }))}
+        />
       ) : (
         <Battle
           snapshot={snapshot}
@@ -414,23 +653,40 @@ function App() {
           onBack={() => setScreen("realm")}
           onAccept={() => quest && void act(() => api(`/api/quests/${quest.id}/accept`, { method: "POST", body: JSON.stringify({ userAccepted: true }) }))}
           onStart={() => quest && void act(() => api(`/api/quests/${quest.id}/start`, { method: "POST" }))}
-          onValidateStep={(stepId, note) => {
+          onDeliverEvidence={(stepId, note, link, files) => {
             if (!quest) return;
-            const step = quest.steps.find((candidate) => candidate.id === stepId);
-            if (!step) return;
-            void act(() => api(`/api/quests/${quest.id}/steps/${stepId}/evidence`, {
-              method: "POST",
-              body: JSON.stringify({
-                summary: note,
-                source: "user_declaration",
-                verdict: "accepted",
-                reasoning: "Validación MVP desde la APK: la evidencia declarada satisface el paso seleccionado.",
-                impactAwarded: step.weight - step.impactAwarded,
-              }),
-            }));
+            void act(async () => {
+              for (const file of files) {
+                await api(`/api/quests/${quest.id}/steps/${stepId}/artifacts`, {
+                  method: "POST",
+                  body: JSON.stringify({
+                    kind: "file",
+                    dataBase64: file.dataBase64,
+                    filename: file.filename,
+                    mimeType: file.mimeType,
+                  }),
+                });
+              }
+              if (link.trim().length >= 8) {
+                await api(`/api/quests/${quest.id}/steps/${stepId}/artifacts`, {
+                  method: "POST",
+                  body: JSON.stringify({ kind: "link", url: link.trim() }),
+                });
+              }
+              // El veredicto lo emite Códice en el servidor; la APK nunca se
+              // concede daño a sí misma.
+              const result = await api<{ judgement: { verdict: string; reasoning: string } }>(
+                `/api/quests/${quest.id}/steps/${stepId}/verify`,
+                { method: "POST", body: JSON.stringify({ note }) },
+              );
+              setVerdict(result.judgement.reasoning);
+              window.setTimeout(() => setVerdict(null), 6000);
+              return result;
+            });
           }}
         />
       )}
+      {verdict ? <div className="verdict-toast" role="status">{verdict}</div> : null}
       {error ? <div className="error-toast" role="alert">{error}</div> : null}
     </>
   );

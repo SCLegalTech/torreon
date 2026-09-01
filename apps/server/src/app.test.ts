@@ -38,17 +38,20 @@ describe("HTTP app", () => {
     expect(impact.body.battle.enemyHealth).toBe(90);
   });
 
-  it("crea una quest desde una intención libre", async () => {
+  it("gamifica una quest de hojas de vida con pasos específicos", async () => {
     const created = await request(app)
       .post("/api/quests/from-intent")
-      .send({ intent: "ordenar mi escritorio y dejar lista la agenda de mañana" })
+      .send({ intent: "necesito enviar cinco hojas de vida" })
       .expect(201);
 
     const quest = created.body.quest;
-    expect(quest.title).toContain("Ordenar mi escritorio");
-    expect(quest.steps).toHaveLength(5);
+    expect(quest.title).toBe("Las Cinco Cartas de la Marca");
+    expect(quest.outcome).toContain("Enviar 5 candidaturas");
+    expect(quest.steps).toHaveLength(6);
     expect(quest.steps.reduce((sum: number, step: { weight: number }) => sum + step.weight, 0)).toBe(100);
-    expect(quest.steps[0].description).toContain("cómo se verá la tarea terminada");
+    expect(quest.steps.map((step: { title: string }) => step.title)).toContain("Enviar las cinco cartas");
+    expect(quest.steps[0].description).toContain("Épica");
+    expect(quest.steps[0].description).toContain("Real");
   });
 
   it("expone salud y rechaza MCP por GET", async () => {
