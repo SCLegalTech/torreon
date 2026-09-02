@@ -102,7 +102,8 @@ describe("Jerarquía Saga → Campaña → Acto → Quest", () => {
 
   it("una Quest dentro de un Acto arrastra su Campaña y su Saga", async () => {
     const saga = await service.createSaga({ title: "Recuperar la Marca" });
-    const campaign = await service.createCampaign({ title: "The Inbox Siege", sagaId: saga.id, objective: "12 comunicaciones procesadas" });
+    const { campaign } = await service.createCampaignDraft({ title: "The Inbox Siege", sagaId: saga.id, objective: "12 comunicaciones procesadas" });
+    await service.acceptCampaign(campaign.id, true);
     const act = await service.createAct({ title: "Acto I", subtitle: "La comunicación bloqueada", campaignId: campaign.id });
 
     const quest = await service.createDraft(microPlan, { actId: act.id });
@@ -121,7 +122,8 @@ describe("Jerarquía Saga → Campaña → Acto → Quest", () => {
 
   it("el progreso sube sólo con resultados reales y cierra Acto, Campaña y Saga", async () => {
     const saga = await service.createSaga({ title: "Recuperar la Marca" });
-    const campaign = await service.createCampaign({ title: "The Inbox Siege", sagaId: saga.id });
+    const { campaign } = await service.createCampaignDraft({ title: "The Inbox Siege", sagaId: saga.id });
+    await service.acceptCampaign(campaign.id, true);
     const act = await service.createAct({ title: "Acto I", campaignId: campaign.id });
     const quest = await service.createDraft(microPlan, { actId: act.id });
 
@@ -146,7 +148,7 @@ describe("Jerarquía Saga → Campaña → Acto → Quest", () => {
   });
 
   it("una Campaña no sostiene más de 7 Actos", async () => {
-    const campaign = await service.createCampaign({ title: "Campaña llena" });
+    const { campaign } = await service.createCampaignDraft({ title: "Campaña llena" });
     for (let index = 0; index < MAX_ACTS_PER_CAMPAIGN; index += 1) {
       await service.createAct({ title: `Acto ${index + 1}`, campaignId: campaign.id });
     }

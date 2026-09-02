@@ -208,6 +208,8 @@ export function advanceBattles(state: RealmState, nowMs: number): BattleTickOutc
       state.events.unshift({
         id: randomUUID(),
         type: "horde_attack",
+        entityType: "quest",
+        entityId: quest.id,
         questId: quest.id,
         message: `Ventana ${attack.attackIndex}/${HORDE_ATTACK_SLOTS}: la Horda golpea a ${party[target].name} por ${attack.damage}${attack.critical ? " (CRÍTICO)" : ""}.`,
         createdAt: timestamp,
@@ -262,6 +264,8 @@ export function resolve(state: RealmState, quest: Quest, record: BattleRecord, s
   state.events.unshift({
     id: randomUUID(),
     type: status === "won" ? "battle_won" : "battle_lost",
+    entityType: "quest",
+    entityId: quest.id,
     questId: quest.id,
     message:
       status === "won"

@@ -63,6 +63,19 @@ export class JsonRealmStore {
     state.sagas ??= [];
     state.campaigns ??= [];
     state.acts ??= [];
+    // Los actos nacían «pending»; ahora la disponibilidad se llama por su nombre.
+    for (const act of state.acts) {
+      if ((act.status as string) === "pending") act.status = "available";
+    }
+    // Reinos anteriores al pacto de campaña ya estaban vivos: se respetan.
+    for (const campaign of state.campaigns) {
+      campaign.status ??= "active";
+    }
+    // Un hecho sin entidad no se puede abrir: los históricos apuntan a su quest.
+    for (const event of state.events) {
+      event.entityType ??= "quest";
+      event.entityId ??= event.questId ?? "";
+    }
     state.artifacts ??= [];
     state.lifeEvents ??= [];
     state.gameEvents ??= [];

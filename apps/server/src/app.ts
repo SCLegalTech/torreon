@@ -74,6 +74,7 @@ export function createHttpApp(service: QuestService) {
           String(req.body?.intent ?? ""),
           Number.isFinite(minutes) ? minutes : undefined,
           req.body?.actId ? String(req.body.actId) : undefined,
+          req.body?.campaignId ? String(req.body.campaignId) : undefined,
         ),
         reused: false,
       });
@@ -142,20 +143,80 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
+  // La campaña nace en borrador: no vive hasta que el jugador la sella.
   app.post("/api/campaigns", async (req, res, next) => {
     try {
-      res.status(201).json({
-        campaign: await service.createCampaign({
+      res.status(201).json(
+        await service.createCampaignDraft({
           title: String(req.body?.title ?? ""),
+          intent: req.body?.intent ? String(req.body.intent) : undefined,
           summary: req.body?.summary ? String(req.body.summary) : undefined,
           objective: req.body?.objective ? String(req.body.objective) : undefined,
+          rationale: req.body?.rationale ? String(req.body.rationale) : undefined,
           sagaId: req.body?.sagaId ? String(req.body.sagaId) : undefined,
           estimatedActiveMinutes: Number(req.body?.estimatedActiveMinutes ?? 0),
+          estimatedCalendarDays: req.body?.estimatedCalendarDays !== undefined ? Number(req.body.estimatedCalendarDays) : undefined,
           scenario: req.body?.scenario ? String(req.body.scenario) : undefined,
           bossTitle: req.body?.bossTitle ? String(req.body.bossTitle) : undefined,
           bossDescription: req.body?.bossDescription ? String(req.body.bossDescription) : undefined,
+          initialActs: Array.isArray(req.body?.initialActs) ? req.body.initialActs : undefined,
         }),
-      });
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/campaigns/:campaignId/revise", async (req, res, next) => {
+    try {
+      res.json(await service.reviseCampaignDraft(req.params.campaignId, req.body ?? {}));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/campaigns/:campaignId/accept", async (req, res, next) => {
+    try {
+      res.json({ campaign: await service.acceptCampaign(req.params.campaignId, req.body?.userAccepted === true) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/campaigns/:campaignId/abandon", async (req, res, next) => {
+    try {
+      res.json({ campaign: await service.abandonCampaign(req.params.campaignId, String(req.body?.reason ?? "")) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/campaigns/from-intent", async (req, res, next) => {
+    try {
+      const activeMinutes = Number(req.body?.activeMinutes);
+      const calendarDays = Number(req.body?.calendarDays);
+      res.status(201).json(
+        await service.planCampaignFromIntent({
+          intent: String(req.body?.intent ?? ""),
+          activeMinutes: Number.isFinite(activeMinutes) ? activeMinutes : undefined,
+          calendarDays: Number.isFinite(calendarDays) ? calendarDays : undefined,
+          fronts: Array.isArray(req.body?.fronts) ? req.body.fronts.map(String) : undefined,
+        }),
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Vincula por ID una quest existente; nunca la recrea.
+  app.post("/api/quests/:questId/assign", async (req, res, next) => {
+    try {
+      res.json(
+        await service.assignQuest(req.params.questId, {
+          campaignId: req.body?.campaignId ? String(req.body.campaignId) : undefined,
+          actId: req.body?.actId ? String(req.body.actId) : undefined,
+        }),
+      );
     } catch (error) {
       next(error);
     }
@@ -184,6 +245,7 @@ export function createHttpApp(service: QuestService) {
         act: await service.createAct({
           title: String(req.body?.title ?? ""),
           subtitle: req.body?.subtitle ? String(req.body.subtitle) : undefined,
+          outcome: req.body?.outcome ? String(req.body.outcome) : undefined,
           campaignId: req.body?.campaignId ? String(req.body.campaignId) : undefined,
           scenario: req.body?.scenario ? String(req.body.scenario) : undefined,
           estimatedActiveMinutes: Number(req.body?.estimatedActiveMinutes ?? 0),

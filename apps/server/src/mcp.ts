@@ -288,44 +288,144 @@ export function createMcpServer(service: QuestService): McpServer {
   );
 
   server.registerTool(
-    "create_campaign",
+    "create_campaign_draft",
     {
-      title: "Abrir una campaña",
+      title: "Trazar una campaña",
       description:
-        "Crea una Campaña: un objetivo significativo de 1 a 7 Actos, aproximadamente hasta una semana de trabajo activo. El escenario es ambientación visual, no jerarquía.",
+        "Crea una Campaña REAL en el reino, en estado borrador. Una Campaña es un objetivo significativo de varias jornadas: agrupa Actos y Quests por ID, no por parecido de nombre. Escribir «campaignTitle» en una quest NO crea una campaña. El borrador no vive hasta que el jugador lo sella con accept_campaign, y sellarlo tampoco inicia ninguna Battle. Puedes proponer Actos iniciales, pero no hace falta planificar semanas enteras: la campaña crece cuando la realidad revela los frentes.",
       inputSchema: {
-        title: z.string().min(3).max(120),
+        title: z.string().min(3).max(120).describe("Nombre de la gesta, corto y evocador."),
+        intent: z.string().max(1000).optional().describe("La intención literal del jugador."),
         summary: z.string().max(500).optional().describe("Qué recupera el reino con esta campaña."),
         objective: z.string().max(500).optional().describe("Resultado final verificable de toda la campaña."),
+        rationale: z.string().max(1000).optional().describe("Por qué esta agrupación produce el resultado."),
         sagaId: z.string().uuid().optional(),
-        estimatedActiveMinutes: z.number().int().min(0).max(1000000).optional(),
+        estimatedActiveMinutes: z.number().int().min(0).max(1000000).optional().describe("Minutos de TRABAJO ACTIVO. No cuentes esperas ajenas al jugador."),
+        estimatedCalendarDays: z.number().int().min(0).max(400).optional().describe("Horizonte de calendario. No cambia la escala por sí solo."),
         scenario: z.string().max(120).optional().describe("Ambientación visual. No es una unidad de la jerarquía."),
-        bossTitle: z.string().max(120).optional().describe("Nombre del jefe final: hoy sólo representa la última Quest."),
+        bossTitle: z.string().max(120).optional(),
         bossDescription: z.string().max(300).optional(),
+        initialActs: z
+          .array(
+            z.object({
+              title: z.string().min(3).max(120),
+              subtitle: z.string().max(200).optional(),
+              outcome: z.string().max(500).optional(),
+              estimatedActiveMinutes: z.number().int().min(0).max(100000).optional(),
+            }),
+          )
+          .max(7)
+          .optional()
+          .describe("Actos iniciales razonables. Opcional: una campaña puede empezar sin conocerlos todos."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (args) => {
-      const campaign = await service.createCampaign(args);
-      return toolResult(`Campaña «${campaign.title}» abierta.`, { campaign });
+      const result = await service.createCampaignDraft(args);
+      return toolResult(
+        `Campaña «${result.campaign.title}» trazada en borrador con ${result.acts.length} acto(s). Falta el sello explícito del jugador.`,
+        result,
+      );
     },
   );
 
   server.registerTool(
-    "focus_campaign",
+    "revise_campaign_draft",
     {
-      title: "Poner una campaña en foco",
+      title: "Reformular una campaña en borrador",
       description:
-        "Cambia la campaña que el jugador mira ahora. NO cierra, no pausa y no reinicia ninguna otra: varias campañas siguen activas a la vez —trabajo, firma, desarrollo, personal— y las que no están en foco no atacan al jugador. Usa null para quitar el foco.",
-      inputSchema: { campaignId: z.string().uuid().nullable().describe("Campaña a enfocar, o null para soltar el foco.") },
+        "Corrige un pacto que el jugador todavía no ha sellado. Sólo funciona mientras la campaña esté en borrador y nunca borra historia: los Actos que ya tienen Quests se conservan intactos aunque envíes otros initialActs.",
+      inputSchema: {
+        campaignId: z.string().uuid(),
+        title: z.string().min(3).max(120).optional(),
+        intent: z.string().max(1000).optional(),
+        summary: z.string().max(500).optional(),
+        objective: z.string().max(500).optional(),
+        rationale: z.string().max(1000).optional(),
+        estimatedActiveMinutes: z.number().int().min(0).max(1000000).optional(),
+        estimatedCalendarDays: z.number().int().min(0).max(400).optional(),
+        scenario: z.string().max(120).optional(),
+        bossTitle: z.string().max(120).optional(),
+        bossDescription: z.string().max(300).optional(),
+        initialActs: z
+          .array(
+            z.object({
+              title: z.string().min(3).max(120),
+              subtitle: z.string().max(200).optional(),
+              outcome: z.string().max(500).optional(),
+              estimatedActiveMinutes: z.number().int().min(0).max(100000).optional(),
+            }),
+          )
+          .max(7)
+          .optional(),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async ({ campaignId }) => {
-      const snapshot = await service.focusCampaign(campaignId);
-      const focused = snapshot.realm.campaigns.find((candidate) => candidate.id === snapshot.hierarchy.focusedCampaignId);
+    async ({ campaignId, ...patch }) => {
+      const result = await service.reviseCampaignDraft(campaignId, patch);
+      return toolResult(`El pacto de «${result.campaign.title}» fue reformulado.`, result);
+    },
+  );
+
+  server.registerTool(
+    "accept_campaign",
+    {
+      title: "Sellar el pacto de una campaña",
+      description:
+        "Activa una campaña en borrador SÓLO tras aceptación explícita del jugador. Aceptar no cierra ninguna otra campaña —pueden estar varias activas a la vez— y no inicia ninguna Battle. Es idempotente: volver a sellar una campaña ya activa no rompe nada.",
+      inputSchema: {
+        campaignId: z.string().uuid(),
+        userAccepted: z.literal(true).describe("Debe ser true y provenir de una aceptación real del jugador."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ campaignId, userAccepted }) => {
+      const campaign = await service.acceptCampaign(campaignId, userAccepted);
+      return toolResult(`«${campaign.title}» quedó activa. Los demás frentes siguen abiertos.`, { campaign });
+    },
+  );
+
+  server.registerTool(
+    "abandon_campaign",
+    {
+      title: "Retirar una campaña",
+      description:
+        "Retira una campaña trazada por error o que dejó de representar la realidad. No borra nada: las quests conservan su id, su estado y su historia, y sólo dejan de colgar de ella. Una campaña ya conquistada es historia y no se retira.",
+      inputSchema: {
+        campaignId: z.string().uuid(),
+        reason: z.string().min(3).max(500).describe("Qué cambió en la realidad para retirarla."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async ({ campaignId, reason }) => {
+      const campaign = await service.abandonCampaign(campaignId, reason);
+      return toolResult(`«${campaign.title}» quedó retirada.`, { campaign });
+    },
+  );
+
+  server.registerTool(
+    "plan_campaign_from_intent",
+    {
+      title: "Pedir al motor que trace una campaña",
+      description:
+        "Convierte una intención amplia en un borrador de Campaña con Actos iniciales razonables, usando la clasificación de escala del servidor. No crea Battles ni salta la aceptación: sigue haciendo falta accept_campaign. Úsala cuando el objetivo claramente excede una jornada; para algo de una hora, crea una Quest suelta y no fabriques jerarquía ceremonial.",
+      inputSchema: {
+        intent: z.string().min(8).max(2000).describe("El objetivo tal como lo expresó el jugador."),
+        activeMinutes: z.number().int().min(1).max(1000000).optional().describe("Minutos de trabajo activo estimados."),
+        calendarDays: z.number().int().min(0).max(400).optional().describe("Horizonte declarado, en días."),
+        fronts: z
+          .array(z.string().min(2).max(200))
+          .max(7)
+          .optional()
+          .describe("Frentes conocidos ahora mismo. Cada uno propone un Acto inicial; no inventes los que no existen."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const result = await service.planCampaignFromIntent(args);
       return toolResult(
-        focused ? `Campaña en foco: «${focused.title}». Las demás siguen activas.` : "El reino quedó sin campaña en foco.",
-        { hierarchy: snapshot.hierarchy, currentQuest: snapshot.currentQuest },
+        `Campaña «${result.campaign.title}» propuesta (${result.proposal.scale}): ${result.proposal.reason} Falta el sello del jugador.`,
+        result,
       );
     },
   );
@@ -339,6 +439,7 @@ export function createMcpServer(service: QuestService): McpServer {
       inputSchema: {
         title: z.string().min(3).max(120),
         subtitle: z.string().max(200).optional().describe("Subtítulo del acto: «La comunicación bloqueada»."),
+        outcome: z.string().max(500).optional().describe("Qué deja hecho este acto cuando cierra."),
         campaignId: z.string().uuid().optional(),
         scenario: z.string().max(120).optional(),
         estimatedActiveMinutes: z.number().int().min(0).max(100000).optional(),
@@ -352,16 +453,26 @@ export function createMcpServer(service: QuestService): McpServer {
   );
 
   server.registerTool(
-    "assign_quest_to_act",
+    "assign_quest",
     {
-      title: "Colocar una quest dentro de un acto",
-      description: "Adopta una Quest ya existente dentro de un Acto. Un Acto no sostiene más de 8 Battles.",
-      inputSchema: { questId: z.string().uuid(), actId: z.string().uuid() },
+      title: "Vincular una quest a una campaña o a un acto",
+      description:
+        "Enlaza por ID una Quest YA EXISTENTE con una Campaña y, si conviene, con un Acto. NO la recrea: conserva su id, su estado, sus fechas, su evidencia y su historial. Úsala para adoptar quests antiguas que sólo tenían `campaignTitle` como texto. Un `campaignTitle` parecido nunca basta para inferir la relación: aquí se declara. Es idempotente y rechaza un actId que pertenezca a otra campaña.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        campaignId: z.string().uuid().optional().describe("Campaña de destino. Si das actId, se deduce de él."),
+        actId: z.string().uuid().optional().describe("Acto de destino. Opcional: una quest puede colgar directamente de la campaña."),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async ({ questId, actId }) => {
-      const result = await service.assignQuestToAct(questId, actId);
-      return toolResult(`«${result.quest.title}» ahora pertenece al acto «${result.act.title}».`, result);
+    async ({ questId, campaignId, actId }) => {
+      const result = await service.assignQuest(questId, { campaignId, actId });
+      return toolResult(
+        result.act
+          ? `«${result.quest.title}» ahora pertenece al acto «${result.act.title}».`
+          : `«${result.quest.title}» ahora pertenece a la campaña «${result.campaign!.title}».`,
+        result,
+      );
     },
   );
 
@@ -428,11 +539,12 @@ export function createMcpServer(service: QuestService): McpServer {
         intent: z.string().min(8).max(2000).describe("La intención tal como la expresó el jugador."),
         minutesAvailable: z.number().int().min(5).max(60).optional().describe("Minutos de trabajo activo disponibles. Maximo 60: el resto se descompone."),
         actId: z.string().uuid().optional().describe("Acto que adopta esta Quest. Omitelo para una microquest sin padres."),
+        campaignId: z.string().uuid().optional().describe("Campaña que adopta esta Quest cuando no hace falta un Acto intermedio."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async ({ intent, minutesAvailable, actId }) => {
-      const quest = await service.createDraftFromIntent(intent, minutesAvailable, actId);
+    async ({ intent, minutesAvailable, actId, campaignId }) => {
+      const quest = await service.createDraftFromIntent(intent, minutesAvailable, actId, campaignId);
       return toolResult(`Borrador «${quest.title}» creado por el motor; falta la aceptación explícita del usuario.`, { quest });
     },
   );

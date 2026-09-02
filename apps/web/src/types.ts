@@ -71,7 +71,9 @@ export interface PartyState {
   marques: PartyMemberState;
   cordera: PartyMemberState;
 }
-export type ActStatus = "pending" | "active" | "completed" | "abandoned";
+export type ActStatus = "locked" | "available" | "active" | "completed" | "abandoned";
+export type CampaignStatus = "draft" | "active" | "completed" | "abandoned";
+export type EntityType = "quest" | "campaign" | "act" | "saga";
 
 /** El reloj lo calcula el servidor; React sólo interpola entre lecturas. */
 export interface BattleClock {
@@ -113,6 +115,7 @@ export interface ActView {
   position: number;
   title: string;
   subtitle?: string;
+  outcome?: string;
   scenario?: string;
   status: ActStatus;
   estimatedActiveMinutes: number;
@@ -128,12 +131,16 @@ export interface CampaignView {
   title: string;
   summary?: string;
   objective?: string;
-  status: ActStatus;
+  intent?: string;
+  rationale?: string;
+  status: CampaignStatus;
   estimatedActiveMinutes: number;
+  estimatedCalendarDays?: number;
   scenario?: string;
   bossTitle?: string;
   bossDescription?: string;
   acts: ActView[];
+  directQuests: QuestNode[];
   completedActs: number;
   totalActs: number;
   completedQuests: number;
@@ -145,7 +152,7 @@ export interface SagaView {
   id: string;
   title: string;
   summary?: string;
-  status: ActStatus;
+  status: CampaignStatus;
   campaignIds: string[];
   completedCampaigns: number;
   totalCampaigns: number;
@@ -201,8 +208,18 @@ export interface RealmSnapshot {
     };
     events: Array<{
       id: string;
-      type: "quest_created" | "quest_revised" | "quest_accepted" | "quest_started" | "quest_amendment_proposed" | "quest_amended" | "quest_waiting_external" | "quest_unblocked" | "horde_attack" | "evidence_attached" | "step_completed" | "quest_completed" | "reward_granted" | "quest_abandoned";
-      questId: string;
+      type:
+        | "quest_created" | "quest_revised" | "quest_accepted" | "quest_started"
+        | "quest_amendment_proposed" | "quest_amended" | "quest_waiting_external" | "quest_unblocked"
+        | "horde_attack" | "battle_started" | "battle_won" | "battle_lost" | "battle_restarted"
+        | "evidence_attached" | "step_completed" | "quest_completed" | "reward_granted" | "quest_abandoned"
+        | "campaign_created" | "campaign_revised" | "campaign_accepted" | "campaign_focused"
+        | "campaign_completed" | "campaign_abandoned"
+        | "act_created" | "act_completed" | "quest_assigned";
+      /** A qué entidad se refiere el hecho. La notificación nunca adivina. */
+      entityType: EntityType;
+      entityId: string;
+      questId?: string;
       message: string;
       createdAt: string;
     }>;

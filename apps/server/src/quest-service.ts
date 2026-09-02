@@ -50,8 +50,20 @@ function requireQuest(state: RealmState, questId: string): Quest {
   return quest;
 }
 
-function addEvent(state: RealmState, event: Omit<RealmEvent, "id" | "createdAt">): void {
-  state.events.unshift({ id: randomUUID(), createdAt: now(), ...event });
+/**
+ * Registra un hecho SIEMPRE atado a la entidad exacta que cambió.
+ *
+ * Sin `entityType` + `entityId` una notificación sólo puede adivinar —«el
+ * último borrador», «la quest actual»— y termina abriendo otra cosa. Los
+ * hechos de quest siguen rellenando `questId` por compatibilidad.
+ */
+type RealmEventInput = Omit<RealmEvent, "id" | "createdAt" | "entityType" | "entityId"> &
+  Partial<Pick<RealmEvent, "entityType" | "entityId">>;
+
+function addEvent(state: RealmState, event: RealmEventInput): void {
+  const entityType = event.entityType ?? "quest";
+  const entityId = event.entityId ?? event.questId ?? "";
+  state.events.unshift({ id: randomUUID(), createdAt: now(), ...event, entityType, entityId });
   state.events = state.events.slice(0, 100);
 }
 
@@ -224,6 +236,7 @@ function closeParents(state: RealmState, quest: Quest): void {
   act.status = "completed";
   act.completedAt = timestamp;
   act.updatedAt = timestamp;
+  addEvent(state, { type: "act_completed", entityType: "act", entityId: act.id, message: `El acto «${act.title}» quedó cerrado.` });
 
   const campaign = act.campaignId ? state.campaigns.find((candidate) => candidate.id === act.campaignId) : undefined;
   if (!campaign) return;
@@ -234,6 +247,7 @@ function closeParents(state: RealmState, quest: Quest): void {
   campaign.status = "completed";
   campaign.completedAt = timestamp;
   campaign.updatedAt = timestamp;
+  addEvent(state, { type: "campaign_completed", entityType: "campaign", entityId: campaign.id, message: `Campaña conquistada: «${campaign.title}».` });
 
   const saga = campaign.sagaId ? state.sagas.find((candidate) => candidate.id === campaign.sagaId) : undefined;
   if (!saga) return;
@@ -244,6 +258,44 @@ function closeParents(state: RealmState, quest: Quest): void {
   saga.status = "completed";
   saga.completedAt = timestamp;
   saga.updatedAt = timestamp;
+}
+
+/** Nombra la gesta sin repetir literalmente la frase del jugador. */
+function campaignTitleFrom(intent: string): string {
+  const core = intent
+    .replace(/^(necesito|quiero|tengo que|debo|me toca|hay que|voy a|deseo)\s+/i, "")
+    .replace(/[.?!]+$/g, "")
+    .trim();
+  const short = core.length > 44 ? `${core.slice(0, 41).trim()}...` : core;
+  const named = short.charAt(0).toUpperCase() + short.slice(1);
+  return `La Forja de ${named}`.slice(0, 120);
+}
+
+function requireCampaign(state: RealmState, campaignId: string): Campaign {
+  const campaign = state.campaigns.find((candidate) => candidate.id === campaignId);
+  if (!campaign) throw new Error(`Campaña no encontrada: ${campaignId}`);
+  return campaign;
+}
+
+/** Un Acto nace disponible: es planificación, no un pacto aparte. */
+function buildAct(
+  campaign: Campaign | undefined,
+  proposal: { title: string; subtitle?: string; outcome?: string; estimatedActiveMinutes?: number },
+  timestamp: string,
+): Act {
+  return {
+    id: randomUUID(),
+    campaignId: campaign?.id,
+    sagaId: campaign?.sagaId,
+    title: proposal.title.trim().slice(0, 120),
+    subtitle: proposal.subtitle?.trim().slice(0, 200),
+    outcome: proposal.outcome?.trim().slice(0, 500),
+    status: "available",
+    questIds: [],
+    estimatedActiveMinutes: Math.max(0, Math.round(proposal.estimatedActiveMinutes ?? 0)),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
 }
 
 function requireStep(quest: Quest, stepId: string): QuestStep {
@@ -375,7 +427,7 @@ export class QuestService {
     return questDetailFor(await this.tick(), questId);
   }
 
-  async createDraft(plan: QuestPlanInput, parents: { actId?: string } = {}): Promise<Quest> {
+  async createDraft(plan: QuestPlanInput, parents: { actId?: string; campaignId?: string } = {}): Promise<Quest> {
     validatePlan(plan);
     const { result } = await this.store.mutate((state) => {
       // Varias campañas pueden tener quests listas a la vez. Lo que no puede
@@ -385,14 +437,19 @@ export class QuestService {
       if (act && act.questIds.length >= MAX_QUESTS_PER_ACT) {
         throw new Error(`El acto «${act.title}» ya sostiene ${MAX_QUESTS_PER_ACT} Battles: parte el trabajo en otro Acto.`);
       }
+      // Una quest puede colgar directamente de la campaña, sin Acto intermedio.
+      const campaign = parents.campaignId ? requireCampaign(state, parents.campaignId) : act?.campaignId ? requireCampaign(state, act.campaignId) : undefined;
+      if (act && campaign && act.campaignId && act.campaignId !== campaign.id) {
+        throw new Error(`El acto «${act.title}» pertenece a otra campaña.`);
+      }
       const timestamp = now();
       const quest: Quest = {
         ...plan,
         id: randomUUID(),
         status: "draft",
         actId: act?.id,
-        campaignId: act?.campaignId,
-        sagaId: act?.sagaId,
+        campaignId: campaign?.id ?? act?.campaignId,
+        sagaId: campaign?.sagaId ?? act?.sagaId,
         steps: plan.steps.map((step) => ({
           ...step,
           id: randomUUID(),
@@ -410,7 +467,7 @@ export class QuestService {
       if (act) {
         act.questIds.push(quest.id);
         act.updatedAt = timestamp;
-        if (act.status === "pending") act.status = "active";
+        if (act.status === "available" || act.status === "locked") act.status = "active";
       }
       addEvent(state, { type: "quest_created", questId: quest.id, message: `El Códice redactó «${quest.title}».` });
       return quest;
@@ -422,7 +479,7 @@ export class QuestService {
    * Cualquier objetivo, en cualquier dominio, entra por aquí. El Códice activo
    * decide la descomposición; el servidor solo valida que el contrato sea jugable.
    */
-  async createDraftFromIntent(intent: string, minutesAvailable?: number, actId?: string): Promise<Quest> {
+  async createDraftFromIntent(intent: string, minutesAvailable?: number, actId?: string, campaignId?: string): Promise<Quest> {
     const clean = intent.trim();
     if (clean.length < 8) throw new Error("Describe una quest con un poco más de detalle.");
     const realm = await this.store.read();
@@ -432,7 +489,7 @@ export class QuestService {
       activeCampaign: realm.quests.find((quest) => quest.status === "active")?.campaignTitle,
       minutesAvailable,
     });
-    return this.createDraft(plan, { actId });
+    return this.createDraft(plan, { actId, campaignId });
   }
 
   /**
@@ -996,9 +1053,17 @@ export class QuestService {
         delete state.focusedCampaignId;
         return null;
       }
-      const campaign = state.campaigns.find((candidate) => candidate.id === campaignId);
-      if (!campaign) throw new Error(`Campaña no encontrada: ${campaignId}`);
+      const campaign = requireCampaign(state, campaignId);
+      if (campaign.status === "draft") throw new Error("Sella el pacto antes de poner esta campaña en foco.");
+      // Idempotente: enfocar dos veces no genera dos hechos.
+      if (state.focusedCampaignId === campaign.id) return campaign;
       state.focusedCampaignId = campaign.id;
+      addEvent(state, {
+        type: "campaign_focused",
+        entityType: "campaign",
+        entityId: campaign.id,
+        message: `El reino mira ahora «${campaign.title}». Los demás frentes siguen abiertos.`,
+      });
       return campaign;
     });
     return this.snapshot();
@@ -1024,16 +1089,27 @@ export class QuestService {
     return result;
   }
 
-  async createCampaign(input: {
+  /**
+   * Traza una campaña como BORRADOR. No vive hasta que el jugador la sella.
+   *
+   * Los Actos iniciales son planificación operativa del Códice: pueden venir
+   * con la propuesta y no exigen ceremonia propia. Una campaña puede empezar
+   * sin conocer todos sus Actos; crecerá cuando la realidad los revele.
+   */
+  async createCampaignDraft(input: {
     title: string;
+    intent?: string;
     summary?: string;
     objective?: string;
+    rationale?: string;
     sagaId?: string;
     estimatedActiveMinutes?: number;
+    estimatedCalendarDays?: number;
     scenario?: string;
     bossTitle?: string;
     bossDescription?: string;
-  }): Promise<Campaign> {
+    initialActs?: Array<{ title: string; subtitle?: string; outcome?: string; estimatedActiveMinutes?: number }>;
+  }): Promise<{ campaign: Campaign; acts: Act[] }> {
     if (input.title.trim().length < 3) throw new Error("La campaña necesita un título.");
     const { result } = await this.store.mutate((state) => {
       const saga = input.sagaId ? state.sagas.find((candidate) => candidate.id === input.sagaId) : undefined;
@@ -1043,11 +1119,14 @@ export class QuestService {
         id: randomUUID(),
         sagaId: saga?.id,
         title: input.title.trim().slice(0, 120),
+        intent: input.intent?.trim().slice(0, 1000),
         summary: input.summary?.trim().slice(0, 500),
         objective: input.objective?.trim().slice(0, 500),
-        status: "active",
+        rationale: input.rationale?.trim().slice(0, 1000),
+        status: "draft",
         actIds: [],
         estimatedActiveMinutes: Math.max(0, Math.round(input.estimatedActiveMinutes ?? 0)),
+        estimatedCalendarDays: input.estimatedCalendarDays !== undefined ? Math.max(0, Math.round(input.estimatedCalendarDays)) : undefined,
         scenario: input.scenario?.trim().slice(0, 120),
         bossTitle: input.bossTitle?.trim().slice(0, 120),
         bossDescription: input.bossDescription?.trim().slice(0, 300),
@@ -1059,6 +1138,171 @@ export class QuestService {
         saga.campaignIds.push(campaign.id);
         saga.updatedAt = timestamp;
       }
+
+      const acts = (input.initialActs ?? []).slice(0, MAX_ACTS_PER_CAMPAIGN).map((proposal) => {
+        const act = buildAct(campaign, proposal, timestamp);
+        state.acts.unshift(act);
+        campaign.actIds.push(act.id);
+        return act;
+      });
+
+      addEvent(state, {
+        type: "campaign_created",
+        entityType: "campaign",
+        entityId: campaign.id,
+        message: `El Códice trazó la campaña «${campaign.title}». Un nuevo pacto aguarda tu sello.`,
+      });
+      for (const act of acts) {
+        addEvent(state, { type: "act_created", entityType: "act", entityId: act.id, message: `Acto trazado: «${act.title}».` });
+      }
+      return { campaign, acts };
+    });
+    return result;
+  }
+
+  /**
+   * Retira una campaña. Un pacto trazado por error no puede quedarse vivo.
+   *
+   * No borra nada: las quests conservan su id, su estado y su historia, y
+   * simplemente dejan de colgar de una campaña retirada.
+   */
+  async abandonCampaign(campaignId: string, reason: string): Promise<Campaign> {
+    const { result } = await this.store.mutate((state) => {
+      const campaign = requireCampaign(state, campaignId);
+      if (campaign.status === "abandoned") return campaign;
+      if (campaign.status === "completed") throw new Error("Una campaña conquistada es historia: no se retira.");
+      campaign.status = "abandoned";
+      campaign.updatedAt = now();
+      if (state.focusedCampaignId === campaign.id) delete state.focusedCampaignId;
+      addEvent(state, {
+        type: "campaign_abandoned",
+        entityType: "campaign",
+        entityId: campaign.id,
+        message: `Retirada de «${campaign.title}»: ${reason.trim() || "sin motivo registrado"}.`,
+      });
+      return campaign;
+    });
+    return result;
+  }
+
+  /**
+   * Convierte una intención amplia en un borrador de Campaña con Actos.
+   *
+   * No inventa frentes: si el jugador declaró Finaer, Real Business y Google
+   * Ads, propone esos tres Actos y ninguno más. Si no declaró ninguno, deja la
+   * campaña sin Actos antes que fabricar estructura vacía. No crea Battles y
+   * no salta el sello del jugador.
+   */
+  async planCampaignFromIntent(input: {
+    intent: string;
+    activeMinutes?: number;
+    calendarDays?: number;
+    fronts?: string[];
+  }): Promise<{ campaign: Campaign; acts: Act[]; proposal: ScaleProposal }> {
+    const intent = input.intent.trim();
+    if (intent.length < 8) throw new Error("Describe el objetivo con un poco más de detalle.");
+    const fronts = (input.fronts ?? []).map((front) => front.trim()).filter(Boolean).slice(0, MAX_ACTS_PER_CAMPAIGN);
+    const proposal = this.classifyObjective(intent, { activeMinutes: input.activeMinutes, naturalCampaigns: 1 });
+    if (proposal.scale === "quest") {
+      throw new Error(
+        `Esto son ${proposal.activeMinutes} min de trabajo activo: cabe en una sola Battle. Crea una Quest y no una Campaña; no hagas jerarquía ceremonial.`,
+      );
+    }
+    const minutesPerFront = fronts.length > 0 ? Math.round(proposal.activeMinutes / fronts.length) : 0;
+    return this.createCampaignDraft({
+      title: campaignTitleFrom(intent),
+      intent,
+      objective: `Dejar atendido de forma verificable: ${intent}`,
+      rationale: proposal.reason,
+      estimatedActiveMinutes: proposal.activeMinutes,
+      estimatedCalendarDays: input.calendarDays,
+      initialActs: fronts.map((front) => ({ title: front, outcome: `${front} queda atendido y comprobable.`, estimatedActiveMinutes: minutesPerFront })),
+    }).then((created) => ({ ...created, proposal }));
+  }
+
+  /** Corrige un pacto todavía no sellado. No toca historia ni Actos cerrados. */
+  async reviseCampaignDraft(
+    campaignId: string,
+    patch: {
+      title?: string;
+      intent?: string;
+      summary?: string;
+      objective?: string;
+      rationale?: string;
+      estimatedActiveMinutes?: number;
+      estimatedCalendarDays?: number;
+      scenario?: string;
+      bossTitle?: string;
+      bossDescription?: string;
+      initialActs?: Array<{ title: string; subtitle?: string; outcome?: string; estimatedActiveMinutes?: number }>;
+    },
+  ): Promise<{ campaign: Campaign; acts: Act[] }> {
+    const { result } = await this.store.mutate((state) => {
+      const campaign = requireCampaign(state, campaignId);
+      if (campaign.status !== "draft") throw new Error("Sólo se puede reformular una campaña en borrador.");
+      const timestamp = now();
+      if (patch.title !== undefined) campaign.title = patch.title.trim().slice(0, 120);
+      if (patch.intent !== undefined) campaign.intent = patch.intent.trim().slice(0, 1000);
+      if (patch.summary !== undefined) campaign.summary = patch.summary.trim().slice(0, 500);
+      if (patch.objective !== undefined) campaign.objective = patch.objective.trim().slice(0, 500);
+      if (patch.rationale !== undefined) campaign.rationale = patch.rationale.trim().slice(0, 1000);
+      if (patch.estimatedActiveMinutes !== undefined) campaign.estimatedActiveMinutes = Math.max(0, Math.round(patch.estimatedActiveMinutes));
+      if (patch.estimatedCalendarDays !== undefined) campaign.estimatedCalendarDays = Math.max(0, Math.round(patch.estimatedCalendarDays));
+      if (patch.scenario !== undefined) campaign.scenario = patch.scenario.trim().slice(0, 120);
+      if (patch.bossTitle !== undefined) campaign.bossTitle = patch.bossTitle.trim().slice(0, 120);
+      if (patch.bossDescription !== undefined) campaign.bossDescription = patch.bossDescription.trim().slice(0, 300);
+
+      if (patch.initialActs) {
+        // Sólo se rehacen los actos vacíos: uno con quests ya es historia viva.
+        const keep = campaign.actIds.filter((actId) => {
+          const act = state.acts.find((candidate) => candidate.id === actId);
+          return act ? act.questIds.length > 0 : false;
+        });
+        state.acts = state.acts.filter((act) => act.campaignId !== campaign.id || keep.includes(act.id));
+        campaign.actIds = keep;
+        if (keep.length + patch.initialActs.length > MAX_ACTS_PER_CAMPAIGN) {
+          throw new Error(`Una campaña no sostiene más de ${MAX_ACTS_PER_CAMPAIGN} Actos.`);
+        }
+        for (const proposal of patch.initialActs) {
+          const act = buildAct(campaign, proposal, timestamp);
+          state.acts.unshift(act);
+          campaign.actIds.push(act.id);
+        }
+      }
+
+      campaign.updatedAt = timestamp;
+      addEvent(state, {
+        type: "campaign_revised",
+        entityType: "campaign",
+        entityId: campaign.id,
+        message: `El pacto de «${campaign.title}» fue reformulado.`,
+      });
+      return { campaign, acts: state.acts.filter((act) => act.campaignId === campaign.id) };
+    });
+    return result;
+  }
+
+  /**
+   * Sella el pacto. Aceptar una campaña NO inicia ninguna Battle ni cierra
+   * ninguna otra campaña: sólo la incorpora a los frentes vivos del reino.
+   */
+  async acceptCampaign(campaignId: string, userAccepted: boolean): Promise<Campaign> {
+    if (!userAccepted) throw new Error("La aceptación explícita del usuario es obligatoria.");
+    const { result } = await this.store.mutate((state) => {
+      const campaign = requireCampaign(state, campaignId);
+      // Idempotente: reintentar un sello ya puesto no rompe nada.
+      if (campaign.status === "active") return campaign;
+      if (campaign.status !== "draft") throw new Error(`Esta campaña ya está ${campaign.status}.`);
+      campaign.status = "active";
+      campaign.acceptedAt = now();
+      campaign.updatedAt = campaign.acceptedAt;
+      state.focusedCampaignId ??= campaign.id;
+      addEvent(state, {
+        type: "campaign_accepted",
+        entityType: "campaign",
+        entityId: campaign.id,
+        message: `El pacto de «${campaign.title}» ha sido sellado.`,
+      });
       return campaign;
     });
     return result;
@@ -1067,63 +1311,87 @@ export class QuestService {
   async createAct(input: {
     title: string;
     subtitle?: string;
+    outcome?: string;
     campaignId?: string;
     scenario?: string;
     estimatedActiveMinutes?: number;
   }): Promise<Act> {
     if (input.title.trim().length < 3) throw new Error("El acto necesita un título.");
     const { result } = await this.store.mutate((state) => {
-      const campaign = input.campaignId ? state.campaigns.find((candidate) => candidate.id === input.campaignId) : undefined;
-      if (input.campaignId && !campaign) throw new Error(`Campaña no encontrada: ${input.campaignId}`);
+      const campaign = input.campaignId ? requireCampaign(state, input.campaignId) : undefined;
       if (campaign && campaign.actIds.length >= MAX_ACTS_PER_CAMPAIGN) {
         throw new Error(`La campaña «${campaign.title}» ya sostiene ${MAX_ACTS_PER_CAMPAIGN} Actos: abre otra Campaña bajo una Saga.`);
       }
       const timestamp = now();
-      const act: Act = {
-        id: randomUUID(),
-        campaignId: campaign?.id,
-        sagaId: campaign?.sagaId,
-        title: input.title.trim().slice(0, 120),
-        subtitle: input.subtitle?.trim().slice(0, 200),
-        status: "pending",
-        questIds: [],
-        estimatedActiveMinutes: Math.max(0, Math.round(input.estimatedActiveMinutes ?? 0)),
-        scenario: input.scenario?.trim().slice(0, 120),
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
+      const act = buildAct(campaign, input, timestamp);
+      act.scenario = input.scenario?.trim().slice(0, 120);
       state.acts.unshift(act);
       if (campaign) {
         campaign.actIds.push(act.id);
         campaign.updatedAt = timestamp;
       }
+      addEvent(state, { type: "act_created", entityType: "act", entityId: act.id, message: `Acto trazado: «${act.title}».` });
       return act;
     });
     return result;
   }
 
-  /** Adopta una quest ya existente dentro de un Acto, sin duplicarla. */
-  async assignQuestToAct(questId: string, actId: string): Promise<{ quest: Quest; act: Act }> {
+  /**
+   * Vincula una quest YA EXISTENTE a una campaña y, si hace falta, a un acto.
+   *
+   * No la recrea: conserva su id, su estado, sus fechas, su evidencia y su
+   * historial. Un `campaignTitle` coincidente NUNCA basta para inferir esto:
+   * la relación autoritativa es por id y la declara alguien, no el azar.
+   */
+  async assignQuest(questId: string, target: { campaignId?: string; actId?: string }): Promise<{ quest: Quest; act: Act | null; campaign: Campaign | null }> {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
-      const act = state.acts.find((candidate) => candidate.id === actId);
-      if (!act) throw new Error(`Acto no encontrado: ${actId}`);
-      if (act.questIds.includes(questId)) return { quest, act };
-      if (act.questIds.length >= MAX_QUESTS_PER_ACT) {
+      const act = target.actId ? state.acts.find((candidate) => candidate.id === target.actId) ?? null : null;
+      if (target.actId && !act) throw new Error(`Acto no encontrado: ${target.actId}`);
+      const campaign = target.campaignId
+        ? requireCampaign(state, target.campaignId)
+        : act?.campaignId
+          ? requireCampaign(state, act.campaignId)
+          : null;
+      if (act && campaign && act.campaignId && act.campaignId !== campaign.id) {
+        throw new Error(`El acto «${act.title}» pertenece a otra campaña.`);
+      }
+      if (!act && !campaign) throw new Error("Indica al menos una campaña o un acto de destino.");
+      if (act && act.questIds.length >= MAX_QUESTS_PER_ACT && !act.questIds.includes(questId)) {
         throw new Error(`El acto «${act.title}» ya sostiene ${MAX_QUESTS_PER_ACT} Battles: parte el trabajo en otro Acto.`);
       }
+
+      const timestamp = now();
+      // Idempotente: repetir la asignación no duplica la relación.
       const previous = quest.actId ? state.acts.find((candidate) => candidate.id === quest.actId) : undefined;
-      if (previous) previous.questIds = previous.questIds.filter((candidate) => candidate !== questId);
-      act.questIds.push(questId);
-      act.updatedAt = now();
-      if (act.status === "pending") act.status = "active";
-      quest.actId = act.id;
-      quest.campaignId = act.campaignId;
-      quest.sagaId = act.sagaId;
-      quest.updatedAt = act.updatedAt;
-      return { quest, act };
+      if (previous && previous.id !== act?.id) previous.questIds = previous.questIds.filter((candidate) => candidate !== questId);
+      if (act && !act.questIds.includes(questId)) act.questIds.push(questId);
+      if (act) {
+        act.updatedAt = timestamp;
+        if (act.status === "available" || act.status === "locked") act.status = "active";
+      }
+      quest.actId = act?.id;
+      quest.campaignId = campaign?.id ?? act?.campaignId;
+      quest.sagaId = campaign?.sagaId ?? act?.sagaId;
+      quest.updatedAt = timestamp;
+      addEvent(state, {
+        type: "quest_assigned",
+        entityType: "quest",
+        entityId: quest.id,
+        questId: quest.id,
+        message: act
+          ? `«${quest.title}» pasa a formar parte del acto «${act.title}».`
+          : `«${quest.title}» pasa a formar parte de la campaña «${campaign!.title}».`,
+      });
+      return { quest, act, campaign };
     });
     return result;
+  }
+
+  /** Compatibilidad: adoptar una quest dentro de un acto concreto. */
+  async assignQuestToAct(questId: string, actId: string): Promise<{ quest: Quest; act: Act }> {
+    const result = await this.assignQuest(questId, { actId });
+    return { quest: result.quest, act: result.act! };
   }
 
   async abandon(questId: string, reason: string): Promise<Quest> {

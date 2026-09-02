@@ -47,7 +47,8 @@ describe("Multicampaña y frente único", () => {
   });
 
   async function campaignWithQuest(title: string) {
-    const campaign = await service.createCampaign({ title });
+    const { campaign } = await service.createCampaignDraft({ title });
+    await service.acceptCampaign(campaign.id, true);
     const act = await service.createAct({ title: `Acto de ${title}`, campaignId: campaign.id });
     const quest = await service.createDraft(planFor(title), { actId: act.id });
     return { campaign, act, quest };

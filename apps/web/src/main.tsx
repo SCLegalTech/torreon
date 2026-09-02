@@ -2,7 +2,7 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 import { Sprite } from "./Sprite";
-import type { ActView, BattleClock, BattleStatus, CampaignView, CharacterStats, PartyMemberId, PartyState, Quest, RealmSnapshot } from "./types";
+import type { ActView, BattleClock, BattleStatus, CampaignView, CharacterStats, EntityType, PartyMemberId, PartyState, Quest, RealmSnapshot } from "./types";
 import "./styles.css";
 
 type Screen = "loading" | "realm" | "thinking" | "campaign" | "act" | "quest" | "battle" | "stats";
@@ -19,17 +19,40 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-type RealmNotice = { eventId: string; questId: string; kind: "draft" | "started" | "completed" | "amended" | "blocked" | "danger"; title: string; message: string };
+/**
+ * AVISO DIRIGIDO.
+ *
+ * Un aviso lleva SIEMPRE la entidad exacta que cambió. Nunca «el último
+ * borrador» ni «la quest actual»: si Códice traza dos pactos seguidos, tocar
+ * el primero tiene que abrir el primero.
+ */
+type RealmNotice = {
+  eventId: string;
+  entityType: EntityType;
+  entityId: string;
+  kind: "draft" | "started" | "completed" | "amended" | "blocked" | "danger" | "campaign";
+  title: string;
+  message: string;
+  cta: string;
+};
 
 function noticeFor(event: RealmSnapshot["realm"]["events"][number]): RealmNotice | null {
-  if (event.type === "quest_created") return { eventId: event.id, questId: event.questId, kind: "draft", title: "📜 UN NUEVO PACTO AGUARDA TU SELLO", message: event.message };
-  if (event.type === "quest_started") return { eventId: event.id, questId: event.questId, kind: "started", title: "⚔️ NUEVA ORDEN DEL CÓDICE", message: event.message };
-  if (event.type === "quest_completed") return { eventId: event.id, questId: event.questId, kind: "completed", title: "🏆 VICTORIA", message: event.message };
-  if (event.type === "quest_amendment_proposed") return { eventId: event.id, questId: event.questId, kind: "amended", title: "⚔️ EL CAMPO DE BATALLA PUEDE CAMBIAR", message: event.message };
-  if (event.type === "quest_amended") return { eventId: event.id, questId: event.questId, kind: "amended", title: "🗺️ PLAN ACTUALIZADO", message: event.message };
-  if (event.type === "quest_waiting_external") return { eventId: event.id, questId: event.questId, kind: "blocked", title: "🔒 FRENTE BLOQUEADO POR UN TERCERO", message: event.message };
-  if (event.type === "quest_unblocked") return { eventId: event.id, questId: event.questId, kind: "started", title: "🔓 EL FRENTE VUELVE A ABRIRSE", message: event.message };
-  if (event.type === "horde_attack") return { eventId: event.id, questId: event.questId, kind: "danger", title: "💥 LA HORDA CONTRAATACA", message: event.message };
+  const entityType = event.entityType ?? "quest";
+  const entityId = event.entityId ?? event.questId ?? "";
+  if (!entityId) return null;
+  const base = { eventId: event.id, entityType, entityId, message: event.message };
+
+  if (event.type === "campaign_created") return { ...base, kind: "campaign", title: "🏰 NUEVA CAMPAÑA TRAZADA", cta: "REVISAR" };
+  if (event.type === "campaign_accepted") return { ...base, kind: "campaign", title: "⚔️ CAMPAÑA ACTIVA", cta: "VER CAMPAÑA" };
+  if (event.type === "campaign_completed") return { ...base, kind: "completed", title: "🏆 CAMPAÑA CONQUISTADA", cta: "VER CAMPAÑA" };
+  if (event.type === "quest_created") return { ...base, kind: "draft", title: "📜 UN NUEVO PACTO AGUARDA TU SELLO", cta: "REVISAR" };
+  if (event.type === "quest_started") return { ...base, kind: "started", title: "⚔️ NUEVA ORDEN DEL CÓDICE", cta: "VER BATALLA" };
+  if (event.type === "quest_completed") return { ...base, kind: "completed", title: "🏆 VICTORIA", cta: "VER BATALLA" };
+  if (event.type === "quest_amendment_proposed") return { ...base, kind: "amended", title: "⚔️ EL CAMPO DE BATALLA PUEDE CAMBIAR", cta: "VER BATALLA" };
+  if (event.type === "quest_amended") return { ...base, kind: "amended", title: "🗺️ PLAN ACTUALIZADO", cta: "VER BATALLA" };
+  if (event.type === "quest_waiting_external") return { ...base, kind: "blocked", title: "🔒 FRENTE BLOQUEADO POR UN TERCERO", cta: "VER QUEST" };
+  if (event.type === "quest_unblocked") return { ...base, kind: "started", title: "🔓 EL FRENTE VUELVE A ABRIRSE", cta: "VER BATALLA" };
+  if (event.type === "horde_attack") return { ...base, kind: "danger", title: "💥 LA HORDA CONTRAATACA", cta: "VER BATALLA" };
   return null;
 }
 
@@ -39,7 +62,7 @@ function RealmNoticeToast({ notice, onOpen, onDismiss }: { notice: RealmNotice; 
       <button className="notice-dismiss" type="button" onClick={onDismiss} aria-label="Cerrar aviso">×</button>
       <strong>{notice.title}</strong>
       <p>{notice.message}</p>
-      <button className="notice-open" type="button" onClick={onOpen}>VER QUEST</button>
+      <button className="notice-open" type="button" onClick={onOpen}>{notice.cta}</button>
     </aside>
   );
 }
@@ -548,6 +571,7 @@ function CampaignMap({
   onOpenAct,
   onOpenStats,
   onFocusCampaign,
+  onAcceptCampaign,
 }: {
   snapshot: RealmSnapshot;
   campaign: CampaignView;
@@ -556,6 +580,7 @@ function CampaignMap({
   onOpenAct: (actId: string) => void;
   onOpenStats: () => void;
   onFocusCampaign: (campaignId: string) => void;
+  onAcceptCampaign: (campaignId: string) => void;
 }) {
   const quest = snapshot.currentQuest;
   const activeAct = campaign.acts.find((act) => act.id === snapshot.hierarchy.currentActId) ?? campaign.acts.find((act) => !act.locked);
@@ -600,6 +625,26 @@ function CampaignMap({
         {campaign.acts.length === 0 ? <p className="map-empty">Esta campaña todavía no tiene actos. Pídeselos al Códice.</p> : null}
       </nav>
 
+      {campaign.status === "draft" ? (
+        <aside className="campaign-pact" role="dialog" aria-label="Pacto de campaña propuesto">
+          <p className="eyebrow">PACTO PROPUESTO</p>
+          <h2>{campaign.title}</h2>
+          {campaign.objective ? <p><b>Objetivo final:</b> {campaign.objective}</p> : null}
+          {campaign.rationale ? <p>{campaign.rationale}</p> : null}
+          <p className="pact-meta">
+            {campaign.totalActs} acto(s) · {formatMinutes(campaign.estimatedActiveMinutes)} de trabajo activo
+            {campaign.estimatedCalendarDays ? ` · horizonte de ${campaign.estimatedCalendarDays} días` : ""}
+          </p>
+          <div className="pact-actions">
+            <button className="back-button" type="button" onClick={onBack}>MÁS TARDE</button>
+            <button className="expedition-button" type="button" disabled={busy} onClick={() => onAcceptCampaign(campaign.id)}>
+              ✍ SELLAR EL PACTO
+            </button>
+          </div>
+          <small>Sellarla no inicia ninguna batalla ni cierra ningún otro frente.</small>
+        </aside>
+      ) : null}
+
       <section className="map-details">
         <p className="eyebrow">DETALLES DE CAMPAÑA</p>
         <ul>
@@ -629,18 +674,20 @@ function CampaignMap({
         <div className="campaign-switch" aria-label="Campañas activas">
           <span>FRENTES ABIERTOS</span>
           <div>
-            {snapshot.hierarchy.campaigns.map((candidate) => (
+            {snapshot.hierarchy.campaigns
+              .filter((candidate) => candidate.status !== "abandoned" && candidate.status !== "completed")
+              .map((candidate) => (
               <button
                 key={candidate.id}
                 type="button"
-                className={candidate.id === campaign.id ? "current" : ""}
+                className={`${candidate.id === campaign.id ? "current" : ""} ${candidate.status}`}
                 disabled={busy || candidate.id === campaign.id}
                 onClick={() => onFocusCampaign(candidate.id)}
               >
                 {candidate.title}
-                <small>{candidate.completedQuests}/{candidate.totalQuests}</small>
+                <small>{candidate.status === "draft" ? "SIN SELLAR" : `${candidate.completedQuests}/${candidate.totalQuests}`}</small>
               </button>
-            ))}
+              ))}
           </div>
         </div>
       </nav>
@@ -1352,6 +1399,10 @@ function App() {
   const [screen, setScreen] = useState<Screen>(initialScreen);
   const [openActId, setOpenActId] = useState<string | null>(null);
   const [openQuestId, setOpenQuestId] = useState<string | null>(null);
+  // Deep link: la entidad exacta que el jugador pidió abrir, no «la actual».
+  const [openCampaignId, setOpenCampaignId] = useState<string | null>(
+    new URLSearchParams(window.location.search).get("entity"),
+  );
   const [snapshot, setSnapshot] = useState<RealmSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1446,7 +1497,7 @@ function App() {
     return (
       <>
         <LoadingGate onStart={() => setScreen("realm")} />
-        {notice ? <RealmNoticeToast notice={notice} onOpen={() => { setScreen("battle"); setNotice(null); }} onDismiss={() => setNotice(null)} /> : null}
+        {notice ? <RealmNoticeToast notice={notice} onOpen={() => setScreen("realm")} onDismiss={() => setNotice(null)} /> : null}
         {error ? <div className="error-toast" role="alert">{error}</div> : null}
       </>
     );
@@ -1457,7 +1508,13 @@ function App() {
   const quest = snapshot.currentQuest;
   const hierarchy = snapshot.hierarchy;
   const campaigns = hierarchy?.campaigns ?? [];
-  const currentCampaign = campaigns.find((candidate) => candidate.id === hierarchy?.currentCampaignId) ?? campaigns[0] ?? null;
+  const currentCampaign =
+    campaigns.find((candidate) => candidate.id === openCampaignId) ??
+    campaigns.find((candidate) => candidate.id === hierarchy?.focusedCampaignId) ??
+    campaigns.find((candidate) => candidate.id === hierarchy?.currentCampaignId) ??
+    campaigns.find((candidate) => candidate.status === "draft") ??
+    campaigns.find((candidate) => candidate.status === "active") ??
+    null;
   const allActs = campaigns.flatMap((candidate) => candidate.acts);
   const openAct = allActs.find((candidate) => candidate.id === openActId) ?? null;
   const campaignOfOpenAct = campaigns.find((candidate) => candidate.acts.some((candidate2) => candidate2.id === openAct?.id)) ?? currentCampaign;
@@ -1465,6 +1522,32 @@ function App() {
   const openOrder = (questId: string) => {
     setOpenQuestId(questId);
     setScreen("quest");
+  };
+
+  /**
+   * Abre exactamente la entidad del aviso.
+   *
+   * Nada de heurísticas: el hecho trae `entityType` y `entityId`, y eso es lo
+   * que se abre. Dos borradores seguidos ya no se pisan.
+   */
+  const openNotice = (notice: RealmNotice) => {
+    setNotice(null);
+    if (notice.entityType === "campaign") {
+      setOpenCampaignId(notice.entityId);
+      setOpenActId(null);
+      setScreen("campaign");
+      return;
+    }
+    if (notice.entityType === "act") {
+      setOpenActId(notice.entityId);
+      setScreen("act");
+      return;
+    }
+    if (notice.entityId === quest?.id && ["active", "waiting_external", "completed"].includes(quest.status)) {
+      setScreen("battle");
+      return;
+    }
+    openOrder(notice.entityId);
   };
   // Una microquest no pasa por Campaña ni Acto: no se le fabrica ceremonia.
   const openCampaignOrOrder = () => {
@@ -1522,8 +1605,16 @@ function App() {
           onOpenStats={() => setScreen("stats")}
           onFocusCampaign={(campaignId) => {
             setOpenActId(null);
-            void act(() => api(`/api/campaigns/${campaignId}/focus`, { method: "POST" }));
+            setOpenCampaignId(campaignId);
+            // Un borrador todavía no puede enfocarse: primero se sella.
+            const target = campaigns.find((candidate) => candidate.id === campaignId);
+            if (target && target.status !== "draft") {
+              void act(() => api(`/api/campaigns/${campaignId}/focus`, { method: "POST" }));
+            }
           }}
+          onAcceptCampaign={(campaignId) =>
+            void act(() => api(`/api/campaigns/${campaignId}/accept`, { method: "POST", body: JSON.stringify({ userAccepted: true }) }))
+          }
         />
       ) : screen === "act" && openAct ? (
         <ActBook
@@ -1603,7 +1694,7 @@ function App() {
       )}
       {verdict ? <div className="verdict-toast" role="status">{verdict}</div> : null}
       {snapshot ? <small className="realm-debug">{snapshot.consistency.instance} · {snapshot.consistency.realmId.slice(0, 8)}</small> : null}
-      {notice ? <RealmNoticeToast notice={notice} onOpen={() => { setScreen("battle"); setNotice(null); }} onDismiss={() => setNotice(null)} /> : null}
+      {notice ? <RealmNoticeToast notice={notice} onOpen={() => openNotice(notice)} onDismiss={() => setNotice(null)} /> : null}
       {error ? <div className="error-toast" role="alert">{error}</div> : null}
     </>
   );

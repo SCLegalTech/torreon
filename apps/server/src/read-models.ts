@@ -253,6 +253,7 @@ function actViewFor(state: RealmState, act: Act, position: number, locked: boole
     position,
     title: act.title,
     subtitle: act.subtitle,
+    outcome: act.outcome,
     scenario: act.scenario,
     status: act.status,
     estimatedActiveMinutes: act.estimatedActiveMinutes,
@@ -275,20 +276,29 @@ function campaignViewFor(state: RealmState, campaign: Campaign): CampaignView {
       return view;
     });
 
+  // Una quest puede colgar de la campaña sin Acto intermedio: también cuenta.
+  const direct = state.quests.filter((quest) => quest.campaignId === campaign.id && !quest.actId);
+  const directQuests = direct.map((quest, index) => questNodeFor(quest, index + 1, false, false));
+
   const completedActs = acts.filter((act) => act.status === "completed").length;
-  const totalQuests = acts.reduce((sum, act) => sum + act.totalQuests, 0);
-  const completedQuests = acts.reduce((sum, act) => sum + act.completedQuests, 0);
+  const totalQuests = acts.reduce((sum, act) => sum + act.totalQuests, 0) + directQuests.length;
+  const completedQuests =
+    acts.reduce((sum, act) => sum + act.completedQuests, 0) + direct.filter((quest) => quest.status === "completed").length;
   return {
     id: campaign.id,
     title: campaign.title,
     summary: campaign.summary,
     objective: campaign.objective,
+    intent: campaign.intent,
+    rationale: campaign.rationale,
     status: campaign.status,
+    estimatedCalendarDays: campaign.estimatedCalendarDays,
     estimatedActiveMinutes: campaign.estimatedActiveMinutes,
     scenario: campaign.scenario,
     bossTitle: campaign.bossTitle,
     bossDescription: campaign.bossDescription,
     acts,
+    directQuests,
     completedActs,
     totalActs: acts.length,
     completedQuests,
@@ -327,7 +337,7 @@ export function hierarchyFor(state: RealmState, currentQuest: Quest | null, enga
 
   // Microquests: sin Acto ni Campaña, y eso es legítimo. No se les fabrica padre.
   const standaloneQuests = state.quests
-    .filter((quest) => !quest.actId && !CLOSED_QUEST.has(quest.status))
+    .filter((quest) => !quest.actId && !quest.campaignId && !CLOSED_QUEST.has(quest.status))
     .map((quest, index) => questNodeFor(quest, index + 1, false, false));
 
   return {

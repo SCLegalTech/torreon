@@ -7,7 +7,10 @@ export type EvidenceKind = "file" | "link" | "screenshot" | "photo" | "number" |
 export type ArtifactKind = "file" | "link" | "text";
 export type BattleStatus = "active" | "won" | "lost";
 export type PartyMemberId = "roko" | "marques" | "cordera";
-export type ActStatus = "pending" | "active" | "completed" | "abandoned";
+/** Un Acto es planificación operativa del Códice: no exige ceremonia propia. */
+export type ActStatus = "locked" | "available" | "active" | "completed" | "abandoned";
+/** Una Campaña sí exige pacto: nace en borrador y sólo el jugador la activa. */
+export type CampaignStatus = "draft" | "active" | "completed" | "abandoned";
 
 export interface QuestStepInput {
   title: string;
@@ -183,8 +186,27 @@ export interface RealmEvent {
     | "step_completed"
     | "quest_completed"
     | "reward_granted"
-    | "quest_abandoned";
-  questId: string;
+    | "quest_abandoned"
+    | "campaign_created"
+    | "campaign_revised"
+    | "campaign_accepted"
+    | "campaign_focused"
+    | "campaign_completed"
+    | "campaign_abandoned"
+    | "act_created"
+    | "act_completed"
+    | "quest_assigned";
+  /**
+   * A QUÉ ENTIDAD se refiere este hecho.
+   *
+   * La notificación NUNCA puede elegir su objetivo con heurísticas como «el
+   * último borrador» o «la quest actual»: si el evento no dice exactamente
+   * qué cambió, el jugador acaba abriendo otra cosa.
+   */
+  entityType: "quest" | "campaign" | "act" | "saga";
+  entityId: string;
+  /** Compatibilidad: presente sólo cuando el hecho ocurre dentro de una quest. */
+  questId?: string;
   message: string;
   createdAt: string;
 }
@@ -296,6 +318,8 @@ export interface Act {
   title: string;
   /** Subtítulo del acto: «La comunicación bloqueada». */
   subtitle?: string;
+  /** Qué deja hecho este acto cuando cierra. */
+  outcome?: string;
   status: ActStatus;
   questIds: string[];
   estimatedActiveMinutes: number;
@@ -314,9 +338,16 @@ export interface Campaign {
   summary?: string;
   /** Resultado final verificable de toda la campaña. */
   objective?: string;
-  status: ActStatus;
+  /** La intención literal del jugador que originó la campaña. */
+  intent?: string;
+  /** Por qué esta agrupación produce el resultado. */
+  rationale?: string;
+  status: CampaignStatus;
   actIds: string[];
   estimatedActiveMinutes: number;
+  /** Horizonte de calendario. NO es trabajo activo y no cambia la escala. */
+  estimatedCalendarDays?: number;
+  acceptedAt?: string;
   scenario?: string;
   /** Nombre del jefe final: hoy sólo la representación de la última Quest. */
   bossTitle?: string;
@@ -330,7 +361,7 @@ export interface Saga {
   id: string;
   title: string;
   summary?: string;
-  status: ActStatus;
+  status: CampaignStatus;
   campaignIds: string[];
   estimatedActiveMinutes: number;
   createdAt: string;
@@ -535,6 +566,7 @@ export interface ActView {
   position: number;
   title: string;
   subtitle?: string;
+  outcome?: string;
   scenario?: string;
   status: ActStatus;
   estimatedActiveMinutes: number;
@@ -550,12 +582,17 @@ export interface CampaignView {
   title: string;
   summary?: string;
   objective?: string;
-  status: ActStatus;
+  intent?: string;
+  rationale?: string;
+  status: CampaignStatus;
   estimatedActiveMinutes: number;
+  estimatedCalendarDays?: number;
   scenario?: string;
   bossTitle?: string;
   bossDescription?: string;
   acts: ActView[];
+  /** Quests colgadas directamente de la campaña, sin Acto intermedio. */
+  directQuests: QuestNode[];
   completedActs: number;
   totalActs: number;
   completedQuests: number;
@@ -567,7 +604,7 @@ export interface SagaView {
   id: string;
   title: string;
   summary?: string;
-  status: ActStatus;
+  status: CampaignStatus;
   campaignIds: string[];
   completedCampaigns: number;
   totalCampaigns: number;
