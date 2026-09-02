@@ -101,7 +101,63 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  // Perder una Battle no borra nada: este reintento sólo devuelve reloj y HP.
+  // El zurrón: el Core valida y decrementa; el cliente nunca resta por su cuenta.
+  app.get("/api/inventory", async (_req, res, next) => {
+    try {
+      res.json({ inventory: (await service.snapshot()).inventory });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/inventory/use", async (req, res, next) => {
+    try {
+      res.json(await service.useInventoryItem(req.body?.itemId, req.body?.target));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/quests/:questId/battle/recontract", async (req, res, next) => {
+    try {
+      res.json({
+        battle: await service.proposeBattleRecontract(req.params.questId, {
+          reason: String(req.body?.reason ?? ""),
+          newDurationMinutes: Number(req.body?.newDurationMinutes ?? 0),
+        }),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/quests/:questId/battle/recontract/accept", async (req, res, next) => {
+    try {
+      res.json({ battle: await service.acceptBattleRecontract(req.params.questId, req.body?.userAccepted === true) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/quests/:questId/steps/:stepId/companion-assist", async (req, res, next) => {
+    try {
+      res.status(201).json({
+        assist: await service.recordCompanionAssist({
+          questId: req.params.questId,
+          stepId: req.params.stepId,
+          companion: req.body?.companion,
+          source: req.body?.source,
+          sourceTool: req.body?.sourceTool ? String(req.body.sourceTool) : undefined,
+          executionRef: req.body?.executionRef ? String(req.body.executionRef) : undefined,
+          contributionSummary: String(req.body?.contributionSummary ?? ""),
+        }),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Replanificar repacta el tiempo: no resucita a nadie ni cura gratis.
   app.post("/api/quests/:questId/battle/retry", async (req, res, next) => {
     try {
       const minutes = Number(req.body?.durationMinutes);

@@ -46,6 +46,7 @@ function freshSnapshot(): RealmSnapshot {
       treasure: { currency: "COP", amount: 400000 },
     },
     battle: null,
+    inventory: { items: [] },
     hierarchy: {
       sagas: [],
       campaigns: [],
@@ -132,7 +133,12 @@ function withBattle(snapshot: RealmSnapshot): RealmSnapshot {
       // Sin servidor no hay autoridad del tiempo: aquí el reloj no corre.
       status: "pending",
       attempt: 1,
+      attempts: [],
       party: idleParty(),
+      agent: { deployed: false, status: "undeployed", secondaryAssists: [], comboDamage: 0 },
+      enemies: [],
+      hordeNeutralized: false,
+      pressureRate: 0,
       clock: null,
     },
   };

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { emptyAgentSlot } from "./companions.js";
 import type { RealmState } from "./domain.js";
+import { buildEncounter } from "./horde.js";
+import { freshParty } from "./party.js";
 
 const now = () => new Date().toISOString();
 
@@ -13,6 +16,8 @@ export function createInitialState(): RealmState {
       displayName: "Marqués Phi",
       title: "Guardián de la Marca",
     },
+    inventory: { items: [], initializedAt: undefined },
+    companionAssists: [],
     character: {
       xp: 0,
       aura: 0,
@@ -81,20 +86,31 @@ export class JsonRealmStore {
     state.gameEvents ??= [];
     // Reinos anteriores a la hoja de personaje empiezan en cero, no en inventado.
     state.character ??= { xp: 0, aura: 0, mastery: {}, rewardedQuestIds: [] };
+    state.inventory ??= { items: [] };
+    state.inventory.items ??= [];
+    state.companionAssists ??= [];
     state.character.mastery ??= {};
     state.character.rewardedQuestIds ??= [];
     for (const quest of state.quests) {
       quest.version ??= 1;
       quest.amendments ??= [];
       if (quest.battle) {
-        quest.battle.attempt ??= 1;
-        quest.battle.suspendedMs ??= 0;
-        // Una Battle anterior al grupo tenía cuatro umbrales; ahora hay diez
-        // ventanas. Las ya cobradas se conservan para no volver a golpear.
-        const legacy = (quest.battle as { appliedThresholds?: number[] }).appliedThresholds;
-        quest.battle.appliedAttacks ??= legacy ? legacy.map((threshold) => Math.round(threshold * 10)) : [];
+        const battle = quest.battle;
+        battle.attempt ??= 1;
+        battle.suspendedMs ??= 0;
         // Sin semilla no hay secuencia reproducible: se le da una estable.
-        quest.battle.combatSeed ||= `${quest.id}:${quest.battle.startedAt}`;
+        battle.combatSeed ||= `${quest.id}:${battle.startedAt}`;
+        battle.encounterSeed ||= `${quest.id}:encounter`;
+        battle.settledPressureMs ??= 0;
+        battle.appliedCriticalWindows ??= [];
+        battle.attempts ??= [
+          { attempt: battle.attempt, startedAt: battle.startedAt, durationMinutes: battle.durationMinutes, deadlineAt: battle.deadlineAt },
+        ];
+        // Una Battle anterior al grupo y a la formación 4v4 los estrena ahora.
+        battle.party ??= freshParty();
+        battle.agent ??= emptyAgentSlot();
+        if (!battle.enemies || battle.enemies.length === 0) battle.enemies = buildEncounter(battle.encounterSeed);
+        if ((battle.status as string) === "lost") battle.status = "awaiting_replan";
       }
       for (const step of quest.steps) {
         step.impactAwarded ??= step.status === "completed" ? step.weight : 0;

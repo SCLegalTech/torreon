@@ -81,7 +81,7 @@ describe("QuestService", () => {
     // Dos ataques por evidencia validada, más el battle_started que abre el reloj.
     expect(snapshot.realm.gameEvents.filter((event) => event.type === "quest_attack")).toHaveLength(2);
     expect(snapshot.realm.gameEvents.filter((event) => event.type === "battle_started")).toHaveLength(1);
-    const gameEvent = snapshot.realm.gameEvents[0];
+    const gameEvent = snapshot.realm.gameEvents.find((event) => event.type === "quest_attack")!;
     expect(snapshot.realm.lifeEvents.some((event) => event.id === gameEvent.sourceLifeEventId)).toBe(true);
   });
 
@@ -354,14 +354,16 @@ describe("QuestService", () => {
       reason: "La entidad exigió un certificado adicional no contemplado.",
       damage: 7,
     });
-    // ROKO PROTEGE: el golpe cae sobre él y su escudo lo absorbe entero.
-    expect(attack.battle.party.roko.shield).toBe(13);
-    expect(attack.battle.party.roko.health).toBe(100);
-    expect(attack.battle.playerHealth).toBe(100);
+    // El golpe cae sobre alguien concreto de la formación, no sobre una barra.
+    const hit = attack.battle.enemies.length > 0;
+    expect(hit).toBe(true);
     expect(attack.battle.enemyHealth).toBe(100);
+    const damaged = (["roko", "marques", "cordera"] as const).filter(
+      (id) => attack.battle.party[id].health < 100 || (attack.battle.party[id].shield ?? 0) < (attack.battle.party[id].maxShield ?? 0),
+    );
+    expect(damaged).toHaveLength(1);
     const snapshot = await service.snapshot();
     expect(snapshot.realm.lifeEvents[0].type).toBe("unexpected_requirement");
-    expect(snapshot.realm.gameEvents.some((event) => event.type === "shield_absorbed")).toBe(true);
-    expect(snapshot.battle?.party.marques.health).toBe(100);
+    expect(snapshot.realm.gameEvents.some((event) => event.type === "horde_attack")).toBe(true);
   });
 });

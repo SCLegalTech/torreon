@@ -1,50 +1,101 @@
 import { randomUUID } from "node:crypto";
-import type { BattleClock, BattleRecord, GameEvent, PartyMemberId, Quest, RealmState } from "./domain.js";
+import { emptyAgentSlot } from "./companions.js";
+import type {
+  AttemptEndReason,
+  BattleClock,
+  BattleRecord,
+  DamageAllocation,
+  GameEvent,
+  Quest,
+  RealmState,
+} from "./domain.js";
 import {
-  applyDamage,
-  HORDE_ATTACK_SLOTS,
-  nextTarget,
-  partyFor,
-  rollHordeAttack,
-  type HordeRoll,
-} from "./party.js";
+  archetypeOf,
+  buildEncounter,
+  enemyPressureRate,
+  enemyTarget,
+  seededUnit,
+  totalPressureRate,
+} from "./horde.js";
+import { applyDamage, freshParty } from "./party.js";
 import { MAX_BATTLE_MINUTES } from "./scale.js";
 
 /**
- * EL RELOJ ES PARTE DEL ENEMIGO.
+ * EL RELOJ ES PARTE DEL ENEMIGO — Y LA HORDA NO DESCANSA.
  *
- * Una Battle es la representación temporizada de una Quest. El reloj arranca
- * SÓLO al iniciar —no al redactar el borrador ni al aceptar el contrato— y
- * desde entonces la autoridad del tiempo es el servidor: cerrar la app,
- * bloquear el teléfono o cambiar de pantalla no congela nada. Al volver, el
- * Core calcula cuánto tiempo pasó de verdad y cobra lo que faltaba.
+ * La presión ya no son cuatro golpes espaciados: la Horda muerde de forma
+ * continua, y el Core la liquida por ventanas para no escribir un evento por
+ * segundo. Cerrar la app no la detiene; al volver, el Core cobra lo que faltaba
+ * exactamente una vez.
  */
 
-export { MAX_BATTLE_MINUTES, HORDE_ATTACK_SLOTS };
+export { MAX_BATTLE_MINUTES, totalPressureRate };
+
+/** Cada cuánto tiempo activo se convierte la presión acumulada en daño. */
+export const PRESSURE_WINDOW_MS = 60_000;
+/** Multiplicador del golpe crítico. No acorta el reloj: acorta el margen. */
+export const CRITICAL_MULTIPLIER = 1.5;
+
+export type BattleResolution = "won" | "awaiting_replan" | "awaiting_recovery";
 
 export function clampBattleMinutes(minutes: number): number {
   if (!Number.isFinite(minutes)) return MAX_BATTLE_MINUTES;
   return Math.min(MAX_BATTLE_MINUTES, Math.max(1, Math.round(minutes)));
 }
 
-export function createBattleRecord(startedAtMs: number, durationMinutes: number, attempt = 1, combatSeed = randomUUID()): BattleRecord {
+export function createBattleRecord(startedAtMs: number, durationMinutes: number): BattleRecord {
   const duration = clampBattleMinutes(durationMinutes);
+  const startedAt = new Date(startedAtMs).toISOString();
+  const deadlineAt = new Date(startedAtMs + duration * 60_000).toISOString();
+  const encounterSeed = randomUUID();
   return {
-    attempt,
-    startedAt: new Date(startedAtMs).toISOString(),
+    attempt: 1,
+    attempts: [{ attempt: 1, startedAt, durationMinutes: duration, deadlineAt }],
+    startedAt,
     durationMinutes: duration,
-    deadlineAt: new Date(startedAtMs + duration * 60_000).toISOString(),
+    deadlineAt,
     status: "active",
-    combatSeed,
-    appliedAttacks: [],
+    combatSeed: randomUUID(),
+    encounterSeed,
     suspendedMs: 0,
+    settledPressureMs: 0,
+    appliedCriticalWindows: [],
+    party: freshParty(),
+    enemies: buildEncounter(encounterSeed),
+    agent: emptyAgentSlot(),
   };
 }
 
 /**
- * Tiempo transcurrido real, descontando lo que estuvo legítimamente suspendido.
- * La suspensión no la pide un botón: la produce un bloqueo externo reconocido.
+ * Abre un intento nuevo sobre el MISMO campo de batalla.
+ *
+ * Preserva grupo, caídos, escudo, enemigos y semilla del encuentro. Lo único
+ * que se repacta es el tiempo: replanificar no resucita a nadie ni regala
+ * enemigos más fáciles.
  */
+export function openAttempt(record: BattleRecord, startedAtMs: number, durationMinutes: number, previousReason: AttemptEndReason): void {
+  const duration = clampBattleMinutes(durationMinutes);
+  const startedAt = new Date(startedAtMs).toISOString();
+  const current = record.attempts.find((attempt) => attempt.attempt === record.attempt);
+  if (current && !current.endedAt) {
+    current.endedAt = startedAt;
+    current.endReason = previousReason;
+  }
+  record.attempt += 1;
+  record.startedAt = startedAt;
+  record.durationMinutes = duration;
+  record.deadlineAt = new Date(startedAtMs + duration * 60_000).toISOString();
+  record.status = "active";
+  record.suspendedMs = 0;
+  delete record.suspendedAt;
+  delete record.endedAt;
+  delete record.pendingRecontract;
+  // El cursor de presión se reinicia con el reloj; las heridas no.
+  record.settledPressureMs = 0;
+  record.appliedCriticalWindows = [];
+  record.attempts.push({ attempt: record.attempt, startedAt, durationMinutes: duration, deadlineAt: record.deadlineAt });
+}
+
 export function battleClock(record: BattleRecord, nowMs: number): BattleClock {
   const totalMs = record.durationMinutes * 60_000;
   const startedMs = Date.parse(record.startedAt);
@@ -53,7 +104,6 @@ export function battleClock(record: BattleRecord, nowMs: number): BattleClock {
   const remainingMs = Math.max(0, totalMs - elapsedMs);
   return {
     startedAt: record.startedAt,
-    // Con la presión suspendida, la fecha límite se proyecta desde ahora.
     deadlineAt: openSuspension > 0 ? new Date(nowMs + remainingMs).toISOString() : record.deadlineAt,
     durationMinutes: record.durationMinutes,
     serverNow: new Date(nowMs).toISOString(),
@@ -65,39 +115,18 @@ export function battleClock(record: BattleRecord, nowMs: number): BattleClock {
   };
 }
 
-/**
- * Ventanas de ataque ya vencidas que todavía no se cobraron.
- *
- * Diez por Battle, una cada `duración / 10`. El crítico sale de la semilla, no
- * de un dado nuevo: consultar dos veces devuelve exactamente lo mismo.
- */
-export function pendingTimeAttacks(record: BattleRecord, nowMs: number): HordeRoll[] {
-  if (record.status !== "active") return [];
-  const { elapsedRatio } = battleClock(record, nowMs);
-  const rolls: HordeRoll[] = [];
-  for (let index = 1; index <= HORDE_ATTACK_SLOTS; index += 1) {
-    if (elapsedRatio < index / HORDE_ATTACK_SLOTS) break;
-    if (record.appliedAttacks.includes(index)) continue;
-    rolls.push(rollHordeAttack(record.combatSeed, record.attempt, index));
-  }
-  return rolls;
+export function hordeIsDown(record: BattleRecord): boolean {
+  return record.enemies.every((enemy) => enemy.status === "ko");
 }
 
-function enemyHealthOf(quest: Quest): number {
-  return Math.max(0, 100 - quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0));
-}
-
-/** La derrota del grupo es la caída del Marqués, no la del frente entero. */
-function playerHealthOf(quest: Quest, gameEvents: GameEvent[]): number {
-  return partyFor(quest, gameEvents).marques.health;
+function pushGameEvent(state: RealmState, event: Omit<GameEvent, "id">): void {
+  state.gameEvents.unshift({ id: randomUUID(), ...event });
+  state.gameEvents = state.gameEvents.slice(0, 200);
 }
 
 /**
- * Sincroniza la suspensión con la realidad de la quest.
- *
- * No hay botón `PAUSAR`. La presión sólo se suspende cuando la propia quest
- * está en `waiting_external`, es decir cuando el sistema reconoce que no hay
- * acción disponible para el Marqués.
+ * Sincroniza la suspensión con la realidad de la quest. No hay botón
+ * `PAUSAR`: la presión sólo se detiene por un bloqueo externo reconocido.
  */
 function syncSuspension(quest: Quest, record: BattleRecord, nowMs: number): boolean {
   const shouldSuspend = quest.status === "waiting_external";
@@ -117,115 +146,137 @@ function syncSuspension(quest: Quest, record: BattleRecord, nowMs: number): bool
 
 export interface BattleTickOutcome {
   changed: boolean;
-  attacks: Array<{ questId: string; attackIndex: number; damage: number; target: PartyMemberId; critical: boolean }>;
-  resolved: Array<{ questId: string; status: "won" | "lost" }>;
+  windows: number;
+  damage: number;
+  resolved: Array<{ questId: string; status: BattleResolution }>;
 }
 
 /**
- * Aplica todo lo que el reloj debía haber hecho mientras nadie miraba.
+ * Liquida la presión acumulada.
  *
- * Es idempotente por construcción: la combinación `questId + threshold` vive en
- * `appliedThresholds`, así que refrescar, reabrir la app o consultar por MCP no
- * puede repetir un ataque.
+ * Cada enemigo vivo aporta su ritmo por minuto; el total se cobra por ventanas
+ * de un minuto de reloj activo, con UN evento por ventana que lleva el
+ * desglose. Un enemigo caído deja de aportar en cuanto cae, así que atacar
+ * cambia de verdad la Battle.
  */
-export function advanceBattles(state: RealmState, nowMs: number): BattleTickOutcome {
-  const outcome: BattleTickOutcome = { changed: false, attacks: [], resolved: [] };
+function settlePressure(state: RealmState, quest: Quest, record: BattleRecord, nowMs: number): { windows: number; damage: number } {
+  const clock = battleClock(record, nowMs);
+  const settledWindows = Math.floor(record.settledPressureMs / PRESSURE_WINDOW_MS);
+  const elapsedWindows = Math.floor(clock.elapsedMs / PRESSURE_WINDOW_MS);
+  if (elapsedWindows <= settledWindows) return { windows: 0, damage: 0 };
 
-  for (const quest of state.quests) {
-    const record = quest.battle;
-    if (!record || record.status !== "active") continue;
-    // Una quest cerrada no tiene frente abierto: el reloj deja de morder.
-    if (["completed", "abandoned"].includes(quest.status)) continue;
+  let totalDamage = 0;
+  let windows = 0;
+  const timestamp = new Date(nowMs).toISOString();
 
-    if (syncSuspension(quest, record, nowMs)) outcome.changed = true;
+  for (let window = settledWindows + 1; window <= elapsedWindows; window += 1) {
+    if (hordeIsDown(record) || record.party.marques.health === 0) break;
+    const allocations: DamageAllocation[] = [];
 
-    // Si la Horda ya cayó, el reloj deja de ser enemigo: no hay más ataques.
-    if (enemyHealthOf(quest) === 0) {
-      resolve(state, quest, record, "won", nowMs);
-      outcome.changed = true;
-      outcome.resolved.push({ questId: quest.id, status: "won" });
-      continue;
-    }
+    for (const enemy of record.enemies) {
+      if (enemy.status !== "active") continue;
+      if (record.party.marques.health === 0) break;
+      const archetype = archetypeOf(enemy);
+      const aura = record.enemies
+        .filter((candidate) => candidate.status === "active" && candidate.id !== enemy.id)
+        .reduce((sum, candidate) => sum + (archetypeOf(candidate)?.auraPressureBonus ?? 0), 0);
+      const critical = seededUnit(record.combatSeed, "crit", window, enemy.id) < enemy.criticalChance;
+      const base = enemyPressureRate(enemy) * (1 + aura);
+      const damage = Math.max(1, Math.round(base * (critical ? CRITICAL_MULTIPLIER : 1)));
+      const target = enemyTarget(enemy, record.party, record.combatSeed, window);
+      const { absorbed, ko } = applyDamage(record.party, target, damage, archetype?.shieldBreak ?? 1);
 
-    for (const attack of pendingTimeAttacks(record, nowMs)) {
-      record.appliedAttacks.push(attack.attackIndex);
-      const timestamp = new Date(nowMs).toISOString();
-      // El objetivo se decide sobre el grupo tal como está EN ESTE golpe.
-      const party = partyFor(quest, state.gameEvents);
-      const target = nextTarget(party);
-      const before = { ...party[target] };
-      const { absorbed } = applyDamage(party, target, attack.damage);
-      const lifeEventId = randomUUID();
-      state.lifeEvents.unshift({
-        id: lifeEventId,
-        type: "unexpected_requirement",
-        questId: quest.id,
-        reason: `El tiempo pactado avanzó a la ventana ${attack.attackIndex} de ${HORDE_ATTACK_SLOTS} sin cerrar la campaña.`,
-        createdAt: timestamp,
-      });
-      state.gameEvents.unshift({
-        id: randomUUID(),
-        type: "horde_attack",
-        sourceLifeEventId: lifeEventId,
-        questId: quest.id,
-        damage: attack.damage,
-        reason: "time_pressure",
-        attackIndex: attack.attackIndex,
-        target,
-        critical: attack.critical,
-        battleAttempt: record.attempt,
-        message: `La Horda golpea a ${party[target].name}${attack.critical ? " con un CRÍTICO" : ""}: -${attack.damage}.`,
-        createdAt: timestamp,
-      });
-      // Narrativa para el renderer: el escudo no es una fuente de verdad aparte.
-      if (absorbed > 0) {
-        state.gameEvents.unshift({
-          id: randomUUID(),
-          type: "shield_absorbed",
-          questId: quest.id,
-          damage: absorbed,
-          target,
-          attackIndex: attack.attackIndex,
-          battleAttempt: record.attempt,
-          message: `El escudo de ${party[target].name} absorbe ${absorbed}.`,
-          createdAt: timestamp,
-        });
+      // La Sanguijuela convierte parte del daño que causa en vida propia.
+      if (archetype?.lifeDrain) {
+        enemy.health = Math.min(enemy.maxHealth, enemy.health + Math.round(damage * archetype.lifeDrain));
       }
-      if (before.health > 0 && party[target].health === 0) {
-        state.gameEvents.unshift({
-          id: randomUUID(),
+
+      allocations.push({
+        sourceEnemyId: enemy.id,
+        sourceName: enemy.name,
+        target,
+        damage,
+        absorbed,
+        critical,
+        abilityId: archetype?.abilityId,
+      });
+      totalDamage += damage;
+
+      if (ko) {
+        pushGameEvent(state, {
           type: "party_member_ko",
           questId: quest.id,
           damage: 0,
           target,
           battleAttempt: record.attempt,
-          message: `${party[target].name} cae en el frente.`,
+          message: `${record.party[target].name} cae en el frente.`,
           createdAt: timestamp,
         });
       }
-      state.lifeEvents = state.lifeEvents.slice(0, 200);
-      state.gameEvents = state.gameEvents.slice(0, 200);
-      state.events.unshift({
-        id: randomUUID(),
-        type: "horde_attack",
-        entityType: "quest",
-        entityId: quest.id,
+    }
+
+    if (allocations.length > 0) {
+      const critical = allocations.find((entry) => entry.critical);
+      const windowDamage = allocations.reduce((sum, entry) => sum + entry.damage, 0);
+      if (critical) record.appliedCriticalWindows.push(window);
+      pushGameEvent(state, {
+        type: "horde_pressure",
         questId: quest.id,
-        message: `Ventana ${attack.attackIndex}/${HORDE_ATTACK_SLOTS}: la Horda golpea a ${party[target].name} por ${attack.damage}${attack.critical ? " (CRÍTICO)" : ""}.`,
+        damage: windowDamage,
+        reason: "time_pressure",
+        attackIndex: window,
+        battleAttempt: record.attempt,
+        allocations,
+        critical: Boolean(critical),
+        message: critical
+          ? `Minuto ${window}: ${critical.sourceName} conecta un CRÍTICO sobre ${record.party[critical.target].name} (-${critical.damage}).`
+          : `Minuto ${window}: la Horda presiona por ${windowDamage}.`,
         createdAt: timestamp,
       });
-      state.events = state.events.slice(0, 100);
-      outcome.changed = true;
-      outcome.attacks.push({ questId: quest.id, attackIndex: attack.attackIndex, damage: attack.damage, target, critical: attack.critical });
+      windows += 1;
+    }
+    record.settledPressureMs = window * PRESSURE_WINDOW_MS;
+  }
+
+  return { windows, damage: totalDamage };
+}
+
+/**
+ * Aplica todo lo que el reloj debía haber hecho mientras nadie miraba.
+ *
+ * Idempotente por construcción: la ventana ya liquidada vive en
+ * `settledPressureMs`, así que refrescar, reabrir la app o consultar por MCP
+ * no puede cobrar dos veces el mismo minuto.
+ */
+export function advanceBattles(state: RealmState, nowMs: number): BattleTickOutcome {
+  const outcome: BattleTickOutcome = { changed: false, windows: 0, damage: 0, resolved: [] };
+
+  for (const quest of state.quests) {
+    const record = quest.battle;
+    if (!record || record.status !== "active") continue;
+    if (["completed", "abandoned"].includes(quest.status)) continue;
+
+    if (syncSuspension(quest, record, nowMs)) outcome.changed = true;
+
+    // Con la Horda neutralizada el reloj deja de morder, pero el contrato sigue.
+    if (!hordeIsDown(record)) {
+      const settled = settlePressure(state, quest, record, nowMs);
+      if (settled.windows > 0) {
+        outcome.changed = true;
+        outcome.windows += settled.windows;
+        outcome.damage += settled.damage;
+      }
     }
 
     const clock = battleClock(record, nowMs);
-    // Sólo la caída del Marqués pierde la Battle: Roko y Cordera KO siguen en pie.
-    const playerDown = playerHealthOf(quest, state.gameEvents) === 0;
-    if (playerDown || (clock.expired && enemyHealthOf(quest) > 0)) {
-      resolve(state, quest, record, "lost", nowMs);
+    if (record.party.marques.health === 0) {
+      resolve(state, quest, record, "awaiting_recovery", nowMs);
       outcome.changed = true;
-      outcome.resolved.push({ questId: quest.id, status: "lost" });
+      outcome.resolved.push({ questId: quest.id, status: "awaiting_recovery" });
+    } else if (clock.expired) {
+      resolve(state, quest, record, "awaiting_replan", nowMs);
+      outcome.changed = true;
+      outcome.resolved.push({ questId: quest.id, status: "awaiting_replan" });
     }
   }
 
@@ -233,12 +284,13 @@ export function advanceBattles(state: RealmState, nowMs: number): BattleTickOutc
 }
 
 /**
- * Cierra la Battle.
+ * Cierra el intento en curso.
  *
- * Perder NO borra evidencia, impacto validado, XP, Aura, dinero, historial ni
- * Realm. Sólo significa que ESTA Battle fue perdida.
+ * Ni el plazo vencido ni la caída del Marqués borran evidencia, impacto
+ * validado, XP, Aura, dinero, historial, inventario ni Realm. El frente sigue
+ * abierto: lo que terminó fue este intento.
  */
-export function resolve(state: RealmState, quest: Quest, record: BattleRecord, status: "won" | "lost", nowMs: number): void {
+export function resolve(state: RealmState, quest: Quest, record: BattleRecord, status: BattleResolution, nowMs: number): void {
   if (record.status !== "active") return;
   const timestamp = new Date(nowMs).toISOString();
   record.status = status;
@@ -247,9 +299,14 @@ export function resolve(state: RealmState, quest: Quest, record: BattleRecord, s
     record.suspendedMs += Math.max(0, nowMs - Date.parse(record.suspendedAt));
     delete record.suspendedAt;
   }
+  const attempt = record.attempts.find((candidate) => candidate.attempt === record.attempt);
+  if (attempt && !attempt.endedAt) {
+    attempt.endedAt = timestamp;
+    attempt.endReason = status === "won" ? "won" : status === "awaiting_recovery" ? "player_ko" : "timeout";
+  }
+
   const clock = battleClock(record, nowMs);
-  state.gameEvents.unshift({
-    id: randomUUID(),
+  pushGameEvent(state, {
     type: status === "won" ? "battle_won" : "battle_lost",
     questId: quest.id,
     damage: 0,
@@ -257,10 +314,11 @@ export function resolve(state: RealmState, quest: Quest, record: BattleRecord, s
     message:
       status === "won"
         ? `Victoria en «${quest.title}» con ${Math.floor(clock.remainingMs / 1000)}s de margen.`
-        : `El tiempo pactado terminó con la Horda viva en «${quest.title}».`,
+        : status === "awaiting_recovery"
+          ? `El Marqués cayó en «${quest.title}». Hay que levantarlo antes de volver.`
+          : `El tiempo pactado terminó con la Horda viva en «${quest.title}».`,
     createdAt: timestamp,
   });
-  state.gameEvents = state.gameEvents.slice(0, 200);
   state.events.unshift({
     id: randomUUID(),
     type: status === "won" ? "battle_won" : "battle_lost",
@@ -270,7 +328,9 @@ export function resolve(state: RealmState, quest: Quest, record: BattleRecord, s
     message:
       status === "won"
         ? `«${quest.title}» cayó antes del plazo pactado.`
-        : `Derrota temporal: «${quest.title}» agotó sus ${record.durationMinutes} min. La evidencia validada se conserva.`,
+        : status === "awaiting_recovery"
+          ? `El Marqués cayó en «${quest.title}». El frente sigue abierto y la evidencia validada se conserva.`
+          : `El plazo de «${quest.title}» se agotó. El frente sigue abierto: nada de lo validado se pierde.`,
     createdAt: timestamp,
   });
   state.events = state.events.slice(0, 100);
@@ -283,9 +343,10 @@ export function needsAdvance(state: RealmState, nowMs: number): boolean {
     if (!record || record.status !== "active") return false;
     if (["completed", "abandoned"].includes(quest.status)) return false;
     if (Boolean(record.suspendedAt) !== (quest.status === "waiting_external")) return true;
-    if (enemyHealthOf(quest) === 0) return true;
-    if (pendingTimeAttacks(record, nowMs).length > 0) return true;
-    if (playerHealthOf(quest, state.gameEvents) === 0) return true;
-    return battleClock(record, nowMs).expired;
+    if (record.party.marques.health === 0) return true;
+    const clock = battleClock(record, nowMs);
+    if (clock.expired) return true;
+    if (hordeIsDown(record)) return false;
+    return Math.floor(clock.elapsedMs / PRESSURE_WINDOW_MS) > Math.floor(record.settledPressureMs / PRESSURE_WINDOW_MS);
   });
 }

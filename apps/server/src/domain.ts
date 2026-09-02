@@ -5,7 +5,25 @@ export type EvidenceSource = "user_declaration" | "file" | "mcp" | "integration"
 export type EvidenceVerdict = "rejected" | "partial" | "accepted";
 export type EvidenceKind = "file" | "link" | "screenshot" | "photo" | "number" | "text" | "declaration";
 export type ArtifactKind = "file" | "link" | "text";
-export type BattleStatus = "active" | "won" | "lost";
+/**
+ * Estado del frente.
+ *
+ *   active             — hay reloj corriendo.
+ *   awaiting_replan    — venció el plazo con la Horda viva. No es el fin.
+ *   awaiting_recovery  — el Marqués cayó. Hay que levantarlo antes de volver.
+ *   won                — el contrato quedó validado al 100%.
+ */
+export type BattleStatus = "active" | "awaiting_replan" | "awaiting_recovery" | "won";
+export type AttemptEndReason = "won" | "timeout" | "recontracted" | "player_ko" | "abandoned";
+/** El cuarto slot no es un personaje fijo: lo ocupa quien de verdad peleó. */
+export type CompanionId = "opus" | "codex" | "claude" | "gemini";
+export type EnemyPosition = "front" | "back";
+export type EnemyRole = "tank" | "ranged" | "assassin" | "breaker" | "support" | "drain" | "mage" | "disruptor" | "berserker" | "captain";
+/**
+ * A quién ataca cada arquetipo. Roko protege, pero no intercepta una flecha
+ * disparada por encima de él ni un salto de asesino.
+ */
+export type TargetPolicy = "frontline" | "backline" | "lowest_health" | "shield_first" | "weighted";
 export type PartyMemberId = "roko" | "marques" | "cordera";
 /** Un Acto es planificación operativa del Códice: no exige ceremonia propia. */
 export type ActStatus = "locked" | "available" | "active" | "completed" | "abandoned";
@@ -76,6 +94,25 @@ export interface RewardProfile {
   masteryDomain?: string;
 }
 
+/**
+ * INVENTARIO.
+ *
+ * Los objetos se gastan. El Core valida existencia, cantidad y destino antes
+ * de aplicar nada: el renderer nunca decrementa por su cuenta.
+ */
+export type InventoryItemId = "revive_tonic" | "health_potion";
+
+export interface InventoryEntry {
+  itemId: InventoryItemId;
+  quantity: number;
+}
+
+export interface InventoryState {
+  items: InventoryEntry[];
+  /** Marca el reparto inicial. Recargar o redesplegar no vuelve a concederlo. */
+  initializedAt?: string;
+}
+
 export interface CharacterState {
   xp: number;
   /** Calidad de vida, identidad y bienestar: no es puntuación de actividad. */
@@ -138,23 +175,53 @@ export interface Quest extends Omit<QuestPlanInput, "steps"> {
  * teléfono o cambiar de pantalla no congela la Battle. Al volver, el servidor
  * calcula cuánto tiempo pasó de verdad.
  */
-export interface BattleRecord {
-  /** Cada reintento es una Battle nueva sobre la misma Quest. */
+export interface BattleAttemptRecord {
   attempt: number;
+  startedAt: string;
+  durationMinutes: number;
+  deadlineAt: string;
+  endedAt?: string;
+  endReason?: AttemptEndReason;
+}
+
+export interface BattleRecord {
+  /** Intento en curso. Cada replan abre uno nuevo sobre el MISMO campo. */
+  attempt: number;
+  attempts: BattleAttemptRecord[];
   startedAt: string;
   durationMinutes: number;
   deadlineAt: string;
   status: BattleStatus;
   /**
    * Semilla del combate. El crítico NO lo tira el renderer: se deriva de
-   * `combatSeed + intento + índice`, así que reabrir la app no vuelve a tirar.
+   * `combatSeed + ventana`, así que reabrir la app no vuelve a tirar.
    */
   combatSeed: string;
-  /** Ventanas de ataque ya cobradas (1..10). Recargar no repite el daño. */
-  appliedAttacks: number[];
+  /** Semilla del encuentro. Replanificar NO da enemigos más fáciles. */
+  encounterSeed: string;
   /** Presión suspendida por un bloqueo externo real, en milisegundos. */
   suspendedMs: number;
   suspendedAt?: string;
+  /**
+   * Milisegundos de reloj activo ya convertidos en daño, acumulados entre
+   * intentos. El Core no escribe un evento por segundo: liquida por ventanas.
+   */
+  settledPressureMs: number;
+  /** Ventanas de crítico ya cobradas. Recargar no las repite. */
+  appliedCriticalWindows: number[];
+  /**
+   * REPLANIFICAR NO BORRA LAS CICATRICES.
+   *
+   * El grupo y la Horda se guardan aquí, no se derivan del historial: el log
+   * de eventos está acotado y una batalla larga lo desbordaría, así que
+   * derivarlo haría que las heridas se curasen solas al llenarse el log.
+   */
+  party: PartyState;
+  enemies: EnemyCombatant[];
+  agent: AgentSlot;
+  hordeNeutralizedAt?: string;
+  /** Nuevo pacto temporal propuesto por Códice y aún sin aceptar. */
+  pendingRecontract?: { id: string; reason: string; newDurationMinutes: number; proposedAt: string };
   endedAt?: string;
 }
 
@@ -209,6 +276,28 @@ export interface RealmEvent {
   questId?: string;
   message: string;
   createdAt: string;
+}
+
+/**
+ * Una ayuda REAL de un compañero.
+ *
+ * Nace `used_pending_validation` y no concede nada. Sólo cuando la evidencia
+ * del paso queda aceptada se convierte en ataque combinado: Opus no golpea
+ * porque su nombre exista.
+ */
+export interface CompanionAssist {
+  id: string;
+  questId: string;
+  stepId: string;
+  companion: CompanionId;
+  source: "mcp" | "internal" | "integration";
+  sourceTool?: string;
+  executionRef?: string;
+  contributionSummary: string;
+  status: "used_pending_validation" | "contribution_validated" | "expired";
+  bonusDamage?: number;
+  createdAt: string;
+  validatedAt?: string;
 }
 
 export interface EvidenceRecord {
@@ -276,11 +365,24 @@ export interface GameEvent {
   type:
     | "quest_attack"
     | "horde_attack"
+    | "horde_pressure"
+    | "enemy_special"
+    | "enemy_ko"
+    | "horde_neutralized"
+    | "encounter_generated"
     | "party_heal"
     | "shield_gained"
     | "shield_absorbed"
     | "party_member_ko"
+    | "party_member_revived"
+    | "party_member_healed"
+    | "inventory_item_used"
+    | "inventory_item_granted"
+    | "companion_used"
+    | "companion_combo_attack"
+    | "agent_deployed"
     | "battle_started"
+    | "battle_recontracted"
     | "battle_won"
     | "battle_lost";
   /** Los eventos de ciclo de vida de la Battle no nacen de un LifeEvent. */
@@ -298,6 +400,15 @@ export interface GameEvent {
   target?: PartyMemberId;
   /** El crítico no acorta el reloj: acorta el margen de supervivencia. */
   critical?: boolean;
+  /** Quién dio el golpe, cuando la Horda tiene rostro. */
+  sourceEnemyId?: string;
+  abilityId?: string;
+  /** Desglose de un golpe sostenido: cada línea es atribuible. */
+  allocations?: DamageAllocation[];
+  /** Reparto del ataque del Marqués entre los enemigos vivos. */
+  enemyAllocations?: EnemyAllocation[];
+  companion?: CompanionId;
+  itemId?: InventoryItemId;
   /** Intento de Battle al que pertenece: un reintento no arrastra daño viejo. */
   battleAttempt?: number;
   message: string;
@@ -378,6 +489,9 @@ export interface RealmState {
     title: string;
   };
   character: CharacterState;
+  inventory: InventoryState;
+  /** Ayudas reales de compañeros. Estar disponible no cuenta. */
+  companionAssists: CompanionAssist[];
   financial: FinancialState;
   /**
    * MANY CAMPAIGNS. ONE ENGAGED BATTLE.
@@ -427,6 +541,61 @@ export interface PartyState {
 }
 
 /**
+ * EL AGENTE.
+ *
+ * El cuarto slot empieza vacío y sólo se llena cuando un compañero real
+ * ejecutó algo. Estar disponible no es haber peleado.
+ */
+export interface AgentSlot {
+  deployed: boolean;
+  companion?: CompanionId;
+  name?: string;
+  role?: string;
+  status: "undeployed" | "assist_ready" | "assist_validated";
+  /** Otros compañeros que también ayudaron, sin ocupar la tarjeta. */
+  secondaryAssists: CompanionId[];
+  /** Daño de combo ya concedido en esta Battle. */
+  comboDamage: number;
+}
+
+/** Un miembro de la Horda. La Horda dejó de ser una barra. */
+export interface EnemyCombatant {
+  id: string;
+  archetypeId: string;
+  name: string;
+  role: EnemyRole;
+  position: EnemyPosition;
+  health: number;
+  maxHealth: number;
+  status: "active" | "ko";
+  /** Daño por minuto que aporta mientras siga en pie. */
+  pressureRate: number;
+  criticalChance: number;
+  targetPolicy: TargetPolicy;
+  abilityId?: string;
+  abilityName?: string;
+}
+
+/** Un golpe concreto, atribuible a quién lo dio y a quién lo recibió. */
+export interface DamageAllocation {
+  sourceEnemyId?: string;
+  sourceName?: string;
+  target: PartyMemberId;
+  damage: number;
+  absorbed: number;
+  critical?: boolean;
+  abilityId?: string;
+}
+
+/** El reparto del ataque del Marqués entre los enemigos vivos. */
+export interface EnemyAllocation {
+  enemyId: string;
+  name: string;
+  damage: number;
+  killed: boolean;
+}
+
+/**
  * Reloj de la Battle derivado del servidor.
  *
  * PROHIBIDO que el renderer sea la única autoridad del tiempo: React interpola
@@ -462,11 +631,20 @@ export interface BattleState {
   isPlayerKo: boolean;
   /** Duración pactada de la Battle. Nunca mayor que 60 minutos. */
   durationMinutes: number;
-  /** `active` mientras corre; `won` con la Horda muerta; `lost` con el reloj vencido. */
   status: BattleStatus | "pending";
   attempt: number;
+  attempts: BattleAttemptRecord[];
   /** Roko, Marqués y Cordera. `playerHealth` es la vida del Marqués. */
   party: PartyState;
+  /** El cuarto slot: quien de verdad ayudó, o nadie. */
+  agent: AgentSlot;
+  /** Cuatro enemigos con rostro, no una barra. */
+  enemies: EnemyCombatant[];
+  /** Toda la Horda caída. No es victoria: el contrato manda. */
+  hordeNeutralized: boolean;
+  /** Daño por minuto que la Horda viva está aplicando ahora mismo. */
+  pressureRate: number;
+  pendingRecontract?: { id: string; reason: string; newDurationMinutes: number };
   /** Null hasta que el jugador inicia: el reloj no corre en el borrador. */
   clock: BattleClock | null;
 }
@@ -642,6 +820,8 @@ export interface RealmSnapshot {
   battle: BattleState | null;
   /** Hoja de personaje derivada: HP de combate, XP, Aura, maestría y Tesoro. */
   stats: CharacterStats;
+  /** Los objetos se gastan: aquí está lo que queda. */
+  inventory: InventoryState;
   /** Saga, Campaña, Acto y Quest derivados en la lectura, nunca guardados. */
   hierarchy: RealmHierarchy;
   /**

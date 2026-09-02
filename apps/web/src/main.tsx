@@ -2,7 +2,7 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 import { Sprite } from "./Sprite";
-import type { ActView, BattleClock, BattleStatus, CampaignView, CharacterStats, EntityType, PartyMemberId, PartyState, Quest, RealmSnapshot } from "./types";
+import type { ActView, AgentSlot, BattleClock, BattleStatus, CampaignView, CharacterStats, EnemyCombatant, EntityType, InventoryItemId, InventoryState, PartyMemberId, PartyState, Quest, RealmSnapshot } from "./types";
 import "./styles.css";
 
 type Screen = "loading" | "realm" | "thinking" | "campaign" | "act" | "quest" | "battle" | "stats";
@@ -468,7 +468,17 @@ function BattleTimer({ clock, status, receivedAt }: { clock: BattleClock; status
   return (
     <section className={`battle-timer glass-panel ${danger ? "danger" : ""} ${clock.suspended ? "suspended" : ""}`} aria-live="off">
       <div>
-        <span>{clock.suspended ? "PRESIÓN SUSPENDIDA" : status === "lost" ? (clock.expired ? "PLAZO VENCIDO" : "BATALLA PERDIDA") : status === "won" ? "MARGEN RESTANTE" : "TIEMPO RESTANTE"}</span>
+        <span>
+          {clock.suspended
+            ? "PRESIÓN SUSPENDIDA"
+            : status === "awaiting_replan"
+              ? "PLAZO VENCIDO"
+              : status === "awaiting_recovery"
+                ? "EL MARQUÉS CAYÓ"
+                : status === "won"
+                  ? "MARGEN RESTANTE"
+                  : "TIEMPO RESTANTE"}
+        </span>
         <strong>{formatClock(remaining)}</strong>
       </div>
       <div className="timer-track"><span style={{ width: `${spent}%` }} /></div>
@@ -486,16 +496,68 @@ export type PartyFlash = Partial<Record<PartyMemberId, "heal" | "shield" | "crit
 
 const PARTY_SLOTS: PartyMemberId[] = ["roko", "marques", "cordera"];
 
+const ITEM_NAMES: Record<InventoryItemId, string> = {
+  revive_tonic: "Tónico de Retorno",
+  health_potion: "Poción Carmesí",
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  tank: "Guardia",
+  ranged: "Arquero",
+  assassin: "Asesino",
+  breaker: "Rompedor",
+  support: "Apoyo",
+  drain: "Drenaje",
+  mage: "Agobio",
+  disruptor: "Sabotaje",
+  berserker: "Frenesí",
+  captain: "Capitán",
+};
+
 /**
- * EL GRUPO.
+ * LA FORMACIÓN ENEMIGA.
  *
- * ROKO PROTEGE. MARQUÉS ATACA. CORDERA SOSTIENE.
- *
- * Las cifras las deriva el Core de los GameEvents; React sólo las dibuja y
- * enciende un destello cuando algo acaba de pasar. Ninguna barra de aquí puede
- * moverse sin un evento detrás.
+ * Cuatro enemigos con rostro, no una barra. Cada tarjeta dice quién es, qué
+ * papel juega y cuánto aguanta, para que el jugador entienda por qué le están
+ * pegando por la retaguardia.
  */
-function PartyHud({ party, flash }: { party: PartyState; flash: PartyFlash }) {
+function EnemyRow({ enemies }: { enemies: EnemyCombatant[] }) {
+  if (enemies.length === 0) return null;
+  return (
+    <section className="enemy-row" aria-label="La Horda">
+      {enemies.map((enemy) => (
+        <article key={enemy.id} className={`enemy-card ${enemy.status} ${enemy.position}`} title={enemy.abilityName ?? enemy.name}>
+          <header>
+            <strong>{enemy.name}</strong>
+            <em>{enemy.status === "ko" ? "KO" : ROLE_LABELS[enemy.role] ?? enemy.role}</em>
+          </header>
+          <div className="enemy-bar"><span style={{ width: `${(enemy.health / enemy.maxHealth) * 100}%` }} /></div>
+          <b>{enemy.health}/{enemy.maxHealth}</b>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+/**
+ * EL GRUPO, EN CUATRO SLOTS.
+ *
+ * ROKO PROTEGE. MARQUÉS DISPARA. CORDERA SOSTIENE. EL AGENTE EJECUTA.
+ *
+ * El cuarto slot aparece vacío hasta que un compañero real ejecuta algo: no se
+ * dibuja a Opus por existir. Las cifras las deriva el Core; React sólo pinta.
+ */
+function PartyHud({
+  party,
+  agent,
+  flash,
+  onUseItem,
+}: {
+  party: PartyState;
+  agent: AgentSlot;
+  flash: PartyFlash;
+  onUseItem?: (target: PartyMemberId) => void;
+}) {
   return (
     <section className="party-hud" aria-label="El grupo del Marqués">
       {PARTY_SLOTS.map((id) => {
@@ -516,10 +578,88 @@ function PartyHud({ party, flash }: { party: PartyState; flash: PartyFlash }) {
                 <b className="shield-value">SH {member.shield ?? 0}/{member.maxShield}</b>
               </>
             ) : null}
+            {member.status === "ko" && onUseItem ? (
+              <button className="revive-button" type="button" onClick={() => onUseItem(id)}>REVIVIR</button>
+            ) : null}
           </article>
         );
       })}
+      <article className={`party-member agent ${agent.deployed ? agent.status : "undeployed"}`}>
+        <header>
+          <strong>{agent.deployed ? (agent.name ?? "AGENTE").toUpperCase() : "AGENTE"}</strong>
+          <em>{agent.status === "assist_validated" ? "COMBO" : agent.deployed ? "LISTO" : "—"}</em>
+        </header>
+        {agent.deployed ? (
+          <>
+            <small className="agent-role">{agent.role}</small>
+            <b>{agent.comboDamage > 0 ? `+${agent.comboDamage} COMBO` : "ASSIST READY"}</b>
+            {agent.secondaryAssists.length > 0 ? <small className="agent-extra">+{agent.secondaryAssists.join(", ")}</small> : null}
+          </>
+        ) : (
+          <>
+            <small className="agent-role">Sin desplegar</small>
+            <b>NINGÚN ALIADO HA PELEADO</b>
+          </>
+        )}
+      </article>
     </section>
+  );
+}
+
+/** El zurrón. Los objetos se gastan y el Core es quien los descuenta. */
+function InventoryDrawer({
+  inventory,
+  party,
+  busy,
+  onClose,
+  onUse,
+}: {
+  inventory: InventoryState;
+  party: PartyState;
+  busy: boolean;
+  onClose: () => void;
+  onUse: (itemId: InventoryItemId, target: PartyMemberId) => void;
+}) {
+  const [itemId, setItemId] = useState<InventoryItemId>("health_potion");
+  const available = inventory.items.filter((entry) => entry.quantity > 0);
+  const needsKo = itemId === "revive_tonic";
+  const targets = PARTY_SLOTS.filter((id) => (needsKo ? party[id].health === 0 : party[id].health > 0));
+  return (
+    <aside className="inventory-drawer" role="dialog" aria-label="Zurrón">
+      <header>
+        <strong>🎒 INVENTARIO</strong>
+        <button type="button" onClick={onClose} aria-label="Cerrar inventario">×</button>
+      </header>
+      {available.length === 0 ? (
+        <p className="inventory-empty">El zurrón está vacío.</p>
+      ) : (
+        <>
+          <ul className="inventory-list">
+            {available.map((entry) => (
+              <li key={entry.itemId}>
+                <button type="button" className={entry.itemId === itemId ? "current" : ""} onClick={() => setItemId(entry.itemId)}>
+                  {ITEM_NAMES[entry.itemId]} <b>×{entry.quantity}</b>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="inventory-hint">
+            {needsKo ? "Levanta a un caído con parte de su vida." : "Cierra heridas de quien sigue en pie. No resucita."}
+          </p>
+          <div className="inventory-targets">
+            {targets.length === 0 ? (
+              <small>Ningún miembro del grupo está en ese estado.</small>
+            ) : (
+              targets.map((id) => (
+                <button key={id} type="button" disabled={busy} onClick={() => onUse(itemId, id)}>
+                  {party[id].name}
+                </button>
+              ))
+            )}
+          </div>
+        </>
+      )}
+    </aside>
   );
 }
 
@@ -775,7 +915,7 @@ function ActBook({
             <dl>
               <div><dt>Progreso</dt><dd>{next.percent} / 100</dd></div>
               <div><dt>Duración pactada</dt><dd>{next.durationMinutes} min</dd></div>
-              <div><dt>Estado</dt><dd>{next.battleStatus === "lost" ? "Battle perdida" : next.status}</dd></div>
+              <div><dt>Estado</dt><dd>{next.battleStatus === "awaiting_replan" ? "Plazo vencido" : next.battleStatus === "awaiting_recovery" ? "El Marqués cayó" : next.status}</dd></div>
             </dl>
           </>
         ) : (
@@ -986,7 +1126,7 @@ function QuestOrder({
         {battle?.clock ? (
           <>
             <strong>{formatClock(Math.max(0, battle.clock.remainingMs - (battle.status === "active" && !battle.clock.suspended ? Date.now() - receivedAt : 0)))}</strong>
-            <p>Intento {battle.attempt} · {battle.status === "lost" ? "Battle perdida" : battle.status === "won" ? "Battle ganada" : battle.clock.suspended ? "Presión suspendida" : "Reloj corriendo"}</p>
+            <p>Intento {battle.attempt} · {battle.status === "awaiting_replan" ? "Plazo vencido" : battle.status === "awaiting_recovery" ? "El Marqués cayó" : battle.status === "won" ? "Battle ganada" : battle.clock.suspended ? "Presión suspendida" : "Reloj corriendo"}</p>
           </>
         ) : (
           <>
@@ -1029,6 +1169,8 @@ function Battle({
   incomingDamage,
   receivedAt,
   partyFlash,
+  onUseItem,
+  onAcceptRecontract,
   onBack,
   onOpenStats,
   onOpenOrder,
@@ -1045,6 +1187,8 @@ function Battle({
   /** Momento local de la última lectura: ancla la cuenta atrás sin inventar tiempo. */
   receivedAt: number;
   partyFlash: PartyFlash;
+  onUseItem: (itemId: InventoryItemId, target: PartyMemberId) => void;
+  onAcceptRecontract: () => void;
   onBack: () => void;
   onOpenStats: () => void;
   onOpenOrder: () => void;
@@ -1060,6 +1204,7 @@ function Battle({
   const [evidenceLink, setEvidenceLink] = useState("");
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [ordersOpen, setOrdersOpen] = useState(quest?.status !== "active");
+  const [bagOpen, setBagOpen] = useState(false);
   const proposedAmendmentId = quest?.amendments?.find((amendment) => amendment.status === "proposed")?.id;
   useEffect(() => {
     if (proposedAmendmentId) setOrdersOpen(true);
@@ -1120,13 +1265,53 @@ function Battle({
         el escenario dibuja un reloj y un «modo enfoque» que no existen, el
         renderer pone el estado real del frente.
       */}
-      {battle ? <PartyHud party={battle.party} flash={partyFlash} /> : null}
+      {battle ? <EnemyRow enemies={battle.enemies} /> : null}
+      {battle ? (
+        <PartyHud
+          party={battle.party}
+          agent={battle.agent}
+          flash={partyFlash}
+          onUseItem={(target) => {
+            setBagOpen(true);
+            void target;
+          }}
+        />
+      ) : null}
+      {battle ? (
+        <button className="bag-button" type="button" onClick={() => setBagOpen((open) => !open)}>
+          🎒 {snapshot.inventory?.items.reduce((sum, entry) => sum + entry.quantity, 0) ?? 0}
+        </button>
+      ) : null}
+      {bagOpen && battle ? (
+        <InventoryDrawer
+          inventory={snapshot.inventory ?? { items: [] }}
+          party={battle.party}
+          busy={busy}
+          onClose={() => setBagOpen(false)}
+          onUse={(itemId, target) => {
+            onUseItem(itemId, target);
+            setBagOpen(false);
+          }}
+        />
+      ) : null}
 
       {battle ? (
         <section className="battle-hud glass-panel" aria-label="Estado del frente">
           <div>
             <span>ESTADO</span>
-            <strong>{battle.status === "lost" ? "PERDIDA" : battle.status === "won" ? "GANADA" : battle.clock?.suspended ? "SUSPENDIDA" : battle.clock ? "EN CURSO" : "SIN INICIAR"}</strong>
+            <strong>
+              {battle.status === "awaiting_recovery"
+                ? "SIN MARQUÉS"
+                : battle.status === "awaiting_replan"
+                  ? "PLAZO VENCIDO"
+                  : battle.status === "won"
+                    ? "GANADA"
+                    : battle.clock?.suspended
+                      ? "SUSPENDIDA"
+                      : battle.clock
+                        ? "EN CURSO"
+                        : "SIN INICIAR"}
+            </strong>
           </div>
           <div><span>INTENTO</span><strong>{battle.attempt}</strong></div>
           <div className="hud-step"><span>PASO ACTUAL</span><strong>{currentStep?.title ?? "—"}</strong></div>
@@ -1154,31 +1339,61 @@ function Battle({
         impacto, XP, Aura, Tesoro e historial siguen en pie—; sólo esta Battle
         se perdió, y el jugador decide si vuelve al frente o al reino.
       */}
-      {battle?.status === "lost" ? (
-        <div className="battle-defeat" role="alertdialog" aria-label="Battle perdida">
+      {/*
+        EL FRENTE SIGUE ABIERTO.
+        El plazo venció o el Marqués cayó, pero nada se borró: progreso, Horda,
+        heridas, caídos e inventario siguen exactamente como quedaron. Lo único
+        que hay que repactar es el tiempo —y levantar a quien esté en el suelo.
+      */}
+      {battle && ["awaiting_replan", "awaiting_recovery"].includes(battle.status) ? (
+        <div className="battle-defeat" role="alertdialog" aria-label="El frente sigue abierto">
           <article>
-            <p className="eyebrow">DERROTA</p>
-            {/* El plazo vencido y el KO son derrotas distintas: se nombran distinto. */}
-            <h2>{battle.clock?.expired ? "El tiempo pactado terminó" : "El Marqués cayó en el frente"}</h2>
+            <p className="eyebrow">{battle.status === "awaiting_recovery" ? "EL MARQUÉS CAYÓ" : "EL FRENTE SIGUE ABIERTO"}</p>
+            <h2>{battle.status === "awaiting_recovery" ? "Hay que levantarlo antes de volver" : "El tiempo pactado terminó"}</h2>
             <p>
-              Progreso validado: <b>{battle.progress}/100</b>.{" "}
-              {battle.clock?.expired
-                ? "La evidencia entregada sigue contando; lo que se agotó fue el plazo."
-                : "La evidencia entregada sigue contando; lo que se agotó fue el HP del Marqués."}
+              Progreso: <b>{battle.progress}/100</b> · Horda: <b>{battle.enemyHealth}/100</b> · Intento <b>{battle.attempt}</b>
+            </p>
+            <ul className="defeat-party">
+              {(["roko", "marques", "cordera"] as const).map((id) => (
+                <li key={id} className={battle.party[id].status}>
+                  <span>{battle.party[id].name}</span>
+                  <b>{battle.party[id].health === 0 ? "KO" : `${battle.party[id].health} HP`}</b>
+                </li>
+              ))}
+            </ul>
+            <p className="defeat-bag">
+              {(snapshot.inventory?.items ?? []).filter((entry) => entry.quantity > 0).map((entry) => `${ITEM_NAMES[entry.itemId]} ×${entry.quantity}`).join(" · ") || "Zurrón vacío"}
             </p>
             <div className="defeat-actions">
-              <button className="gold-button" type="button" disabled={busy} onClick={onRetry}>REPLANIFICAR</button>
+              <button className="ghost-button" type="button" onClick={() => setBagOpen(true)}>USAR OBJETO</button>
+              <button className="gold-button" type="button" disabled={busy || battle.party.marques.health === 0} onClick={onRetry}>
+                REPLANIFICAR
+              </button>
               <button className="back-button" type="button" onClick={onBack}>VOLVER AL REINO</button>
             </div>
+            {battle.party.marques.health === 0 ? (
+              <small>El Marqués no vuelve al frente con un botón: usa un Tónico de Retorno.</small>
+            ) : null}
           </article>
         </div>
       ) : null}
 
-      {/*
-        LA BATALLA ES LA QUEST: aceptar, iniciar, entregar evidencia y ver la
-        victoria ocurren en este mismo panel. Aceptar un contrato transforma la
-        pantalla; nunca saca al jugador del campo para configurarlo aparte.
-      */}
+      {/* Un nuevo pacto temporal se acepta, no se impone. */}
+      {battle?.pendingRecontract ? (
+        <div className="battle-defeat" role="alertdialog" aria-label="Nuevo pacto temporal">
+          <article>
+            <p className="eyebrow">LA REALIDAD CAMBIÓ</p>
+            <h2>Nuevo tiempo: {battle.pendingRecontract.newDurationMinutes} min</h2>
+            <p>{battle.pendingRecontract.reason}</p>
+            <div className="defeat-actions">
+              <button className="gold-button" type="button" disabled={busy} onClick={onAcceptRecontract}>ACEPTAR PACTO</button>
+              <button className="back-button" type="button" onClick={onBack}>MÁS TARDE</button>
+            </div>
+            <small>No es una derrota: el frente se conserva tal como está.</small>
+          </article>
+        </div>
+      ) : null}
+
       <aside className={`quest-contract parchment ${quest.status}`}>
         <p className="eyebrow">
           {quest.status === "completed" ? "🏆 VICTORIA" : quest.status === "draft" ? "CONTRATO PROPUESTO" : `CONTRATO DE MISIÓN · ${quest.durationMinutes} MIN`}
@@ -1213,7 +1428,7 @@ function Battle({
         <div className="contract-actions">
           {quest.status === "draft" ? <button className="gold-button" disabled={busy} onClick={onAccept}>ACEPTAR CONTRATO</button> : null}
           {quest.status === "accepted" ? <button className="gold-button" disabled={busy} onClick={onStart}>INICIAR BATALLA</button> : null}
-          {quest.status === "active" && currentStep && battle?.status !== "lost" ? (
+          {quest.status === "active" && currentStep && battle?.status === "active" ? (
             <button className="gold-button" type="button" onClick={focusCurrentStep}>
               {currentStep.evidenceKind === "photo" ? "📷 TOMAR EVIDENCIA" : "⚔️ ENTREGAR EVIDENCIA"}
             </button>
@@ -1286,7 +1501,7 @@ function Battle({
                         ))}
                       </ul>
                     ) : null}
-                    {quest.status === "active" && battle?.status !== "lost" && !["completed", "blocked", "superseded"].includes(step.status) ? (
+                    {quest.status === "active" && battle?.status === "active" && !["completed", "blocked", "superseded"].includes(step.status) ? (
                       <form
                         onSubmit={(event) => {
                           event.preventDefault();
@@ -1652,6 +1867,10 @@ function App() {
           incomingDamage={incomingDamage}
           receivedAt={receivedAt}
           partyFlash={partyFlash}
+          onUseItem={(itemId, target) => void act(() => api("/api/inventory/use", { method: "POST", body: JSON.stringify({ itemId, target }) }))}
+          onAcceptRecontract={() =>
+            quest && void act(() => api(`/api/quests/${quest.id}/battle/recontract/accept`, { method: "POST", body: JSON.stringify({ userAccepted: true }) }))
+          }
           onBack={() => setScreen(currentCampaign ? "campaign" : "realm")}
           onOpenStats={() => setScreen("stats")}
           onOpenOrder={() => quest && openOrder(quest.id)}

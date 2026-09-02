@@ -1,11 +1,28 @@
 import { randomUUID } from "node:crypto";
 import { ingestArtifact, witnessArtifact, type ArtifactInput, type WitnessInput } from "./artifacts.js";
-import { advanceBattles, battleClock, clampBattleMinutes, createBattleRecord, needsAdvance, resolve as resolveBattle } from "./battle.js";
+import {
+  advanceBattles,
+  battleClock,
+  clampBattleMinutes,
+  createBattleRecord,
+  hordeIsDown,
+  needsAdvance,
+  openAttempt,
+  resolve as resolveBattle,
+  totalPressureRate,
+} from "./battle.js";
+import { COMPANIONS, comboDamageFor, deployAgent, emptyAgentSlot, pendingAssistsFor } from "./companions.js";
+import { distributeEnemyDamage, enemyTarget as enemyTargetFor } from "./horde.js";
+import { grantItem, STARTER_INVENTORY, useItem } from "./inventory.js";
 import { HeuristicCodice, questFromIntent, validatePlan, type CodicePlanner, type Judgement } from "./codice.js";
 import type {
   Act,
   BattleState,
   Campaign,
+  CompanionAssist,
+  CompanionId,
+  InventoryItemId,
+  PartyMemberId,
   EvidenceArtifact,
   EvidenceSource,
   EvidenceVerdict,
@@ -24,10 +41,11 @@ import type {
 } from "./domain.js";
 import {
   applyDamage,
+  freshParty,
   HEAL_PER_VALIDATED_IMPACT,
+  healMember,
   healTarget,
-  nextTarget,
-  partyFor,
+  refreshShield,
   SHIELD_PER_VALIDATED_IMPACT,
 } from "./party.js";
 import { consistencyFor, currentStepFor, hierarchyFor, progressFor, questDetailFor, statsFor } from "./read-models.js";
@@ -67,15 +85,15 @@ function addEvent(state: RealmState, event: RealmEventInput): void {
   state.events = state.events.slice(0, 100);
 }
 
-export function battleFor(quest: Quest | null, gameEvents: GameEvent[] = [], nowMs = Date.now()): BattleState | null {
+export function battleFor(quest: Quest | null, _gameEvents: GameEvent[] = [], nowMs = Date.now()): BattleState | null {
   if (!quest) return null;
   const damage = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
-  const attempt = quest.battle?.attempt ?? 1;
-  // El grupo se reconstruye con los eventos de ESTE intento: un reintento no
-  // arrastra el daño del anterior. La vida del Marqués es la del jugador.
-  const party = partyFor(quest, gameEvents);
+  const record = quest.battle;
+  // El grupo y la Horda viven en la Battle: sobreviven a los replanes.
+  const party = record?.party ?? freshParty();
+  const enemies = record?.enemies ?? [];
   const playerHealth = party.marques.health;
-  const enemyHealth = Math.max(0, 100 - damage);
+  const enemyHealth = enemies.length > 0 ? enemies.reduce((sum, enemy) => sum + enemy.health, 0) : Math.max(0, 100 - damage);
   const completedSteps = quest.steps.filter((step) => step.status === "completed").length;
   return {
     questId: quest.id,
@@ -88,24 +106,32 @@ export function battleFor(quest: Quest | null, gameEvents: GameEvent[] = [], now
     progress: Math.min(100, damage),
     completedSteps,
     totalSteps: quest.steps.length,
+    // KO de la Horda es neutralización, no victoria: la victoria la firma el contrato.
     isKo: damage === 100,
     isPlayerKo: playerHealth === 0,
-    durationMinutes: quest.battle?.durationMinutes ?? clampBattleMinutes(quest.durationMinutes),
-    status: quest.battle?.status ?? "pending",
-    attempt,
+    durationMinutes: record?.durationMinutes ?? clampBattleMinutes(quest.durationMinutes),
+    status: record?.status ?? "pending",
+    attempt: record?.attempt ?? 1,
+    attempts: record?.attempts ?? [],
     party,
+    agent: record?.agent ?? emptyAgentSlot(),
+    enemies,
+    hordeNeutralized: enemies.length > 0 && enemies.every((enemy) => enemy.status === "ko"),
+    pressureRate: enemies.length > 0 && record?.status === "active" ? Math.round(totalPressureRate(enemies) * 10) / 10 : 0,
+    pendingRecontract: record?.pendingRecontract
+      ? { id: record.pendingRecontract.id, reason: record.pendingRecontract.reason, newDurationMinutes: record.pendingRecontract.newDurationMinutes }
+      : undefined,
     // El reloj no corre en el borrador: sólo existe desde que el jugador inicia.
-    clock: quest.battle ? battleClock(quest.battle, nowMs) : null,
+    clock: record ? battleClock(record, nowMs) : null,
   };
 }
 
-/**
+/** Lo que la quest concederá al validarse./**
  * Recompensa por defecto de un contrato que no declaró la suya.
  *
  * XP mide la gesta pactada —la mitad de los minutos acordados—, no el tiempo
  * que el jugador pasó en la app. Aura crece con los cuidados que el contrato se
  * comprometió a respetar, porque Aura es calidad de vida y no productividad.
- * Sin dominio declarado no hay maestría: no se inventa una especialidad.
  */
 export function defaultRewardProfile(quest: Quest): Required<Pick<RewardProfile, "xpMax" | "auraMax">> & RewardProfile {
   return {
@@ -271,6 +297,15 @@ function campaignTitleFrom(intent: string): string {
   return `La Forja de ${named}`.slice(0, 120);
 }
 
+/** El frente donde se puede actuar: el comprometido o el que espera auxilio. */
+function engagedOrRecoverable(state: RealmState): Quest | null {
+  return (
+    state.quests.find((quest) => quest.battle?.status === "active") ??
+    state.quests.find((quest) => quest.battle && ["awaiting_replan", "awaiting_recovery"].includes(quest.battle.status)) ??
+    null
+  );
+}
+
 function requireCampaign(state: RealmState, campaignId: string): Campaign {
   const campaign = state.campaigns.find((candidate) => candidate.id === campaignId);
   if (!campaign) throw new Error(`Campaña no encontrada: ${campaignId}`);
@@ -394,6 +429,31 @@ export class QuestService {
    */
   private async tick(): Promise<RealmState> {
     const state = await this.store.read();
+    // El zurrón inicial se entrega UNA vez. Recargar o redesplegar no repite.
+    if (!state.inventory.initializedAt) {
+      const { state: stocked } = await this.store.mutate((draft) => {
+        if (draft.inventory.initializedAt) return null;
+        const timestamp = now();
+        for (const entry of STARTER_INVENTORY) {
+          grantItem(draft.inventory, entry.itemId, entry.quantity);
+          draft.gameEvents.unshift({
+            id: randomUUID(),
+            type: "inventory_item_granted",
+            questId: "",
+            damage: 0,
+            itemId: entry.itemId,
+            message: `El reino entrega ${entry.quantity} × ${entry.itemId}.`,
+            createdAt: timestamp,
+          });
+        }
+        draft.gameEvents = draft.gameEvents.slice(0, 200);
+        draft.inventory.initializedAt = timestamp;
+        return null;
+      });
+      if (!needsAdvance(stocked, Date.now())) return stocked;
+      const { state: advanced } = await this.store.mutate((draft) => advanceBattles(draft, Date.now()));
+      return advanced;
+    }
     if (!needsAdvance(state, Date.now())) return state;
     const { state: fresh } = await this.store.mutate((draft) => advanceBattles(draft, Date.now()));
     return fresh;
@@ -411,6 +471,7 @@ export class QuestService {
       currentStep: currentStepFor(quest),
       battle,
       stats: statsFor(realm, battle),
+      inventory: realm.inventory,
       hierarchy: hierarchyFor(realm, quest, engagedQuest(realm)?.id ?? null),
       rewardPreview: quest ? previewRewards(quest) : null,
       consistency: consistencyFor(realm, this.instance, quest),
@@ -587,35 +648,221 @@ export class QuestService {
   async retryBattle(questId: string, durationMinutes?: number): Promise<{ quest: Quest; battle: BattleState }> {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
-      if (!quest.battle || quest.battle.status !== "lost") throw new Error("Sólo una Battle perdida puede reintentarse.");
+      const record = quest.battle;
+      if (!record) throw new Error("Esta quest todavía no tiene Battle que reintentar.");
+      if (record.status === "active") throw new Error("La Battle sigue en curso.");
+      if (record.status === "won") throw new Error("Esta Battle ya está ganada.");
       if (!["active", "waiting_external"].includes(quest.status)) throw new Error("Esta quest ya no tiene frente abierto: no hay Battle que reintentar.");
+      // EL MARQUÉS CAÍDO NO VUELVE GRATIS: hay que levantarlo primero.
+      if (record.party.marques.health === 0) {
+        throw new Error("El Marqués sigue en el suelo. Levántalo con un Tónico de Retorno antes de abrir otro intento.");
+      }
       const engaged = engagedQuest(state);
       if (engaged && engaged.id !== questId) {
         throw new Error(`Ya hay una Battle comprometida: «${engaged.title}». No puedes sostener dos frentes con reloj a la vez.`);
       }
-      if (quest.steps.every((step) => step.impactAwarded >= step.weight)) throw new Error("Esta quest ya no tiene impacto pendiente.");
       const startedAtMs = Date.now();
-      const duration = clampBattleMinutes(durationMinutes ?? quest.battle.durationMinutes);
-      const attempt = quest.battle.attempt + 1;
-      quest.battle = createBattleRecord(startedAtMs, duration, attempt);
+      // El nuevo pacto se declara: no se restaura la duración original sola.
+      openAttempt(record, startedAtMs, durationMinutes ?? record.durationMinutes, "timeout");
       quest.status = "active";
-      quest.updatedAt = quest.battle.startedAt;
+      quest.updatedAt = record.startedAt;
       state.gameEvents.unshift({
         id: randomUUID(),
         type: "battle_started",
         questId,
         damage: 0,
-        battleAttempt: attempt,
-        message: `Segunda oportunidad sobre «${quest.title}»: ${duration} min pactados.`,
-        createdAt: quest.battle.startedAt,
+        battleAttempt: record.attempt,
+        message: `Intento ${record.attempt} sobre «${quest.title}»: ${record.durationMinutes} min pactados.`,
+        createdAt: record.startedAt,
       });
       state.gameEvents = state.gameEvents.slice(0, 200);
       addEvent(state, {
         type: "battle_restarted",
         questId,
-        message: `El Marqués vuelve al frente de «${quest.title}» (intento ${attempt}). La evidencia validada se conserva.`,
+        message: `El Marqués vuelve al frente de «${quest.title}» (intento ${record.attempt}). Las heridas y la Horda siguen como estaban.`,
       });
       return { quest, battle: battleFor(quest, state.gameEvents)! };
+    });
+    return result;
+  }
+
+  /**
+   * Códice propone repactar el tiempo cuando la realidad exige más.
+   *
+   * No es una derrota: el intento se cierra como `recontracted`, no como
+   * timeout, y no se emite `battle_lost`. El nuevo intento sigue sin poder
+   * pasar de 60 minutos: 55 + 30 no son 85.
+   */
+  async proposeBattleRecontract(questId: string, input: { reason: string; newDurationMinutes: number }): Promise<BattleState> {
+    if (input.reason.trim().length < 10) throw new Error("Explica qué cambió en la realidad antes de repactar el tiempo.");
+    const { result } = await this.store.mutate((state) => {
+      const quest = requireQuest(state, questId);
+      const record = quest.battle;
+      if (!record) throw new Error("Esta quest todavía no tiene Battle.");
+      if (record.status !== "active") throw new Error("Sólo una Battle en curso puede repactar su tiempo.");
+      record.pendingRecontract = {
+        id: randomUUID(),
+        reason: input.reason.trim(),
+        newDurationMinutes: clampBattleMinutes(input.newDurationMinutes),
+        proposedAt: now(),
+      };
+      quest.updatedAt = record.pendingRecontract.proposedAt;
+      addEvent(state, {
+        type: "quest_amendment_proposed",
+        questId,
+        message: `Códice propone repactar el tiempo de «${quest.title}» a ${record.pendingRecontract.newDurationMinutes} min: ${record.pendingRecontract.reason}`,
+      });
+      return battleFor(quest, state.gameEvents)!;
+    });
+    return result;
+  }
+
+  async acceptBattleRecontract(questId: string, userAccepted: boolean): Promise<BattleState> {
+    if (!userAccepted) throw new Error("Repactar el tiempo requiere aceptación explícita del jugador.");
+    const { result } = await this.store.mutate((state) => {
+      const quest = requireQuest(state, questId);
+      const record = quest.battle;
+      if (!record?.pendingRecontract) throw new Error("No hay ningún nuevo pacto temporal esperando decisión.");
+      const proposal = record.pendingRecontract;
+      // Todo el estado de combate se preserva: sólo cambia el reloj.
+      openAttempt(record, Date.now(), proposal.newDurationMinutes, "recontracted");
+      quest.updatedAt = record.startedAt;
+      state.gameEvents.unshift({
+        id: randomUUID(),
+        type: "battle_recontracted",
+        questId,
+        damage: 0,
+        battleAttempt: record.attempt,
+        message: `Nuevo pacto temporal: ${record.durationMinutes} min. ${proposal.reason}`,
+        createdAt: record.startedAt,
+      });
+      state.gameEvents = state.gameEvents.slice(0, 200);
+      addEvent(state, {
+        type: "quest_amended",
+        questId,
+        message: `El tiempo de «${quest.title}» se repactó en ${record.durationMinutes} min. No es una derrota: el frente sigue igual.`,
+      });
+      return battleFor(quest, state.gameEvents)!;
+    });
+    return result;
+  }
+
+  /**
+   * Usa un objeto del zurrón. El Core valida y decrementa; el renderer no.
+   */
+  async useInventoryItem(itemId: InventoryItemId, target: PartyMemberId): Promise<{ battle: BattleState | null; remaining: number; message: string }> {
+    const { result } = await this.store.mutate((state) => {
+      const quest = engagedOrRecoverable(state);
+      if (!quest?.battle) throw new Error("No hay ningún frente abierto donde usar objetos.");
+      const applied = useItem(state.inventory, quest.battle.party, itemId, target);
+      const timestamp = now();
+      const member = quest.battle.party[target];
+      state.gameEvents.unshift({
+        id: randomUUID(),
+        type: "inventory_item_used",
+        questId: quest.id,
+        damage: 0,
+        target,
+        itemId,
+        battleAttempt: quest.battle.attempt,
+        message: `${applied.item.name} usado sobre ${member.name}.`,
+        createdAt: timestamp,
+      });
+      state.gameEvents.unshift({
+        id: randomUUID(),
+        type: applied.revived ? "party_member_revived" : "party_member_healed",
+        questId: quest.id,
+        damage: applied.healed,
+        target,
+        itemId,
+        battleAttempt: quest.battle.attempt,
+        message: applied.revived
+          ? `${member.name} vuelve al frente con ${member.health}/${member.maxHealth} HP.`
+          : `${member.name} recupera ${applied.healed} HP.`,
+        createdAt: timestamp,
+      });
+      state.gameEvents = state.gameEvents.slice(0, 200);
+      addEvent(state, {
+        type: "quest_unblocked",
+        questId: quest.id,
+        message: applied.revived
+          ? `${applied.item.name}: ${member.name} vuelve en pie con ${member.health} HP. Queda ${applied.remaining}.`
+          : `${applied.item.name}: ${member.name} recupera ${applied.healed} HP. Queda ${applied.remaining}.`,
+      });
+      return {
+        battle: battleFor(quest, state.gameEvents),
+        remaining: applied.remaining,
+        message: applied.revived
+          ? `${member.name} vuelve al frente con ${member.health}/${member.maxHealth} HP.`
+          : `${member.name} recupera ${applied.healed} HP.`,
+      };
+    });
+    return result;
+  }
+
+  /**
+   * Registra que un compañero REAL ejecutó algo.
+   *
+   * Todavía no concede nada: nace `used_pending_validation`. Opus no ataca
+   * porque su nombre exista; ataca cuando su contribución termina validada.
+   */
+  async recordCompanionAssist(input: {
+    questId: string;
+    stepId: string;
+    companion: CompanionId;
+    source?: CompanionAssist["source"];
+    sourceTool?: string;
+    executionRef?: string;
+    contributionSummary: string;
+  }): Promise<CompanionAssist> {
+    if (input.contributionSummary.trim().length < 5) throw new Error("Describe qué hizo realmente el compañero.");
+    const { result } = await this.store.mutate((state) => {
+      const quest = requireQuest(state, input.questId);
+      requireStep(quest, input.stepId);
+      const timestamp = now();
+      const assist: CompanionAssist = {
+        id: randomUUID(),
+        questId: quest.id,
+        stepId: input.stepId,
+        companion: input.companion,
+        source: input.source ?? "mcp",
+        sourceTool: input.sourceTool?.trim().slice(0, 120),
+        executionRef: input.executionRef?.trim().slice(0, 200),
+        contributionSummary: input.contributionSummary.trim().slice(0, 500),
+        status: "used_pending_validation",
+        createdAt: timestamp,
+      };
+      state.companionAssists.unshift(assist);
+      state.companionAssists = state.companionAssists.slice(0, 200);
+
+      if (quest.battle) {
+        const first = deployAgent(quest.battle.agent, input.companion);
+        if (first) {
+          state.gameEvents.unshift({
+            id: randomUUID(),
+            type: "agent_deployed",
+            questId: quest.id,
+            damage: 0,
+            companion: input.companion,
+            battleAttempt: quest.battle.attempt,
+            message: `${COMPANIONS[input.companion].name} entra al frente como ${COMPANIONS[input.companion].role}.`,
+            createdAt: timestamp,
+          });
+        }
+        state.gameEvents.unshift({
+          id: randomUUID(),
+          type: "companion_used",
+          questId: quest.id,
+          stepId: input.stepId,
+          damage: 0,
+          companion: input.companion,
+          battleAttempt: quest.battle.attempt,
+          message: `${COMPANIONS[input.companion].name}: ${assist.contributionSummary}`,
+          createdAt: timestamp,
+        });
+        state.gameEvents = state.gameEvents.slice(0, 200);
+      }
+      return assist;
     });
     return result;
   }
@@ -635,8 +882,8 @@ export class QuestService {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (quest.status !== "active") throw new Error("La quest debe estar activa para evaluar evidencia.");
-      if (quest.battle?.status === "lost") {
-        throw new Error("El tiempo pactado terminó con la Horda viva. Reinicia la Battle o pide un replan al Códice antes de entregar más evidencia.");
+      if (quest.battle && ["awaiting_replan", "awaiting_recovery"].includes(quest.battle.status)) {
+        throw new Error("Este intento se cerró. Replanifica el tiempo —y levanta al Marqués si cayó— antes de entregar más evidencia.");
       }
       const step = quest.steps.find((candidate) => candidate.id === stepId);
       if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
@@ -679,7 +926,10 @@ export class QuestService {
       let gameEventId: string | null = null;
       if (input.impactAwarded > 0) {
         gameEventId = randomUUID();
-        // MARQUÉS ATACA: el impacto validado es su flecha.
+        const record = quest.battle;
+        // MARQUÉS DISPARA: el impacto validado cae sobre enemigos concretos,
+        // y el sobrante desborda al siguiente. Ningún daño se pierde.
+        const hits = record ? distributeEnemyDamage(record.enemies, input.impactAwarded) : [];
         state.gameEvents.unshift({
           id: gameEventId,
           type: "quest_attack",
@@ -688,47 +938,124 @@ export class QuestService {
           stepId,
           damage: input.impactAwarded,
           target: "marques",
-          battleAttempt: quest.battle?.attempt ?? 1,
-          message: `${step.title}: ataque de ${input.impactAwarded}.`,
+          battleAttempt: record?.attempt ?? 1,
+          enemyAllocations: hits.map((hit) => ({ enemyId: hit.enemy.id, name: hit.enemy.name, damage: hit.damage, killed: hit.killed })),
+          message: hits.length > 0
+            ? `${step.title}: ${hits.map((hit) => `${hit.enemy.name} -${hit.damage}`).join(", ")}.`
+            : `${step.title}: ataque de ${input.impactAwarded}.`,
           createdAt: timestamp,
         });
+        for (const hit of hits.filter((candidate) => candidate.killed)) {
+          state.gameEvents.unshift({
+            id: randomUUID(),
+            type: "enemy_ko",
+            questId,
+            damage: 0,
+            sourceEnemyId: hit.enemy.id,
+            battleAttempt: record?.attempt ?? 1,
+            message: `${hit.enemy.name} cae. La Horda pierde su presión y su pasiva.`,
+            createdAt: timestamp,
+          });
+        }
         state.gameEvents = state.gameEvents.slice(0, 200);
 
-        // CORDERA SOSTIENE y ROKO PROTEGE: sólo el resultado real los mueve.
-        // Una evidencia rechazada no cura ni escuda, por convincente que suene.
-        if (quest.battle?.status === "active") {
-          const party = partyFor(quest, state.gameEvents);
-          const healed = healTarget(party);
-          if (healed) {
+        if (record && record.status === "active") {
+          // EL AGENTE EJECUTA: sólo si alguien ayudó de verdad en ESTE paso.
+          const assists = pendingAssistsFor(state.companionAssists, questId, stepId);
+          if (assists.length > 0) {
+            const jammed = record.enemies.some((enemy) => enemy.status === "active" && enemy.archetypeId === "h08_saboteur");
+            const combo = comboDamageFor(input.impactAwarded, assists.length, jammed);
+            for (const assist of assists) {
+              assist.status = "contribution_validated";
+              assist.validatedAt = timestamp;
+              assist.bonusDamage = Math.round(combo / assists.length);
+              deployAgent(record.agent, assist.companion);
+            }
+            record.agent.status = "assist_validated";
+            record.agent.comboDamage += combo;
+            const comboHits = distributeEnemyDamage(record.enemies, combo);
             state.gameEvents.unshift({
               id: randomUUID(),
-              type: "party_heal",
+              type: "companion_combo_attack",
               sourceLifeEventId: lifeEventId,
               questId,
               stepId,
-              damage: HEAL_PER_VALIDATED_IMPACT,
-              target: healed,
-              battleAttempt: quest.battle.attempt,
-              message: `Cordera sostiene a ${party[healed].name}: +${HEAL_PER_VALIDATED_IMPACT} HP.`,
+              damage: combo,
+              companion: assists[0].companion,
+              battleAttempt: record.attempt,
+              enemyAllocations: comboHits.map((hit) => ({ enemyId: hit.enemy.id, name: hit.enemy.name, damage: hit.damage, killed: hit.killed })),
+              message: `${COMPANIONS[assists[0].companion].name} remata: +${combo} de combo${jammed ? " (recortado por el Saboteador)" : ""}.`,
               createdAt: timestamp,
             });
+            for (const hit of comboHits.filter((candidate) => candidate.killed)) {
+              state.gameEvents.unshift({
+                id: randomUUID(),
+                type: "enemy_ko",
+                questId,
+                damage: 0,
+                sourceEnemyId: hit.enemy.id,
+                battleAttempt: record.attempt,
+                message: `${hit.enemy.name} cae bajo el combo.`,
+                createdAt: timestamp,
+              });
+            }
+            state.gameEvents = state.gameEvents.slice(0, 200);
           }
-          const roko = party.roko;
-          if (roko.health > 0 && roko.shield !== undefined && roko.maxShield !== undefined && roko.shield < roko.maxShield) {
+
+          // CORDERA SOSTIENE y ROKO PROTEGE: sólo el resultado real los mueve.
+          const healed = healTarget(record.party);
+          if (healed) {
+            const amount = healMember(record.party, healed, HEAL_PER_VALIDATED_IMPACT);
+            if (amount > 0) {
+              state.gameEvents.unshift({
+                id: randomUUID(),
+                type: "party_heal",
+                sourceLifeEventId: lifeEventId,
+                questId,
+                stepId,
+                damage: amount,
+                target: healed,
+                battleAttempt: record.attempt,
+                message: `Cordera sostiene a ${record.party[healed].name}: +${amount} HP.`,
+                createdAt: timestamp,
+              });
+            }
+          }
+          const shielded = refreshShield(record.party, SHIELD_PER_VALIDATED_IMPACT);
+          if (shielded > 0) {
             state.gameEvents.unshift({
               id: randomUUID(),
               type: "shield_gained",
               sourceLifeEventId: lifeEventId,
               questId,
               stepId,
-              damage: SHIELD_PER_VALIDATED_IMPACT,
+              damage: shielded,
               target: "roko",
-              battleAttempt: quest.battle.attempt,
-              message: `Instinto Protector: Roko recupera +${SHIELD_PER_VALIDATED_IMPACT} de escudo.`,
+              battleAttempt: record.attempt,
+              message: `Instinto Protector: Roko recupera +${shielded} de escudo.`,
               createdAt: timestamp,
             });
           }
           state.gameEvents = state.gameEvents.slice(0, 200);
+
+          if (hordeIsDown(record) && !record.hordeNeutralizedAt) {
+            record.hordeNeutralizedAt = timestamp;
+            state.gameEvents.unshift({
+              id: randomUUID(),
+              type: "horde_neutralized",
+              questId,
+              damage: 0,
+              battleAttempt: record.attempt,
+              message: "La Horda queda neutralizada. La presión temporal se detiene, pero el contrato sigue abierto.",
+              createdAt: timestamp,
+            });
+            state.gameEvents = state.gameEvents.slice(0, 200);
+            addEvent(state, {
+              type: "horde_attack",
+              questId,
+              message: "Toda la Horda cayó. Deja de haber presión temporal; la victoria la firma el contrato validado.",
+            });
+          }
         }
       }
       addEvent(state, {
@@ -976,11 +1303,17 @@ export class QuestService {
       const lifeEventId = randomUUID();
       state.lifeEvents.unshift({ id: lifeEventId, type: "unexpected_requirement", questId, stepId: input.stepId, reason: input.reason.trim(), createdAt: timestamp });
       const gameEventId = randomUUID();
-      // Un requisito inesperado golpea el frente igual que el reloj: Roko lo
-      // aguanta mientras viva, y su escudo se gasta antes que su vida.
-      const before = partyFor(quest, state.gameEvents);
-      const target = nextTarget(before);
-      const { absorbed } = applyDamage(before, target, input.damage);
+      // Un requisito inesperado golpea el frente igual que el reloj: cae sobre
+      // quien la formación deje expuesto, y el escudo se gasta antes que la vida.
+      const record = quest.battle;
+      const party = record?.party ?? freshParty();
+      const attacker = record?.enemies.find((enemy) => enemy.status === "active");
+      const target: PartyMemberId = attacker
+        ? enemyTargetFor(attacker, party, record!.combatSeed, record!.attempt)
+        : party.roko.health > 0
+          ? "roko"
+          : "marques";
+      const { absorbed, ko } = applyDamage(party, target, input.damage);
       state.gameEvents.unshift({
         id: gameEventId,
         type: "horde_attack",
@@ -989,9 +1322,10 @@ export class QuestService {
         stepId: input.stepId,
         damage: input.damage,
         reason: input.reason.trim(),
-        battleAttempt: quest.battle?.attempt ?? 1,
+        battleAttempt: record?.attempt ?? 1,
         target,
-        message: `La Horda contraataca sobre ${before[target].name}: ${input.reason.trim()} (-${input.damage}).`,
+        sourceEnemyId: attacker?.id,
+        message: `La Horda contraataca sobre ${party[target].name}: ${input.reason.trim()} (-${input.damage}).`,
         createdAt: timestamp,
       });
       if (absorbed > 0) {
@@ -1001,20 +1335,20 @@ export class QuestService {
           questId,
           damage: absorbed,
           target,
-          battleAttempt: quest.battle?.attempt ?? 1,
-          message: `El escudo de ${before[target].name} absorbe ${absorbed}.`,
+          battleAttempt: record?.attempt ?? 1,
+          message: `El escudo de ${party[target].name} absorbe ${absorbed}.`,
           createdAt: timestamp,
         });
       }
-      if (before[target].health === 0) {
+      if (ko) {
         state.gameEvents.unshift({
           id: randomUUID(),
           type: "party_member_ko",
           questId,
           damage: 0,
           target,
-          battleAttempt: quest.battle?.attempt ?? 1,
-          message: `${before[target].name} cae en el frente.`,
+          battleAttempt: record?.attempt ?? 1,
+          message: `${party[target].name} cae en el frente.`,
           createdAt: timestamp,
         });
       }
@@ -1024,10 +1358,10 @@ export class QuestService {
       addEvent(state, {
         type: "horde_attack",
         questId,
-        message: `La Horda golpea a ${before[target].name} (-${input.damage}). El Marqués conserva ${battle.playerHealth} HP.`,
+        message: `La Horda golpea a ${party[target].name} (-${input.damage}). El Marqués conserva ${battle.playerHealth} HP.`,
       });
-      if (battle.isPlayerKo && quest.battle?.status === "active") {
-        resolveBattle(state, quest, quest.battle, "lost", Date.now());
+      if (battle.isPlayerKo && record?.status === "active") {
+        resolveBattle(state, quest, record, "awaiting_recovery", Date.now());
         battle = battleFor(quest, state.gameEvents)!;
       }
       return { battle, lifeEventId, gameEventId };
@@ -1404,7 +1738,12 @@ export class QuestService {
       quest.abandonedAt = now();
       quest.updatedAt = quest.abandonedAt;
       // Retirarse cierra el reloj: una quest abandonada ya no recibe ataques.
-      if (quest.battle?.status === "active") resolveBattle(state, quest, quest.battle, "lost", Date.now());
+      if (quest.battle?.status === "active") {
+        // Retirarse cierra el intento; no es un plazo vencido ni una caída.
+        const attempt = quest.battle.attempts.find((candidate) => candidate.attempt === quest.battle!.attempt);
+        resolveBattle(state, quest, quest.battle, "awaiting_replan", Date.now());
+        if (attempt) attempt.endReason = "abandoned";
+      }
       addEvent(state, { type: "quest_abandoned", questId, message: `Retirada: ${reason.trim() || "sin motivo registrado"}.` });
       return quest;
     });

@@ -51,7 +51,51 @@ export interface CharacterStats {
   treasure: { currency: "COP"; amount: number };
 }
 
-export type BattleStatus = "pending" | "active" | "won" | "lost";
+export type BattleStatus = "pending" | "active" | "awaiting_replan" | "awaiting_recovery" | "won";
+export type CompanionId = "opus" | "codex" | "claude" | "gemini";
+export type InventoryItemId = "revive_tonic" | "health_potion";
+
+export interface InventoryState {
+  items: Array<{ itemId: InventoryItemId; quantity: number }>;
+  initializedAt?: string;
+}
+
+/** El cuarto slot: sólo lo ocupa quien de verdad ejecutó algo. */
+export interface AgentSlot {
+  deployed: boolean;
+  companion?: CompanionId;
+  name?: string;
+  role?: string;
+  status: "undeployed" | "assist_ready" | "assist_validated";
+  secondaryAssists: CompanionId[];
+  comboDamage: number;
+}
+
+/** Un miembro de la Horda. La Horda dejó de ser una barra. */
+export interface EnemyCombatant {
+  id: string;
+  archetypeId: string;
+  name: string;
+  role: string;
+  position: "front" | "back";
+  health: number;
+  maxHealth: number;
+  status: "active" | "ko";
+  pressureRate: number;
+  criticalChance: number;
+  targetPolicy: string;
+  abilityId?: string;
+  abilityName?: string;
+}
+
+export interface BattleAttemptRecord {
+  attempt: number;
+  startedAt: string;
+  durationMinutes: number;
+  deadlineAt: string;
+  endedAt?: string;
+  endReason?: "won" | "timeout" | "recontracted" | "player_ko" | "abandoned";
+}
 export type PartyMemberId = "roko" | "marques" | "cordera";
 
 /** Roko protege, Marqués ataca, Cordera sostiene. El Core deriva sus cifras. */
@@ -93,7 +137,7 @@ export interface BattleRecord {
   startedAt: string;
   durationMinutes: number;
   deadlineAt: string;
-  status: "active" | "won" | "lost";
+  status: "active" | "awaiting_replan" | "awaiting_recovery" | "won";
 }
 
 export interface QuestNode {
@@ -238,6 +282,19 @@ export interface RealmSnapshot {
       type:
         | "quest_attack"
         | "horde_attack"
+        | "horde_pressure"
+        | "enemy_special"
+        | "enemy_ko"
+        | "horde_neutralized"
+        | "encounter_generated"
+        | "party_member_revived"
+        | "party_member_healed"
+        | "inventory_item_used"
+        | "inventory_item_granted"
+        | "companion_used"
+        | "companion_combo_attack"
+        | "agent_deployed"
+        | "battle_recontracted"
         | "party_heal"
         | "shield_gained"
         | "shield_absorbed"
@@ -254,6 +311,11 @@ export interface RealmSnapshot {
       attackIndex?: number;
       target?: PartyMemberId;
       critical?: boolean;
+      sourceEnemyId?: string;
+      companion?: CompanionId;
+      itemId?: InventoryItemId;
+      allocations?: Array<{ sourceEnemyId?: string; sourceName?: string; target: PartyMemberId; damage: number; absorbed: number; critical?: boolean }>;
+      enemyAllocations?: Array<{ enemyId: string; name: string; damage: number; killed: boolean }>;
       battleAttempt?: number;
       createdAt: string;
     }>;
@@ -276,9 +338,16 @@ export interface RealmSnapshot {
     durationMinutes: number;
     status: BattleStatus;
     attempt: number;
+    attempts: BattleAttemptRecord[];
     party: PartyState;
+    agent: AgentSlot;
+    enemies: EnemyCombatant[];
+    hordeNeutralized: boolean;
+    pressureRate: number;
+    pendingRecontract?: { id: string; reason: string; newDurationMinutes: number };
     clock: BattleClock | null;
   };
+  inventory: InventoryState;
   hierarchy: RealmHierarchy;
   /** Lo que concede el Core al validar esta quest. Ni monedas ni gemas inventadas. */
   rewardPreview: { xp: number; aura: number; masteryDomain?: string } | null;

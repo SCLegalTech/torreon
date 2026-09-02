@@ -1060,3 +1060,95 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 @media (orientation: portrait) {
   .campaign-pact { position: static; width: auto; max-height: none; transform: none; }
 }
+
+/* =====================================================================
+   4 vs 4 — la Horda dejó de ser una barra y el grupo tiene cuarto slot.
+   Los ocho combatientes deben verse a la vez en el teléfono: nada de
+   carruseles que escondan a quien está a punto de caer.
+   ===================================================================== */
+.enemy-row {
+  position: absolute;
+  z-index: 6;
+  top: 19.5%;
+  right: 1%;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .4rem;
+  width: min(37%, 560px);
+}
+.enemy-card { padding: .3rem .4rem; border: 1px solid #68406e; background: #0a070c; box-shadow: 0 8px 20px #000a; }
+.enemy-card header { display: flex; justify-content: space-between; align-items: baseline; gap: .2rem; }
+.enemy-card strong { overflow: hidden; color: #e7c2ff; font-size: clamp(.3rem,.52vw,.46rem); letter-spacing: .03em; text-overflow: ellipsis; white-space: nowrap; }
+.enemy-card em { color: #b085d6; font-size: clamp(.26rem,.42vw,.36rem); font-style: normal; font-weight: 900; }
+.enemy-bar { height: 5px; margin-top: .18rem; overflow: hidden; border: 1px solid #1c0512; background: #070203; }
+.enemy-bar span { display: block; height: 100%; background: linear-gradient(90deg,#6e0505,#d52d21); transition: width .6s ease; }
+.enemy-card b { display: block; margin-top: .1rem; color: #b8ab93; font-family: ui-monospace, "Cascadia Mono", monospace; font-size: clamp(.26rem,.44vw,.38rem); }
+.enemy-card.ko { border-color: #3a2a3f; opacity: .45; filter: grayscale(.7); }
+.enemy-card.back { border-style: dashed; }
+
+.party-hud { grid-template-columns: repeat(4, minmax(0, 1fr)); width: min(46%, 700px); }
+.party-member.agent { border-color: #4b86a2; background: #060a0c; }
+.party-member.agent.undeployed { border-style: dashed; opacity: .72; }
+.party-member.agent.assist_validated { border-color: #2fbe86; box-shadow: 0 0 18px #36e9a955; }
+.party-member .agent-role { display: block; color: #8fb8cc; font-size: clamp(.26rem,.44vw,.38rem); }
+.party-member .agent-extra { display: block; color: #7f7462; font-size: clamp(.24rem,.4vw,.34rem); }
+.revive-button { width: 100%; margin-top: .2rem; padding: .15rem; cursor: pointer; border: 1px solid #c14a2c; color: #ffb08d; background: #1a0806; font: 900 clamp(.26rem,.44vw,.38rem) ui-monospace, monospace; letter-spacing: .06em; }
+
+/* El zurrón: se abre desde la batalla y el Core es quien descuenta. */
+.bag-button {
+  position: absolute;
+  z-index: 8;
+  right: 1%;
+  bottom: 15.5%;
+  min-height: 34px;
+  padding: .3rem .6rem;
+  cursor: pointer;
+  border: 1px solid #8a6528;
+  color: #e5c98d;
+  background: linear-gradient(#241408, #0d0705);
+  font-weight: 900;
+  font-size: clamp(.4rem,.7vw,.6rem);
+  box-shadow: 0 6px 16px #0009;
+}
+.inventory-drawer {
+  position: absolute;
+  z-index: 40;
+  right: 1%;
+  bottom: 21%;
+  width: min(28%, 420px);
+  padding: .6rem .75rem;
+  border: 1px solid #8b672e;
+  background: #08090b;
+  box-shadow: 0 14px 34px #000d;
+}
+.inventory-drawer header { display: flex; justify-content: space-between; align-items: center; }
+.inventory-drawer header strong { color: #f3d79a; font-size: clamp(.4rem,.7vw,.6rem); letter-spacing: .08em; }
+.inventory-drawer header button { border: 0; color: #d6b474; background: none; font-size: 1rem; }
+.inventory-list { display: grid; gap: .25rem; margin: .45rem 0; padding: 0; list-style: none; }
+.inventory-list button { width: 100%; padding: .3rem .45rem; cursor: pointer; border: 1px solid #6b4a1c; color: #d8c4a0; background: rgba(12,10,8,.8); font-size: clamp(.32rem,.56vw,.48rem); text-align: left; }
+.inventory-list button.current { color: #8dffc0; border-color: #2fbe86; }
+.inventory-list b { color: #f3d79a; font-family: ui-monospace, "Cascadia Mono", monospace; }
+.inventory-hint { margin: .2rem 0 .4rem; color: #9a8d78; font-size: clamp(.3rem,.5vw,.42rem); line-height: 1.35; }
+.inventory-targets { display: flex; flex-wrap: wrap; gap: .3rem; }
+.inventory-targets button { padding: .28rem .5rem; cursor: pointer; border: 1px solid #2fbe86; color: #8dffc0; background: #06231a; font-size: clamp(.3rem,.52vw,.44rem); font-weight: 900; }
+.inventory-targets small { color: #9a8d78; font-size: clamp(.3rem,.5vw,.42rem); }
+.inventory-empty { margin: .4rem 0 0; color: #9a8d78; font-size: clamp(.32rem,.54vw,.46rem); }
+
+/* El frente sigue abierto: replanificar no cura, sólo repacta el tiempo. */
+.defeat-party { display: grid; grid-template-columns: repeat(3, 1fr); gap: .3rem; margin: .5rem 0; padding: 0; list-style: none; }
+.defeat-party li { padding: .25rem; border: 1px solid #5c4a2a; background: rgba(10,8,7,.7); }
+.defeat-party span { display: block; color: #b8ab93; font-size: clamp(.3rem,.5vw,.42rem); }
+.defeat-party b { color: #f3d79a; font-family: ui-monospace, "Cascadia Mono", monospace; font-size: clamp(.36rem,.62vw,.54rem); }
+.defeat-party li.ko { border-color: #6b2a25; }
+.defeat-party li.ko b { color: #ff9d84; }
+.defeat-bag { margin: 0 0 .6rem !important; color: #8fd0ff !important; font-size: clamp(.3rem,.52vw,.44rem) !important; }
+.defeat-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.defeat-actions .ghost-button { width: 100%; min-height: 42px; }
+.battle-defeat small { display: block; margin-top: .55rem; color: #9a8d78; font-size: clamp(.3rem,.5vw,.42rem); }
+
+@media (orientation: portrait) {
+  .enemy-row { top: 26%; right: 3%; width: 94%; }
+  .party-hud { width: 94%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .inventory-drawer { right: 3%; bottom: 30%; width: 94%; }
+  .defeat-actions { grid-template-columns: 1fr; }
+}

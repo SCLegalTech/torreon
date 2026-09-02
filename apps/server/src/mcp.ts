@@ -71,7 +71,7 @@ export function createMcpServer(service: QuestService): McpServer {
     { name: "torreon", version: "0.1.0" },
     {
       instructions:
-        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito —de cualquier dominio— en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño. La mejor partida es la que el jugador juega sin tocar el teléfono: la evidencia debe entrar por la conversación, no por la pantalla del juego. Si el archivo, la imagen o los datos están cargados en TU conversación, ábrelos, examínalos y regístralos con attest_evidence_artifact declarando qué viste. Si el archivo está en el disco donde corre este MCP, usa attach_evidence_artifact y el servidor comprobará los hechos (existe, tamaño, tipo, hash, extracto). Reutiliza un mismo artefacto entre pasos con reuse_evidence_artifact: no dupliques sus bytes ni su identidad, pero emite un veredicto independiente por paso. Solo después emite el veredicto con submit_quest_evidence citando los artifactIds; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante. Un artefacto que el servidor no pudo comprobar nunca justifica accepted por sí solo. Si la realidad refuta el plan activo, no borres ni reescribas la historia: propón un amendment y aplícalo sólo tras aceptación explícita. Un bloqueo externo sin acción disponible coloca la quest en waiting_external. La horda sólo contraataca mediante record_unexpected_requirement cuando aparece una complicación real y concreta; jamás por silencio ni por inactividad. El único ataque temporal legítimo lo aplica el propio servidor en diez ventanas repartidas por el plazo pactado en start_quest —con críticos derivados de la semilla del combate, nunca de un dado del cliente—, y una quest en waiting_external suspende esa presión. El grupo es Roko (guardia, escudo primero), Marqués (arquero: su caída pierde la Battle) y Cordera (sanadora); sólo el impacto validado cura y devuelve escudo. Puede haber varias campañas activas a la vez, pero UNA sola Battle con reloj: si ya hay una comprometida, otra quest se consulta pero no se inicia. Antes de crear estructura, usa classify_objective_scale: la escala la fijan los MINUTOS DE TRABAJO ACTIVO, nunca el calendario, y una microquest de quince minutos no necesita Acto ni Campaña.",
+        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito —de cualquier dominio— en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño. La mejor partida es la que el jugador juega sin tocar el teléfono: la evidencia debe entrar por la conversación, no por la pantalla del juego. Si el archivo, la imagen o los datos están cargados en TU conversación, ábrelos, examínalos y regístralos con attest_evidence_artifact declarando qué viste. Si el archivo está en el disco donde corre este MCP, usa attach_evidence_artifact y el servidor comprobará los hechos (existe, tamaño, tipo, hash, extracto). Reutiliza un mismo artefacto entre pasos con reuse_evidence_artifact: no dupliques sus bytes ni su identidad, pero emite un veredicto independiente por paso. Solo después emite el veredicto con submit_quest_evidence citando los artifactIds; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante. Un artefacto que el servidor no pudo comprobar nunca justifica accepted por sí solo. Si la realidad refuta el plan activo, no borres ni reescribas la historia: propón un amendment y aplícalo sólo tras aceptación explícita. Un bloqueo externo sin acción disponible coloca la quest en waiting_external. La horda sólo contraataca mediante record_unexpected_requirement cuando aparece una complicación real y concreta; jamás por silencio ni por inactividad. El único ataque temporal legítimo lo aplica el propio servidor en diez ventanas repartidas por el plazo pactado en start_quest —con críticos derivados de la semilla del combate, nunca de un dado del cliente—, y una quest en waiting_external suspende esa presión. El grupo es Roko (guardia, escudo primero), Marqués (arquero: su caída cierra el intento) y Cordera (sanadora), más un cuarto slot que sólo ocupa un compañero que ejecutó algo real. La Horda son CUATRO enemigos con rostro: un arquero puede saltarse a Roko y un asesino puede caer sobre Cordera. Neutralizar a los cuatro detiene la presión pero NO es victoria: la victoria la firma el contrato validado al 100%. Puede haber varias campañas activas a la vez, pero UNA sola Battle con reloj: si ya hay una comprometida, otra quest se consulta pero no se inicia. Antes de crear estructura, usa classify_objective_scale: la escala la fijan los MINUTOS DE TRABAJO ACTIVO, nunca el calendario, y una microquest de quince minutos no necesita Acto ni Campaña.",
     },
   );
 
@@ -225,11 +225,103 @@ export function createMcpServer(service: QuestService): McpServer {
   );
 
   server.registerTool(
+    "get_inventory",
+    {
+      title: "Ver el zurrón",
+      description: "Devuelve los objetos que quedan. Los objetos se gastan: el Core es el único que decrementa.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async () => {
+      const { inventory } = await service.snapshot();
+      const detail = inventory.items.map((entry) => `${entry.itemId} ×${entry.quantity}`).join(", ") || "vacío";
+      return toolResult(`Zurrón: ${detail}.`, { inventory });
+    },
+  );
+
+  server.registerTool(
+    "use_inventory_item",
+    {
+      title: "Usar un objeto",
+      description:
+        "Aplica un objeto sobre un miembro del grupo. El Tónico de Retorno levanta a un CAÍDO con parte de su vida; la Poción Carmesí cura a quien sigue EN PIE y nunca resucita. El Core valida existencia, cantidad y estado del destino antes de aplicar nada.",
+      inputSchema: {
+        itemId: z.enum(["revive_tonic", "health_potion"]),
+        target: z.enum(["roko", "marques", "cordera"]),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ itemId, target }) => {
+      const result = await service.useInventoryItem(itemId, target);
+      return toolResult(`${result.message} Quedan ${result.remaining}.`, result);
+    },
+  );
+
+  server.registerTool(
+    "record_companion_assist",
+    {
+      title: "Registrar la ayuda real de un compañero",
+      description:
+        "Llámala INMEDIATAMENTE después de usar de verdad a Opus, Codex, Claude o Gemini para este paso. No basta con que el compañero esté disponible ni con que el jugador diga que lo usó: esto declara una ejecución real. El primer compañero registrado ocupa el cuarto slot del grupo. Todavía NO concede daño: el combo llega sólo si la evidencia del paso termina aceptada, y un mismo compañero cuenta una sola vez por paso.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        stepId: z.string().uuid(),
+        companion: z.enum(["opus", "codex", "claude", "gemini"]),
+        source: z.enum(["mcp", "internal", "integration"]).optional(),
+        sourceTool: z.string().max(120).optional().describe("Herramienta concreta que se ejecutó, p. ej. update_client_portal."),
+        executionRef: z.string().max(200).optional().describe("Referencia de la ejecución, para poder rastrearla."),
+        contributionSummary: z.string().min(5).max(500).describe("Qué hizo realmente, en una frase."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const assist = await service.recordCompanionAssist(args);
+      return toolResult(
+        `Ayuda de ${assist.companion} registrada como pendiente de validación. El combo llegará si la evidencia del paso se acepta.`,
+        { assist },
+      );
+    },
+  );
+
+  server.registerTool(
+    "propose_battle_recontract",
+    {
+      title: "Repactar el tiempo de una batalla en curso",
+      description:
+        "Cuando aparece una exigencia real que el contrato no contemplaba, propone un nuevo plazo ANTES de que venza el actual. No es una derrota: el intento se cierra como repactado, no como vencido, y no se emite battle_lost. El nuevo intento sigue sin poder pasar de 60 minutos —55 + 30 no son 85— y todo el estado de combate se preserva: heridas, caídos, escudo y Horda.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        reason: z.string().min(10).max(500).describe("Qué exigencia real apareció."),
+        newDurationMinutes: z.number().int().min(1).max(60),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId, reason, newDurationMinutes }) => {
+      const battle = await service.proposeBattleRecontract(questId, { reason, newDurationMinutes });
+      return toolResult(`Nuevo pacto temporal propuesto: ${newDurationMinutes} min. Falta la aceptación del jugador.`, { battle });
+    },
+  );
+
+  server.registerTool(
+    "accept_battle_recontract",
+    {
+      title: "Aceptar el nuevo pacto temporal",
+      description: "Aplica el nuevo plazo tras aceptación explícita del jugador. Abre un intento nuevo sobre el MISMO campo de batalla.",
+      inputSchema: { questId: z.string().uuid(), userAccepted: z.literal(true) },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId, userAccepted }) => {
+      const battle = await service.acceptBattleRecontract(questId, userAccepted);
+      return toolResult(`El frente sigue igual con ${battle.durationMinutes} min nuevos (intento ${battle.attempt}).`, { battle });
+    },
+  );
+
+  server.registerTool(
     "retry_battle",
     {
       title: "Reintentar una batalla perdida",
       description:
-        "Vuelve a abrir el reloj de una Battle que venció con la Horda viva. Perder no borró nada: la evidencia validada, el impacto, el XP, el Aura y el historial siguen en pie; lo único que empieza de cero es el tiempo y el HP del Marqués. Si el plan ya no representa la realidad, propone antes un amendment.",
+        "Abre un intento nuevo sobre el MISMO campo de batalla cuando el plazo venció. REPLANIFICAR NO CURA: el grupo conserva sus heridas, los caídos siguen caídos, el escudo no se rellena y la Horda mantiene su daño y su composición. Lo único que se repacta es el tiempo. Si el Marqués cayó, hay que levantarlo con un Tónico de Retorno antes de poder reintentar.",
       inputSchema: {
         questId: z.string().uuid(),
         durationMinutes: z.number().int().min(1).max(60).optional().describe("Nuevo plazo pactado. Máximo 60 minutos."),
