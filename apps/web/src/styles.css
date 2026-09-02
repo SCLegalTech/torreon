@@ -952,3 +952,72 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
   .map-resources { grid-auto-flow: row; grid-template-columns: repeat(2, 1fr); }
   .map-nav, .act-actions, .order-actions { grid-template-columns: 1fr; height: auto; }
 }
+
+/* =====================================================================
+   EL GRUPO — ROKO PROTEGE. MARQUÉS ATACA. CORDERA SOSTIENE.
+
+   Calcado sobre la franja inferior izquierda del arte de batalla, donde el
+   escenario pinta un recurso «Nuestro Torreón» que el reino no sostiene.
+   Ninguna barra se mueve sin un GameEvent del Core detrás.
+   ===================================================================== */
+.party-hud {
+  position: absolute;
+  z-index: 6;
+  bottom: 15.5%;
+  left: 1%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .4rem;
+  width: min(37%, 560px);
+}
+.party-member {
+  padding: .35rem .5rem;
+  border: 1px solid #7c6033;
+  background: #080a09;
+  box-shadow: inset 0 0 0 1px rgba(231,185,94,.1), 0 8px 20px #000a;
+}
+.party-member header { display: flex; justify-content: space-between; align-items: baseline; gap: .3rem; }
+.party-member strong { overflow: hidden; color: #f1d6a5; font-size: clamp(.36rem,.62vw,.54rem); letter-spacing: .06em; text-overflow: ellipsis; white-space: nowrap; }
+.party-member em { color: #7fe0aa; font-size: clamp(.28rem,.46vw,.4rem); font-style: normal; font-weight: 900; letter-spacing: .08em; }
+.party-bar { height: 6px; margin-top: .22rem; overflow: hidden; border: 1px solid #1c1207; background: #070403; }
+.party-bar span { display: block; height: 100%; transition: width .6s ease; }
+.party-bar.health span { background: linear-gradient(90deg,#18713c,#59dc78); }
+.party-bar.shield span { background: linear-gradient(90deg,#1d4f7a,#6fc6ff); }
+.party-member b { display: block; margin-top: .12rem; color: #b8ab93; font-family: ui-monospace, "Cascadia Mono", monospace; font-size: clamp(.28rem,.48vw,.42rem); }
+.party-member .shield-value { color: #8fd0ff; }
+/* Roko caído deja de proteger; Cordera caída deja de curar. La Battle sigue. */
+.party-member.ko { border-color: #6b2a25; opacity: .6; filter: grayscale(.55); }
+.party-member.ko em { color: #ff9d84; }
+.party-member.heal { border-color: #2fbe86; box-shadow: 0 0 18px #36e9a955; }
+.party-member.heal em { color: #8dffc0; }
+.party-member.shield { border-color: #4b86a2; box-shadow: 0 0 18px #4bb6ff55; }
+.party-member.shield em { color: #a5e2ff; }
+.party-member.critical { border-color: #c14a2c; box-shadow: 0 0 20px #ff521e66; }
+.party-member.critical em { color: #ffb08d; }
+
+/* MANY CAMPAIGNS: el selector cambia la mirada, no el estado de los frentes. */
+.campaign-switch { display: grid; gap: .2rem; min-width: 0; }
+.campaign-switch > span { color: #a3947a; font-size: clamp(.28rem,.46vw,.4rem); font-weight: 900; letter-spacing: .1em; }
+.campaign-switch > div { display: flex; gap: .3rem; overflow-x: auto; }
+.campaign-switch button {
+  display: grid;
+  flex: 0 0 auto;
+  gap: .1rem;
+  max-width: 40%;
+  padding: .25rem .45rem;
+  cursor: pointer;
+  border: 1px solid #6b4a1c;
+  color: #d8c4a0;
+  background: rgba(12,10,8,.8);
+  font-size: clamp(.3rem,.5vw,.44rem);
+  letter-spacing: .04em;
+  text-align: left;
+}
+.campaign-switch button small { color: #8e836f; font-family: ui-monospace, "Cascadia Mono", monospace; font-size: clamp(.26rem,.42vw,.36rem); }
+.campaign-switch button.current { color: #8dffc0; border-color: #2fbe86; }
+.campaign-switch button:not(:disabled):active { transform: translateY(2px); filter: brightness(1.2); }
+
+@media (orientation: portrait) {
+  .party-hud { bottom: 3%; left: 3%; width: 94%; }
+  .campaign-switch { grid-column: 1; }
+}

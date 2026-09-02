@@ -98,38 +98,116 @@ describe("Battle con tiempo real", () => {
     expect(snapshot.battle!.clock!.remainingMs).toBeLessThanOrEqual(40 * 60_000);
   });
 
-  it("cruzar el 25% hace que la Horda ataque exactamente una vez, aunque se refresque", async () => {
+  it("cruzar una ventana hace que la Horda ataque exactamente una vez, aunque se refresque", async () => {
     const active = await startedQuest(60);
-    await ageBattle(active.id, 16);
+    // Diez ventanas en 60 min: una cada 6. A los 7 sólo venció la primera.
+    await ageBattle(active.id, 7);
 
     const first = await service.snapshot();
-    const attacks = () =>
-      first.realm.gameEvents.filter((event) => event.type === "horde_attack" && event.reason === "time_pressure");
-    expect(attacks()).toHaveLength(1);
-    expect(attacks()[0].threshold).toBe(0.25);
-    expect(attacks()[0].damage).toBe(10);
-    expect(first.battle?.playerHealth).toBe(90);
+    const attacks = first.realm.gameEvents.filter((event) => event.type === "horde_attack" && event.reason === "time_pressure");
+    expect(attacks).toHaveLength(1);
+    expect(attacks[0].attackIndex).toBe(1);
+    expect([10, 15]).toContain(attacks[0].damage);
+    // ROKO PROTEGE: el primer golpe lo come su escudo, no el Marqués.
+    expect(attacks[0].target).toBe("roko");
+    expect(first.battle?.party.marques.health).toBe(100);
 
-    // Polling y recargas no pueden repetir el mismo umbral.
+    // Polling y recargas no pueden repetir la misma ventana.
     await service.snapshot();
     await service.snapshot();
     const again = await service.snapshot();
     expect(again.realm.gameEvents.filter((event) => event.reason === "time_pressure")).toHaveLength(1);
-    expect(again.battle?.playerHealth).toBe(90);
+    expect(again.battle?.party.roko.shield).toBe(first.battle?.party.roko.shield);
   });
 
-  it("cobra de una sola vez todos los umbrales cruzados mientras la app estaba cerrada", async () => {
+  it("la secuencia de críticos es reproducible: reabrir no vuelve a tirar el dado", async () => {
+    const active = await startedQuest(60);
+    await ageBattle(active.id, 46);
+    const first = await service.snapshot();
+    const sequence = (snapshot: typeof first) =>
+      snapshot.realm.gameEvents
+        .filter((event) => event.reason === "time_pressure")
+        .sort((a, b) => (a.attackIndex ?? 0) - (b.attackIndex ?? 0))
+        .map((event) => `${event.attackIndex}:${event.damage}:${event.critical}`);
+
+    const before = sequence(first);
+    expect(before).toHaveLength(7);
+    // Un crítico multiplica por 1.5 y nada más: 10 o 15, nunca otra cosa.
+    expect(before.every((entry) => entry.includes(":10:false") || entry.includes(":15:true"))).toBe(true);
+
+    // Releer el reino no reroll: la semilla manda.
+    expect(sequence(await service.snapshot())).toEqual(before);
+  });
+
+  it("cobra de una sola vez todas las ventanas vencidas mientras la app estaba cerrada", async () => {
     const active = await startedQuest(60);
     await ageBattle(active.id, 46);
 
     const snapshot = await service.snapshot();
-    const thresholds = snapshot.realm.gameEvents
+    const indices = snapshot.realm.gameEvents
       .filter((event) => event.reason === "time_pressure")
-      .map((event) => event.threshold)
-      .sort();
-    expect(thresholds).toEqual([0.25, 0.5, 0.75]);
-    expect(snapshot.battle?.playerHealth).toBe(40);
+      .map((event) => event.attackIndex)
+      .sort((a, b) => (a ?? 0) - (b ?? 0));
+    expect(indices).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(snapshot.battle?.status).toBe("active");
+    // El escudo de Roko se consumió antes que su vida.
+    expect(snapshot.battle?.party.roko.shield).toBe(0);
+    expect(snapshot.battle?.party.roko.health).toBeLessThan(100);
+  });
+
+  it("Roko KO no termina la Battle; el Marqués KO sí", async () => {
+    const active = await startedQuest(60);
+    // 120 de daño consumen escudo y vida de Roko sin tocar al Marqués.
+    for (let index = 0; index < 3; index += 1) {
+      await service.recordUnexpectedRequirement(active.id, {
+        reason: "La contraparte exigió un requisito que no estaba en el pacto.",
+        damage: 40,
+      });
+    }
+    const fallen = await service.snapshot();
+    expect(fallen.battle?.party.roko.status).toBe("ko");
+    expect(fallen.battle?.status).toBe("active");
+
+    // Ahora los golpes caen sobre el Marqués, y su caída sí pierde la Battle.
+    for (let index = 0; index < 3; index += 1) {
+      await service.recordUnexpectedRequirement(active.id, {
+        reason: "La contraparte exigió un requisito que no estaba en el pacto.",
+        damage: 40,
+      });
+    }
+    const lost = await service.snapshot();
+    expect(lost.battle?.party.marques.status).toBe("ko");
+    expect(lost.battle?.status).toBe("lost");
+  });
+
+  it("el progreso validado ataca, cura y devuelve escudo; el rechazo no", async () => {
+    const active = await startedQuest(60);
+    await service.recordUnexpectedRequirement(active.id, {
+      reason: "La contraparte exigió un requisito que no estaba en el pacto.",
+      damage: 25,
+    });
+    const hurt = await service.snapshot();
+    expect(hurt.battle?.party.roko.shield).toBe(0);
+    expect(hurt.battle?.party.roko.health).toBe(95);
+
+    await service.submitEvidence(active.id, active.steps[0].id, {
+      summary: "Nada que mostrar todavía.",
+      source: "user_declaration",
+      verdict: "rejected",
+      reasoning: "No llegó ninguna prueba de lo pactado.",
+      impactAwarded: 0,
+    });
+    const afterRejected = await service.snapshot();
+    expect(afterRejected.realm.gameEvents.some((event) => event.type === "party_heal")).toBe(false);
+    expect(afterRejected.realm.gameEvents.some((event) => event.type === "shield_gained")).toBe(false);
+
+    await service.completeStep(active.id, active.steps[0].id, "Primer empuje entregado");
+    const healed = await service.snapshot();
+    expect(healed.battle?.party.roko.shield).toBe(5);
+    expect(healed.battle?.party.roko.health).toBe(100);
+    expect(healed.battle?.enemyHealth).toBe(60);
+    expect(healed.realm.gameEvents.filter((event) => event.type === "party_heal")).toHaveLength(1);
+    expect(healed.realm.gameEvents.filter((event) => event.type === "shield_gained")).toHaveLength(1);
   });
 
   it("el plazo vencido con la Horda viva deja al Marqués en KO y la Battle perdida", async () => {
@@ -138,8 +216,8 @@ describe("Battle con tiempo real", () => {
     await ageBattle(active.id, 61);
 
     const snapshot = await service.snapshot();
-    expect(snapshot.battle?.playerHealth).toBe(0);
-    expect(snapshot.battle?.isPlayerKo).toBe(true);
+    // El plazo vencido con la Horda viva pierde la Battle aunque el grupo viva.
+    expect(snapshot.battle?.clock?.expired).toBe(true);
     expect(snapshot.battle?.status).toBe("lost");
     // Perder no borra nada: el impacto validado sigue en pie.
     expect(snapshot.battle?.progress).toBe(40);

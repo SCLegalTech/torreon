@@ -75,8 +75,13 @@ export class JsonRealmStore {
       quest.amendments ??= [];
       if (quest.battle) {
         quest.battle.attempt ??= 1;
-        quest.battle.appliedThresholds ??= [];
         quest.battle.suspendedMs ??= 0;
+        // Una Battle anterior al grupo tenía cuatro umbrales; ahora hay diez
+        // ventanas. Las ya cobradas se conservan para no volver a golpear.
+        const legacy = (quest.battle as { appliedThresholds?: number[] }).appliedThresholds;
+        quest.battle.appliedAttacks ??= legacy ? legacy.map((threshold) => Math.round(threshold * 10)) : [];
+        // Sin semilla no hay secuencia reproducible: se le da una estable.
+        quest.battle.combatSeed ||= `${quest.id}:${quest.battle.startedAt}`;
       }
       for (const step of quest.steps) {
         step.impactAwarded ??= step.status === "completed" ? step.weight : 0;

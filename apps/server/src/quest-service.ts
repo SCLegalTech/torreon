@@ -22,6 +22,14 @@ import type {
   RewardProfile,
   Saga,
 } from "./domain.js";
+import {
+  applyDamage,
+  HEAL_PER_VALIDATED_IMPACT,
+  healTarget,
+  nextTarget,
+  partyFor,
+  SHIELD_PER_VALIDATED_IMPACT,
+} from "./party.js";
 import { consistencyFor, currentStepFor, hierarchyFor, progressFor, questDetailFor, statsFor } from "./read-models.js";
 import {
   classifyScale,
@@ -51,11 +59,10 @@ export function battleFor(quest: Quest | null, gameEvents: GameEvent[] = [], now
   if (!quest) return null;
   const damage = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
   const attempt = quest.battle?.attempt ?? 1;
-  // Un reintento no arrastra el daño del intento perdido: es otra Battle.
-  const playerDamage = gameEvents
-    .filter((event) => event.questId === quest.id && event.type === "horde_attack" && (event.battleAttempt ?? 1) === attempt)
-    .reduce((sum, event) => sum + event.damage, 0);
-  const playerHealth = Math.max(0, 100 - playerDamage);
+  // El grupo se reconstruye con los eventos de ESTE intento: un reintento no
+  // arrastra el daño del anterior. La vida del Marqués es la del jugador.
+  const party = partyFor(quest, gameEvents);
+  const playerHealth = party.marques.health;
   const enemyHealth = Math.max(0, 100 - damage);
   const completedSteps = quest.steps.filter((step) => step.status === "completed").length;
   return {
@@ -74,6 +81,7 @@ export function battleFor(quest: Quest | null, gameEvents: GameEvent[] = [], now
     durationMinutes: quest.battle?.durationMinutes ?? clampBattleMinutes(quest.durationMinutes),
     status: quest.battle?.status ?? "pending",
     attempt,
+    party,
     // El reloj no corre en el borrador: sólo existe desde que el jugador inicia.
     clock: quest.battle ? battleClock(quest.battle, nowMs) : null,
   };
@@ -160,15 +168,42 @@ export function enforceArtifactRule(
   };
 }
 
-function currentQuest(state: RealmState): Quest | null {
+/**
+ * ONE ENGAGED BATTLE.
+ *
+ * La Battle comprometida es la única con reloj corriendo. Una quest en
+ * `waiting_external` o con la Battle perdida ya no ocupa el frente: el slot
+ * queda libre para otro objetivo, aunque su campaña siga viva.
+ */
+export function engagedQuest(state: RealmState): Quest | null {
+  return state.quests.find((quest) => quest.status === "active" && quest.battle?.status === "active") ?? null;
+}
+
+/** Quest accionable dentro de un conjunto, por prioridad de compromiso. */
+function actionableIn(quests: Quest[]): Quest | null {
   return (
-    state.quests.find((quest) => quest.status === "active") ??
-    state.quests.find((quest) => quest.status === "accepted") ??
-    state.quests.find((quest) => quest.status === "waiting_external") ??
-    state.quests.find((quest) => quest.status === "draft") ??
-    state.quests[0] ??
+    quests.find((quest) => quest.status === "active") ??
+    quests.find((quest) => quest.status === "accepted") ??
+    quests.find((quest) => quest.status === "waiting_external") ??
+    quests.find((quest) => quest.status === "draft") ??
     null
   );
+}
+
+/**
+ * Qué mira el jugador ahora mismo.
+ *
+ * Primero el frente comprometido —si hay reloj corriendo, eso manda—; después
+ * lo accionable de la campaña EN FOCO; y sólo entonces cualquier otra cosa. El
+ * foco no cierra ninguna campaña: sólo decide a dónde apunta la mirada.
+ */
+function currentQuest(state: RealmState): Quest | null {
+  const engaged = engagedQuest(state);
+  if (engaged) return engaged;
+  const focused = state.focusedCampaignId
+    ? actionableIn(state.quests.filter((quest) => quest.campaignId === state.focusedCampaignId))
+    : null;
+  return focused ?? actionableIn(state.quests) ?? state.quests[0] ?? null;
 }
 
 /**
@@ -324,7 +359,7 @@ export class QuestService {
       currentStep: currentStepFor(quest),
       battle,
       stats: statsFor(realm, battle),
-      hierarchy: hierarchyFor(realm, quest),
+      hierarchy: hierarchyFor(realm, quest, engagedQuest(realm)?.id ?? null),
       rewardPreview: quest ? previewRewards(quest) : null,
       consistency: consistencyFor(realm, this.instance, quest),
       projectedMargin: availableBalance + expectedIncome - committedExpenses - reserveTarget,
@@ -343,8 +378,8 @@ export class QuestService {
   async createDraft(plan: QuestPlanInput, parents: { actId?: string } = {}): Promise<Quest> {
     validatePlan(plan);
     const { result } = await this.store.mutate((state) => {
-      const conflicting = state.quests.find((quest) => ["accepted", "active", "waiting_external"].includes(quest.status));
-      if (conflicting) throw new Error(`Ya existe una quest ${conflicting.status}: ${conflicting.title}`);
+      // Varias campañas pueden tener quests listas a la vez. Lo que no puede
+      // duplicarse es la Battle comprometida, y eso lo defiende start().
       const act = parents.actId ? state.acts.find((candidate) => candidate.id === parents.actId) : undefined;
       if (parents.actId && !act) throw new Error(`Acto no encontrado: ${parents.actId}`);
       if (act && act.questIds.length >= MAX_QUESTS_PER_ACT) {
@@ -455,6 +490,10 @@ export class QuestService {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (quest.status !== "accepted") throw new Error("La quest debe estar aceptada antes de comenzar.");
+      const engaged = engagedQuest(state);
+      if (engaged && engaged.id !== questId) {
+        throw new Error(`Ya hay una Battle comprometida: «${engaged.title}». Termínala, o espera a que un bloqueo externo libere el frente, antes de iniciar otra.`);
+      }
       const startedAtMs = Date.now();
       const duration = clampBattleMinutes(durationMinutes ?? quest.durationMinutes);
       quest.status = "active";
@@ -493,6 +532,10 @@ export class QuestService {
       const quest = requireQuest(state, questId);
       if (!quest.battle || quest.battle.status !== "lost") throw new Error("Sólo una Battle perdida puede reintentarse.");
       if (!["active", "waiting_external"].includes(quest.status)) throw new Error("Esta quest ya no tiene frente abierto: no hay Battle que reintentar.");
+      const engaged = engagedQuest(state);
+      if (engaged && engaged.id !== questId) {
+        throw new Error(`Ya hay una Battle comprometida: «${engaged.title}». No puedes sostener dos frentes con reloj a la vez.`);
+      }
       if (quest.steps.every((step) => step.impactAwarded >= step.weight)) throw new Error("Esta quest ya no tiene impacto pendiente.");
       const startedAtMs = Date.now();
       const duration = clampBattleMinutes(durationMinutes ?? quest.battle.durationMinutes);
@@ -579,8 +622,57 @@ export class QuestService {
       let gameEventId: string | null = null;
       if (input.impactAwarded > 0) {
         gameEventId = randomUUID();
-        state.gameEvents.unshift({ id: gameEventId, type: "quest_attack", sourceLifeEventId: lifeEventId, questId, stepId, damage: input.impactAwarded, message: `${step.title}: ataque de ${input.impactAwarded}.`, createdAt: timestamp });
+        // MARQUÉS ATACA: el impacto validado es su flecha.
+        state.gameEvents.unshift({
+          id: gameEventId,
+          type: "quest_attack",
+          sourceLifeEventId: lifeEventId,
+          questId,
+          stepId,
+          damage: input.impactAwarded,
+          target: "marques",
+          battleAttempt: quest.battle?.attempt ?? 1,
+          message: `${step.title}: ataque de ${input.impactAwarded}.`,
+          createdAt: timestamp,
+        });
         state.gameEvents = state.gameEvents.slice(0, 200);
+
+        // CORDERA SOSTIENE y ROKO PROTEGE: sólo el resultado real los mueve.
+        // Una evidencia rechazada no cura ni escuda, por convincente que suene.
+        if (quest.battle?.status === "active") {
+          const party = partyFor(quest, state.gameEvents);
+          const healed = healTarget(party);
+          if (healed) {
+            state.gameEvents.unshift({
+              id: randomUUID(),
+              type: "party_heal",
+              sourceLifeEventId: lifeEventId,
+              questId,
+              stepId,
+              damage: HEAL_PER_VALIDATED_IMPACT,
+              target: healed,
+              battleAttempt: quest.battle.attempt,
+              message: `Cordera sostiene a ${party[healed].name}: +${HEAL_PER_VALIDATED_IMPACT} HP.`,
+              createdAt: timestamp,
+            });
+          }
+          const roko = party.roko;
+          if (roko.health > 0 && roko.shield !== undefined && roko.maxShield !== undefined && roko.shield < roko.maxShield) {
+            state.gameEvents.unshift({
+              id: randomUUID(),
+              type: "shield_gained",
+              sourceLifeEventId: lifeEventId,
+              questId,
+              stepId,
+              damage: SHIELD_PER_VALIDATED_IMPACT,
+              target: "roko",
+              battleAttempt: quest.battle.attempt,
+              message: `Instinto Protector: Roko recupera +${SHIELD_PER_VALIDATED_IMPACT} de escudo.`,
+              createdAt: timestamp,
+            });
+          }
+          state.gameEvents = state.gameEvents.slice(0, 200);
+        }
       }
       addEvent(state, {
         type: "step_completed",
@@ -827,6 +919,11 @@ export class QuestService {
       const lifeEventId = randomUUID();
       state.lifeEvents.unshift({ id: lifeEventId, type: "unexpected_requirement", questId, stepId: input.stepId, reason: input.reason.trim(), createdAt: timestamp });
       const gameEventId = randomUUID();
+      // Un requisito inesperado golpea el frente igual que el reloj: Roko lo
+      // aguanta mientras viva, y su escudo se gasta antes que su vida.
+      const before = partyFor(quest, state.gameEvents);
+      const target = nextTarget(before);
+      const { absorbed } = applyDamage(before, target, input.damage);
       state.gameEvents.unshift({
         id: gameEventId,
         type: "horde_attack",
@@ -836,14 +933,42 @@ export class QuestService {
         damage: input.damage,
         reason: input.reason.trim(),
         battleAttempt: quest.battle?.attempt ?? 1,
-        message: `La Horda contraataca: ${input.reason.trim()} (-${input.damage} HP).`,
+        target,
+        message: `La Horda contraataca sobre ${before[target].name}: ${input.reason.trim()} (-${input.damage}).`,
         createdAt: timestamp,
       });
+      if (absorbed > 0) {
+        state.gameEvents.unshift({
+          id: randomUUID(),
+          type: "shield_absorbed",
+          questId,
+          damage: absorbed,
+          target,
+          battleAttempt: quest.battle?.attempt ?? 1,
+          message: `El escudo de ${before[target].name} absorbe ${absorbed}.`,
+          createdAt: timestamp,
+        });
+      }
+      if (before[target].health === 0) {
+        state.gameEvents.unshift({
+          id: randomUUID(),
+          type: "party_member_ko",
+          questId,
+          damage: 0,
+          target,
+          battleAttempt: quest.battle?.attempt ?? 1,
+          message: `${before[target].name} cae en el frente.`,
+          createdAt: timestamp,
+        });
+      }
       state.lifeEvents = state.lifeEvents.slice(0, 200);
       state.gameEvents = state.gameEvents.slice(0, 200);
-      const attackMessage = state.gameEvents[0].message;
       let battle = battleFor(quest, state.gameEvents)!;
-      addEvent(state, { type: "horde_attack", questId, message: `${attackMessage} El Marqués conserva ${battle.playerHealth} HP.` });
+      addEvent(state, {
+        type: "horde_attack",
+        questId,
+        message: `La Horda golpea a ${before[target].name} (-${input.damage}). El Marqués conserva ${battle.playerHealth} HP.`,
+      });
       if (battle.isPlayerKo && quest.battle?.status === "active") {
         resolveBattle(state, quest, quest.battle, "lost", Date.now());
         battle = battleFor(quest, state.gameEvents)!;
@@ -859,6 +984,25 @@ export class QuestService {
   // Los padres se crean sólo cuando la vida los pide. Una microquest de quince
   // minutos no genera Acto ni Campaña ceremonial: entra directo en batalla.
   // -------------------------------------------------------------------------
+
+  /**
+   * Cambia la campaña EN FOCO. No cierra, no reinicia y no pausa ninguna otra:
+   * las demás siguen `active` y simplemente no atacan al jugador por no estar
+   * mirándolas. Varios frentes de vida no pueden matarlo a la vez.
+   */
+  async focusCampaign(campaignId: string | null): Promise<RealmSnapshot> {
+    await this.store.mutate((state) => {
+      if (campaignId === null) {
+        delete state.focusedCampaignId;
+        return null;
+      }
+      const campaign = state.campaigns.find((candidate) => candidate.id === campaignId);
+      if (!campaign) throw new Error(`Campaña no encontrada: ${campaignId}`);
+      state.focusedCampaignId = campaign.id;
+      return campaign;
+    });
+    return this.snapshot();
+  }
 
   async createSaga(input: { title: string; summary?: string; estimatedActiveMinutes?: number }): Promise<Saga> {
     if (input.title.trim().length < 3) throw new Error("La saga necesita un título.");

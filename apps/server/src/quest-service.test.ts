@@ -354,11 +354,14 @@ describe("QuestService", () => {
       reason: "La entidad exigió un certificado adicional no contemplado.",
       damage: 7,
     });
-    expect(attack.battle.playerHealth).toBe(93);
+    // ROKO PROTEGE: el golpe cae sobre él y su escudo lo absorbe entero.
+    expect(attack.battle.party.roko.shield).toBe(13);
+    expect(attack.battle.party.roko.health).toBe(100);
+    expect(attack.battle.playerHealth).toBe(100);
     expect(attack.battle.enemyHealth).toBe(100);
     const snapshot = await service.snapshot();
     expect(snapshot.realm.lifeEvents[0].type).toBe("unexpected_requirement");
-    expect(snapshot.realm.gameEvents[0].type).toBe("horde_attack");
-    expect(snapshot.battle?.player.health).toBe(93);
+    expect(snapshot.realm.gameEvents.some((event) => event.type === "shield_absorbed")).toBe(true);
+    expect(snapshot.battle?.party.marques.health).toBe(100);
   });
 });

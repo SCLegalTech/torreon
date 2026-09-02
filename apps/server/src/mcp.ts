@@ -71,7 +71,7 @@ export function createMcpServer(service: QuestService): McpServer {
     { name: "torreon", version: "0.1.0" },
     {
       instructions:
-        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito —de cualquier dominio— en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño. La mejor partida es la que el jugador juega sin tocar el teléfono: la evidencia debe entrar por la conversación, no por la pantalla del juego. Si el archivo, la imagen o los datos están cargados en TU conversación, ábrelos, examínalos y regístralos con attest_evidence_artifact declarando qué viste. Si el archivo está en el disco donde corre este MCP, usa attach_evidence_artifact y el servidor comprobará los hechos (existe, tamaño, tipo, hash, extracto). Reutiliza un mismo artefacto entre pasos con reuse_evidence_artifact: no dupliques sus bytes ni su identidad, pero emite un veredicto independiente por paso. Solo después emite el veredicto con submit_quest_evidence citando los artifactIds; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante. Un artefacto que el servidor no pudo comprobar nunca justifica accepted por sí solo. Si la realidad refuta el plan activo, no borres ni reescribas la historia: propón un amendment y aplícalo sólo tras aceptación explícita. Un bloqueo externo sin acción disponible coloca la quest en waiting_external. La horda sólo contraataca mediante record_unexpected_requirement cuando aparece una complicación real y concreta; jamás por silencio ni por inactividad. El único ataque temporal legítimo lo aplica el propio servidor al cruzar el 25%, 50%, 75% y 100% del plazo pactado en start_quest, y una quest en waiting_external suspende esa presión. Antes de crear estructura, usa classify_objective_scale: la escala la fijan los MINUTOS DE TRABAJO ACTIVO, nunca el calendario, y una microquest de quince minutos no necesita Acto ni Campaña.",
+        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito —de cualquier dominio— en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño. La mejor partida es la que el jugador juega sin tocar el teléfono: la evidencia debe entrar por la conversación, no por la pantalla del juego. Si el archivo, la imagen o los datos están cargados en TU conversación, ábrelos, examínalos y regístralos con attest_evidence_artifact declarando qué viste. Si el archivo está en el disco donde corre este MCP, usa attach_evidence_artifact y el servidor comprobará los hechos (existe, tamaño, tipo, hash, extracto). Reutiliza un mismo artefacto entre pasos con reuse_evidence_artifact: no dupliques sus bytes ni su identidad, pero emite un veredicto independiente por paso. Solo después emite el veredicto con submit_quest_evidence citando los artifactIds; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante. Un artefacto que el servidor no pudo comprobar nunca justifica accepted por sí solo. Si la realidad refuta el plan activo, no borres ni reescribas la historia: propón un amendment y aplícalo sólo tras aceptación explícita. Un bloqueo externo sin acción disponible coloca la quest en waiting_external. La horda sólo contraataca mediante record_unexpected_requirement cuando aparece una complicación real y concreta; jamás por silencio ni por inactividad. El único ataque temporal legítimo lo aplica el propio servidor en diez ventanas repartidas por el plazo pactado en start_quest —con críticos derivados de la semilla del combate, nunca de un dado del cliente—, y una quest en waiting_external suspende esa presión. El grupo es Roko (guardia, escudo primero), Marqués (arquero: su caída pierde la Battle) y Cordera (sanadora); sólo el impacto validado cura y devuelve escudo. Puede haber varias campañas activas a la vez, pero UNA sola Battle con reloj: si ya hay una comprometida, otra quest se consulta pero no se inicia. Antes de crear estructura, usa classify_objective_scale: la escala la fijan los MINUTOS DE TRABAJO ACTIVO, nunca el calendario, y una microquest de quince minutos no necesita Acto ni Campaña.",
     },
   );
 
@@ -308,6 +308,25 @@ export function createMcpServer(service: QuestService): McpServer {
     async (args) => {
       const campaign = await service.createCampaign(args);
       return toolResult(`Campaña «${campaign.title}» abierta.`, { campaign });
+    },
+  );
+
+  server.registerTool(
+    "focus_campaign",
+    {
+      title: "Poner una campaña en foco",
+      description:
+        "Cambia la campaña que el jugador mira ahora. NO cierra, no pausa y no reinicia ninguna otra: varias campañas siguen activas a la vez —trabajo, firma, desarrollo, personal— y las que no están en foco no atacan al jugador. Usa null para quitar el foco.",
+      inputSchema: { campaignId: z.string().uuid().nullable().describe("Campaña a enfocar, o null para soltar el foco.") },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ campaignId }) => {
+      const snapshot = await service.focusCampaign(campaignId);
+      const focused = snapshot.realm.campaigns.find((candidate) => candidate.id === snapshot.hierarchy.focusedCampaignId);
+      return toolResult(
+        focused ? `Campaña en foco: «${focused.title}». Las demás siguen activas.` : "El reino quedó sin campaña en foco.",
+        { hierarchy: snapshot.hierarchy, currentQuest: snapshot.currentQuest },
+      );
     },
   );
 

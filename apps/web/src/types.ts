@@ -52,6 +52,25 @@ export interface CharacterStats {
 }
 
 export type BattleStatus = "pending" | "active" | "won" | "lost";
+export type PartyMemberId = "roko" | "marques" | "cordera";
+
+/** Roko protege, Marqués ataca, Cordera sostiene. El Core deriva sus cifras. */
+export interface PartyMemberState {
+  id: PartyMemberId;
+  name: string;
+  role: string;
+  health: number;
+  maxHealth: number;
+  shield?: number;
+  maxShield?: number;
+  status: "active" | "ko";
+}
+
+export interface PartyState {
+  roko: PartyMemberState;
+  marques: PartyMemberState;
+  cordera: PartyMemberState;
+}
 export type ActStatus = "pending" | "active" | "completed" | "abandoned";
 
 /** El reloj lo calcula el servidor; React sólo interpola entre lecturas. */
@@ -136,6 +155,11 @@ export interface SagaView {
 export interface RealmHierarchy {
   sagas: SagaView[];
   campaigns: CampaignView[];
+  /** Varias campañas vivas a la vez; ninguna cierra por perder el foco. */
+  activeCampaignIds: string[];
+  focusedCampaignId: string | null;
+  /** La única Battle con reloj corriendo. */
+  engagedQuestId: string | null;
   currentSagaId: string | null;
   currentCampaignId: string | null;
   currentActId: string | null;
@@ -194,13 +218,25 @@ export interface RealmSnapshot {
     lifeEvents: Array<{ id: string; evidenceId: string; impactAwarded: number }>;
     gameEvents: Array<{
       id: string;
-      type: "quest_attack" | "horde_attack" | "battle_started" | "battle_won" | "battle_lost";
+      type:
+        | "quest_attack"
+        | "horde_attack"
+        | "party_heal"
+        | "shield_gained"
+        | "shield_absorbed"
+        | "party_member_ko"
+        | "battle_started"
+        | "battle_won"
+        | "battle_lost";
       questId: string;
       sourceLifeEventId?: string;
       damage: number;
       message: string;
       reason?: string;
       threshold?: number;
+      attackIndex?: number;
+      target?: PartyMemberId;
+      critical?: boolean;
       battleAttempt?: number;
       createdAt: string;
     }>;
@@ -223,6 +259,7 @@ export interface RealmSnapshot {
     durationMinutes: number;
     status: BattleStatus;
     attempt: number;
+    party: PartyState;
     clock: BattleClock | null;
   };
   hierarchy: RealmHierarchy;

@@ -161,6 +161,23 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
+  // Cambiar el foco no cierra ninguna otra campaña: sólo mueve la mirada.
+  app.post("/api/campaigns/:campaignId/focus", async (req, res, next) => {
+    try {
+      res.json(await service.focusCampaign(req.params.campaignId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/campaigns/focus", async (_req, res, next) => {
+    try {
+      res.json(await service.focusCampaign(null));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/acts", async (req, res, next) => {
     try {
       res.status(201).json({

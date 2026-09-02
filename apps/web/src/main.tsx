@@ -2,7 +2,7 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 import { Sprite } from "./Sprite";
-import type { ActView, BattleClock, BattleStatus, CampaignView, CharacterStats, Quest, RealmSnapshot } from "./types";
+import type { ActView, BattleClock, BattleStatus, CampaignView, CharacterStats, PartyMemberId, PartyState, Quest, RealmSnapshot } from "./types";
 import "./styles.css";
 
 type Screen = "loading" | "realm" | "thinking" | "campaign" | "act" | "quest" | "battle" | "stats";
@@ -458,6 +458,48 @@ function BattleTimer({ clock, status, receivedAt }: { clock: BattleClock; status
   );
 }
 
+/** Destello momentáneo de un miembro del grupo: cura, escudo o crítico recibido. */
+export type PartyFlash = Partial<Record<PartyMemberId, "heal" | "shield" | "critical">>;
+
+const PARTY_SLOTS: PartyMemberId[] = ["roko", "marques", "cordera"];
+
+/**
+ * EL GRUPO.
+ *
+ * ROKO PROTEGE. MARQUÉS ATACA. CORDERA SOSTIENE.
+ *
+ * Las cifras las deriva el Core de los GameEvents; React sólo las dibuja y
+ * enciende un destello cuando algo acaba de pasar. Ninguna barra de aquí puede
+ * moverse sin un evento detrás.
+ */
+function PartyHud({ party, flash }: { party: PartyState; flash: PartyFlash }) {
+  return (
+    <section className="party-hud" aria-label="El grupo del Marqués">
+      {PARTY_SLOTS.map((id) => {
+        const member = party[id];
+        const pulse = flash[id];
+        const badge = member.status === "ko" ? "KO" : pulse ? pulse.toUpperCase() : "ACTIVE";
+        return (
+          <article key={id} className={`party-member ${member.status} ${pulse ?? ""}`}>
+            <header>
+              <strong>{member.name.toUpperCase()}</strong>
+              <em>{badge}</em>
+            </header>
+            <div className="party-bar health"><span style={{ width: `${(member.health / member.maxHealth) * 100}%` }} /></div>
+            <b>HP {member.health}/{member.maxHealth}</b>
+            {member.maxShield ? (
+              <>
+                <div className="party-bar shield"><span style={{ width: `${((member.shield ?? 0) / member.maxShield) * 100}%` }} /></div>
+                <b className="shield-value">SH {member.shield ?? 0}/{member.maxShield}</b>
+              </>
+            ) : null}
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
 function ProgressTrack({ percent, label }: { percent: number; label: string }) {
   return (
     <div className="rune-track" role="img" aria-label={label}>
@@ -501,15 +543,19 @@ function RealmTopBar({ snapshot, onOpenStats }: { snapshot: RealmSnapshot; onOpe
 function CampaignMap({
   snapshot,
   campaign,
+  busy,
   onBack,
   onOpenAct,
   onOpenStats,
+  onFocusCampaign,
 }: {
   snapshot: RealmSnapshot;
   campaign: CampaignView;
+  busy: boolean;
   onBack: () => void;
   onOpenAct: (actId: string) => void;
   onOpenStats: () => void;
+  onFocusCampaign: (campaignId: string) => void;
 }) {
   const quest = snapshot.currentQuest;
   const activeAct = campaign.acts.find((act) => act.id === snapshot.hierarchy.currentActId) ?? campaign.acts.find((act) => !act.locked);
@@ -519,7 +565,8 @@ function CampaignMap({
       <RealmTopBar snapshot={snapshot} onOpenStats={onOpenStats} />
 
       <header className="map-title">
-        <p className="eyebrow">CAMPAÑA ACTIVA</p>
+        {/* EN FOCO, no «la única activa»: las demás siguen vivas y no atacan. */}
+        <p className="eyebrow">CAMPAÑA EN FOCO</p>
         <h1>{campaign.title}</h1>
         {campaign.summary ? <p>{campaign.summary}</p> : null}
       </header>
@@ -575,7 +622,27 @@ function CampaignMap({
       <nav className="map-nav" aria-label="Navegación de campaña">
         <button className="map-nav-button" type="button" onClick={onBack}>VOLVER AL REINO</button>
         <button className="map-nav-button active" type="button" disabled>MAPA DE CAMPAÑA</button>
-        <p className="map-nav-note">Misiones, Tesorería y Cuartel llegarán cuando el reino los sostenga de verdad.</p>
+        {/*
+          MANY CAMPAIGNS: cambiar de frente sólo mueve la mirada. Ninguna de las
+          otras se cierra, se reinicia ni empieza a atacar por dejar el foco.
+        */}
+        <div className="campaign-switch" aria-label="Campañas activas">
+          <span>FRENTES ABIERTOS</span>
+          <div>
+            {snapshot.hierarchy.campaigns.map((candidate) => (
+              <button
+                key={candidate.id}
+                type="button"
+                className={candidate.id === campaign.id ? "current" : ""}
+                disabled={busy || candidate.id === campaign.id}
+                onClick={() => onFocusCampaign(candidate.id)}
+              >
+                {candidate.title}
+                <small>{candidate.completedQuests}/{candidate.totalQuests}</small>
+              </button>
+            ))}
+          </div>
+        </div>
       </nav>
     </main>
   );
@@ -609,7 +676,7 @@ function ActBook({
       <RealmTopBar snapshot={snapshot} onOpenStats={onOpenStats} />
 
       <header className="map-title">
-        <p className="eyebrow">CAMPAÑA ACTIVA</p>
+        <p className="eyebrow">CAMPAÑA EN FOCO</p>
         <h1>{campaign?.title ?? "Sin campaña"}</h1>
       </header>
 
@@ -781,6 +848,8 @@ function QuestOrder({
   const validated = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
   const evidences = Array.from(new Set(quest.steps.map((step) => step.evidence))).slice(0, 6);
   const reward = isCurrent ? snapshot.rewardPreview : null;
+  const engagedQuestId = snapshot.hierarchy?.engagedQuestId ?? null;
+  const engagedElsewhere = Boolean(engagedQuestId) && engagedQuestId !== quest.id;
   const campaign = snapshot.hierarchy?.campaigns.find((candidate) => candidate.id === snapshot.hierarchy.currentCampaignId) ?? null;
 
   return (
@@ -789,7 +858,7 @@ function QuestOrder({
       <RealmTopBar snapshot={snapshot} onOpenStats={onOpenStats} />
 
       <header className="map-title">
-        <p className="eyebrow">CAMPAÑA ACTIVA</p>
+        <p className="eyebrow">CAMPAÑA EN FOCO</p>
         <h1>{campaign?.title ?? quest.campaignTitle}</h1>
       </header>
 
@@ -887,7 +956,10 @@ function QuestOrder({
 
       <div className="order-actions">
         <button className="back-button" type="button" onClick={onBack}>← ATRÁS</button>
-        {!isCurrent ? (
+        {engagedElsewhere ? (
+          // ONE ENGAGED BATTLE: esta orden se consulta, pero no abre un reloj.
+          <button className="expedition-button" type="button" onClick={onEnterBattle}>⚔ VOLVER A BATALLA ACTIVA</button>
+        ) : !isCurrent ? (
           <button className="expedition-button" type="button" disabled>ESTA QUEST ESPERA SU TURNO</button>
         ) : quest.status === "draft" ? (
           <button className="expedition-button" type="button" disabled={busy} onClick={() => onAccept(quest.id)}>✍ ACEPTAR CONTRATO</button>
@@ -909,6 +981,7 @@ function Battle({
   impact,
   incomingDamage,
   receivedAt,
+  partyFlash,
   onBack,
   onOpenStats,
   onOpenOrder,
@@ -924,6 +997,7 @@ function Battle({
   incomingDamage: number | null;
   /** Momento local de la última lectura: ancla la cuenta atrás sin inventar tiempo. */
   receivedAt: number;
+  partyFlash: PartyFlash;
   onBack: () => void;
   onOpenStats: () => void;
   onOpenOrder: () => void;
@@ -999,6 +1073,8 @@ function Battle({
         el escenario dibuja un reloj y un «modo enfoque» que no existen, el
         renderer pone el estado real del frente.
       */}
+      {battle ? <PartyHud party={battle.party} flash={partyFlash} /> : null}
+
       {battle ? (
         <section className="battle-hud glass-panel" aria-label="Estado del frente">
           <div>
@@ -1287,6 +1363,9 @@ function App() {
   const [notice, setNotice] = useState<RealmNotice | null>(null);
   // Ancla local de la última lectura: el reloj se interpola, nunca se inventa.
   const [receivedAt, setReceivedAt] = useState(() => Date.now());
+  const [partyFlash, setPartyFlash] = useState<PartyFlash>({});
+  const seenGameEventIds = useRef(new Set<string>());
+  const gameEventsHydrated = useRef(false);
   const lastProgress = useRef(0);
   const lastPlayerHealth = useRef<number | null>(null);
   const seenEventIds = useRef(new Set<string>());
@@ -1304,6 +1383,26 @@ function App() {
         const damage = lastPlayerHealth.current - next.battle.playerHealth;
         setIncomingDamage(damage);
         window.setTimeout(() => setIncomingDamage(null), 1_300);
+      }
+      // Destellos del grupo: sólo los enciende un GameEvent nuevo del Core.
+      const gameEvents = next.realm.gameEvents ?? [];
+      if (!gameEventsHydrated.current) {
+        gameEvents.forEach((event) => seenGameEventIds.current.add(event.id));
+        gameEventsHydrated.current = true;
+      } else {
+        const fresh = gameEvents.filter((event) => !seenGameEventIds.current.has(event.id));
+        fresh.forEach((event) => seenGameEventIds.current.add(event.id));
+        const flash: PartyFlash = {};
+        for (const event of fresh.slice().reverse()) {
+          if (!event.target) continue;
+          if (event.type === "party_heal") flash[event.target] = "heal";
+          else if (event.type === "shield_gained") flash[event.target] = "shield";
+          else if (event.type === "horde_attack" && event.critical) flash[event.target] = "critical";
+        }
+        if (Object.keys(flash).length > 0) {
+          setPartyFlash(flash);
+          window.setTimeout(() => setPartyFlash({}), 1_600);
+        }
       }
       if (!eventsHydrated.current) {
         next.realm.events.forEach((event) => seenEventIds.current.add(event.id));
@@ -1414,12 +1513,17 @@ function App() {
         <CampaignMap
           snapshot={snapshot}
           campaign={currentCampaign}
+          busy={busy}
           onBack={() => setScreen("realm")}
           onOpenAct={(actId) => {
             setOpenActId(actId);
             setScreen("act");
           }}
           onOpenStats={() => setScreen("stats")}
+          onFocusCampaign={(campaignId) => {
+            setOpenActId(null);
+            void act(() => api(`/api/campaigns/${campaignId}/focus`, { method: "POST" }));
+          }}
         />
       ) : screen === "act" && openAct ? (
         <ActBook
@@ -1456,6 +1560,7 @@ function App() {
           impact={impact}
           incomingDamage={incomingDamage}
           receivedAt={receivedAt}
+          partyFlash={partyFlash}
           onBack={() => setScreen(currentCampaign ? "campaign" : "realm")}
           onOpenStats={() => setScreen("stats")}
           onOpenOrder={() => quest && openOrder(quest.id)}

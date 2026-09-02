@@ -1,6 +1,15 @@
-import type { Quest, RealmSnapshot } from "./types";
+import type { PartyState, Quest, RealmSnapshot } from "./types";
 
 const storageKey = "torreon.realm.v1";
+
+/** Sin servidor no hay combate: el grupo se muestra intacto, no se simula. */
+function idleParty(): PartyState {
+  return {
+    roko: { id: "roko", name: "Roko", role: "Bruiser / Guardia", health: 100, maxHealth: 100, shield: 20, maxShield: 20, status: "active" },
+    marques: { id: "marques", name: "Marqués", role: "Arquero / DPS", health: 100, maxHealth: 100, status: "active" },
+    cordera: { id: "cordera", name: "Cordera", role: "Sanadora / Apoyo", health: 100, maxHealth: 100, status: "active" },
+  };
+}
 
 const makeId = () => crypto.randomUUID();
 
@@ -37,7 +46,18 @@ function freshSnapshot(): RealmSnapshot {
       treasure: { currency: "COP", amount: 400000 },
     },
     battle: null,
-    hierarchy: { sagas: [], campaigns: [], currentSagaId: null, currentCampaignId: null, currentActId: null, currentQuestId: null, standaloneQuests: [] },
+    hierarchy: {
+      sagas: [],
+      campaigns: [],
+      activeCampaignIds: [],
+      focusedCampaignId: null,
+      engagedQuestId: null,
+      currentSagaId: null,
+      currentCampaignId: null,
+      currentActId: null,
+      currentQuestId: null,
+      standaloneQuests: [],
+    },
     rewardPreview: null,
     consistency: { status: "warning", instance: "torreon-offline", realmId, currentQuestId: null },
     projectedMargin: 200000,
@@ -112,6 +132,7 @@ function withBattle(snapshot: RealmSnapshot): RealmSnapshot {
       // Sin servidor no hay autoridad del tiempo: aquí el reloj no corre.
       status: "pending",
       attempt: 1,
+      party: idleParty(),
       clock: null,
     },
   };

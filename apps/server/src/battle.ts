@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { BattleClock, BattleRecord, GameEvent, Quest, RealmState } from "./domain.js";
+import type { BattleClock, BattleRecord, GameEvent, PartyMemberId, Quest, RealmState } from "./domain.js";
+import {
+  applyDamage,
+  HORDE_ATTACK_SLOTS,
+  nextTarget,
+  partyFor,
+  rollHordeAttack,
+  type HordeRoll,
+} from "./party.js";
 import { MAX_BATTLE_MINUTES } from "./scale.js";
 
 /**
@@ -12,22 +20,14 @@ import { MAX_BATTLE_MINUTES } from "./scale.js";
  * Core calcula cuánto tiempo pasó de verdad y cobra lo que faltaba.
  */
 
-/** Cada umbral cruzado cobra su daño una sola vez. 10 + 20 + 30 + 40 = 100. */
-export const TIME_PRESSURE_SCHEDULE: ReadonlyArray<{ threshold: number; damage: number }> = [
-  { threshold: 0.25, damage: 10 },
-  { threshold: 0.5, damage: 20 },
-  { threshold: 0.75, damage: 30 },
-  { threshold: 1, damage: 40 },
-];
-
-export { MAX_BATTLE_MINUTES };
+export { MAX_BATTLE_MINUTES, HORDE_ATTACK_SLOTS };
 
 export function clampBattleMinutes(minutes: number): number {
   if (!Number.isFinite(minutes)) return MAX_BATTLE_MINUTES;
   return Math.min(MAX_BATTLE_MINUTES, Math.max(1, Math.round(minutes)));
 }
 
-export function createBattleRecord(startedAtMs: number, durationMinutes: number, attempt = 1): BattleRecord {
+export function createBattleRecord(startedAtMs: number, durationMinutes: number, attempt = 1, combatSeed = randomUUID()): BattleRecord {
   const duration = clampBattleMinutes(durationMinutes);
   return {
     attempt,
@@ -35,7 +35,8 @@ export function createBattleRecord(startedAtMs: number, durationMinutes: number,
     durationMinutes: duration,
     deadlineAt: new Date(startedAtMs + duration * 60_000).toISOString(),
     status: "active",
-    appliedThresholds: [],
+    combatSeed,
+    appliedAttacks: [],
     suspendedMs: 0,
   };
 }
@@ -64,25 +65,31 @@ export function battleClock(record: BattleRecord, nowMs: number): BattleClock {
   };
 }
 
-/** Umbrales ya cruzados por el reloj que todavía no se han cobrado. */
-export function pendingTimeAttacks(record: BattleRecord, nowMs: number): Array<{ threshold: number; damage: number }> {
+/**
+ * Ventanas de ataque ya vencidas que todavía no se cobraron.
+ *
+ * Diez por Battle, una cada `duración / 10`. El crítico sale de la semilla, no
+ * de un dado nuevo: consultar dos veces devuelve exactamente lo mismo.
+ */
+export function pendingTimeAttacks(record: BattleRecord, nowMs: number): HordeRoll[] {
   if (record.status !== "active") return [];
   const { elapsedRatio } = battleClock(record, nowMs);
-  return TIME_PRESSURE_SCHEDULE.filter(
-    (entry) => elapsedRatio >= entry.threshold && !record.appliedThresholds.includes(entry.threshold),
-  );
+  const rolls: HordeRoll[] = [];
+  for (let index = 1; index <= HORDE_ATTACK_SLOTS; index += 1) {
+    if (elapsedRatio < index / HORDE_ATTACK_SLOTS) break;
+    if (record.appliedAttacks.includes(index)) continue;
+    rolls.push(rollHordeAttack(record.combatSeed, record.attempt, index));
+  }
+  return rolls;
 }
 
 function enemyHealthOf(quest: Quest): number {
   return Math.max(0, 100 - quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0));
 }
 
+/** La derrota del grupo es la caída del Marqués, no la del frente entero. */
 function playerHealthOf(quest: Quest, gameEvents: GameEvent[]): number {
-  const attempt = quest.battle?.attempt ?? 1;
-  const damage = gameEvents
-    .filter((event) => event.questId === quest.id && event.type === "horde_attack" && (event.battleAttempt ?? 1) === attempt)
-    .reduce((sum, event) => sum + event.damage, 0);
-  return Math.max(0, 100 - damage);
+  return partyFor(quest, gameEvents).marques.health;
 }
 
 /**
@@ -110,7 +117,7 @@ function syncSuspension(quest: Quest, record: BattleRecord, nowMs: number): bool
 
 export interface BattleTickOutcome {
   changed: boolean;
-  attacks: Array<{ questId: string; threshold: number; damage: number }>;
+  attacks: Array<{ questId: string; attackIndex: number; damage: number; target: PartyMemberId; critical: boolean }>;
   resolved: Array<{ questId: string; status: "won" | "lost" }>;
 }
 
@@ -141,15 +148,19 @@ export function advanceBattles(state: RealmState, nowMs: number): BattleTickOutc
     }
 
     for (const attack of pendingTimeAttacks(record, nowMs)) {
-      record.appliedThresholds.push(attack.threshold);
+      record.appliedAttacks.push(attack.attackIndex);
       const timestamp = new Date(nowMs).toISOString();
+      // El objetivo se decide sobre el grupo tal como está EN ESTE golpe.
+      const party = partyFor(quest, state.gameEvents);
+      const target = nextTarget(party);
+      const before = { ...party[target] };
+      const { absorbed } = applyDamage(party, target, attack.damage);
       const lifeEventId = randomUUID();
-      const reason = "time_pressure";
       state.lifeEvents.unshift({
         id: lifeEventId,
         type: "unexpected_requirement",
         questId: quest.id,
-        reason: `El tiempo pactado avanzó hasta el ${Math.round(attack.threshold * 100)}% sin cerrar la campaña.`,
+        reason: `El tiempo pactado avanzó a la ventana ${attack.attackIndex} de ${HORDE_ATTACK_SLOTS} sin cerrar la campaña.`,
         createdAt: timestamp,
       });
       state.gameEvents.unshift({
@@ -158,27 +169,56 @@ export function advanceBattles(state: RealmState, nowMs: number): BattleTickOutc
         sourceLifeEventId: lifeEventId,
         questId: quest.id,
         damage: attack.damage,
-        reason,
-        threshold: attack.threshold,
+        reason: "time_pressure",
+        attackIndex: attack.attackIndex,
+        target,
+        critical: attack.critical,
         battleAttempt: record.attempt,
-        message: `La Horda aprovecha el reloj (${Math.round(attack.threshold * 100)}%): -${attack.damage} HP.`,
+        message: `La Horda golpea a ${party[target].name}${attack.critical ? " con un CRÍTICO" : ""}: -${attack.damage}.`,
         createdAt: timestamp,
       });
+      // Narrativa para el renderer: el escudo no es una fuente de verdad aparte.
+      if (absorbed > 0) {
+        state.gameEvents.unshift({
+          id: randomUUID(),
+          type: "shield_absorbed",
+          questId: quest.id,
+          damage: absorbed,
+          target,
+          attackIndex: attack.attackIndex,
+          battleAttempt: record.attempt,
+          message: `El escudo de ${party[target].name} absorbe ${absorbed}.`,
+          createdAt: timestamp,
+        });
+      }
+      if (before.health > 0 && party[target].health === 0) {
+        state.gameEvents.unshift({
+          id: randomUUID(),
+          type: "party_member_ko",
+          questId: quest.id,
+          damage: 0,
+          target,
+          battleAttempt: record.attempt,
+          message: `${party[target].name} cae en el frente.`,
+          createdAt: timestamp,
+        });
+      }
       state.lifeEvents = state.lifeEvents.slice(0, 200);
       state.gameEvents = state.gameEvents.slice(0, 200);
       state.events.unshift({
         id: randomUUID(),
         type: "horde_attack",
         questId: quest.id,
-        message: `El reloj llegó al ${Math.round(attack.threshold * 100)}%: la Horda golpea por ${attack.damage} HP.`,
+        message: `Ventana ${attack.attackIndex}/${HORDE_ATTACK_SLOTS}: la Horda golpea a ${party[target].name} por ${attack.damage}${attack.critical ? " (CRÍTICO)" : ""}.`,
         createdAt: timestamp,
       });
       state.events = state.events.slice(0, 100);
       outcome.changed = true;
-      outcome.attacks.push({ questId: quest.id, threshold: attack.threshold, damage: attack.damage });
+      outcome.attacks.push({ questId: quest.id, attackIndex: attack.attackIndex, damage: attack.damage, target, critical: attack.critical });
     }
 
     const clock = battleClock(record, nowMs);
+    // Sólo la caída del Marqués pierde la Battle: Roko y Cordera KO siguen en pie.
     const playerDown = playerHealthOf(quest, state.gameEvents) === 0;
     if (playerDown || (clock.expired && enemyHealthOf(quest) > 0)) {
       resolve(state, quest, record, "lost", nowMs);

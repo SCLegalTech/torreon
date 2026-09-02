@@ -6,6 +6,7 @@ export type EvidenceVerdict = "rejected" | "partial" | "accepted";
 export type EvidenceKind = "file" | "link" | "screenshot" | "photo" | "number" | "text" | "declaration";
 export type ArtifactKind = "file" | "link" | "text";
 export type BattleStatus = "active" | "won" | "lost";
+export type PartyMemberId = "roko" | "marques" | "cordera";
 export type ActStatus = "pending" | "active" | "completed" | "abandoned";
 
 export interface QuestStepInput {
@@ -141,8 +142,13 @@ export interface BattleRecord {
   durationMinutes: number;
   deadlineAt: string;
   status: BattleStatus;
-  /** Umbrales temporales ya cobrados. Recargar no puede repetir el daño. */
-  appliedThresholds: number[];
+  /**
+   * Semilla del combate. El crítico NO lo tira el renderer: se deriva de
+   * `combatSeed + intento + índice`, así que reabrir la app no vuelve a tirar.
+   */
+  combatSeed: string;
+  /** Ventanas de ataque ya cobradas (1..10). Recargar no repite el daño. */
+  appliedAttacks: number[];
   /** Presión suspendida por un bloqueo externo real, en milisegundos. */
   suspendedMs: number;
   suspendedAt?: string;
@@ -245,7 +251,16 @@ export interface LifeEvent {
  */
 export interface GameEvent {
   id: string;
-  type: "quest_attack" | "horde_attack" | "battle_started" | "battle_won" | "battle_lost";
+  type:
+    | "quest_attack"
+    | "horde_attack"
+    | "party_heal"
+    | "shield_gained"
+    | "shield_absorbed"
+    | "party_member_ko"
+    | "battle_started"
+    | "battle_won"
+    | "battle_lost";
   /** Los eventos de ciclo de vida de la Battle no nacen de un LifeEvent. */
   sourceLifeEventId?: string;
   questId: string;
@@ -253,8 +268,14 @@ export interface GameEvent {
   damage: number;
   /** Por qué atacó la Horda: `time_pressure` es el reloj, no la inactividad. */
   reason?: string;
-  /** Umbral temporal cobrado. `questId + threshold` se aplica una sola vez. */
+  /** Umbral temporal cobrado (histórico). */
   threshold?: number;
+  /** Ventana de ataque 1..10. `questId + attackIndex` se aplica una sola vez. */
+  attackIndex?: number;
+  /** A quién golpea, cura o escuda este evento. */
+  target?: PartyMemberId;
+  /** El crítico no acorta el reloj: acorta el margen de supervivencia. */
+  critical?: boolean;
   /** Intento de Battle al que pertenece: un reintento no arrastra daño viejo. */
   battleAttempt?: number;
   message: string;
@@ -327,6 +348,14 @@ export interface RealmState {
   };
   character: CharacterState;
   financial: FinancialState;
+  /**
+   * MANY CAMPAIGNS. ONE ENGAGED BATTLE.
+   *
+   * El jugador sostiene varios frentes de vida a la vez —trabajo, firma,
+   * desarrollo, personal—; la campaña en foco es la que mira, no la única viva.
+   * Cambiar el foco no cierra ni reinicia ninguna otra.
+   */
+  focusedCampaignId?: string;
   sagas: Saga[];
   campaigns: Campaign[];
   acts: Act[];
@@ -337,6 +366,33 @@ export interface RealmState {
   lifeEvents: LifeEvent[];
   gameEvents: GameEvent[];
   updatedAt: string;
+}
+
+/**
+ * El grupo que sostiene el frente.
+ *
+ *   Roko    — Bruiser/Guardia. Escudo primero, vida después. No es tanque puro.
+ *   Marqués — Arquero/DPS. El impacto validado se representa como ataque suyo.
+ *   Cordera — Sanadora/Apoyo. El progreso real validado produce curación.
+ *
+ * No se guarda: se deriva de los GameEvents de la Battle en curso.
+ */
+export interface PartyMemberState {
+  id: PartyMemberId;
+  name: string;
+  role: string;
+  health: number;
+  maxHealth: number;
+  /** Sólo Roko lo tiene. */
+  shield?: number;
+  maxShield?: number;
+  status: "active" | "ko";
+}
+
+export interface PartyState {
+  roko: PartyMemberState;
+  marques: PartyMemberState;
+  cordera: PartyMemberState;
 }
 
 /**
@@ -378,6 +434,8 @@ export interface BattleState {
   /** `active` mientras corre; `won` con la Horda muerta; `lost` con el reloj vencido. */
   status: BattleStatus | "pending";
   attempt: number;
+  /** Roko, Marqués y Cordera. `playerHealth` es la vida del Marqués. */
+  party: PartyState;
   /** Null hasta que el jugador inicia: el reloj no corre en el borrador. */
   clock: BattleClock | null;
 }
@@ -523,6 +581,12 @@ export interface SagaView {
 export interface RealmHierarchy {
   sagas: SagaView[];
   campaigns: CampaignView[];
+  /** Todas las campañas vivas a la vez. Ninguna cierra por perder el foco. */
+  activeCampaignIds: string[];
+  /** La que el jugador mira ahora mismo. */
+  focusedCampaignId: string | null;
+  /** La ÚNICA Battle con reloj corriendo. Null si el frente está libre. */
+  engagedQuestId: string | null;
   currentSagaId: string | null;
   currentCampaignId: string | null;
   currentActId: string | null;

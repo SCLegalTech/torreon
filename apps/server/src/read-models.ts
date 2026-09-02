@@ -102,12 +102,14 @@ export function statsFor(state: RealmState, battle: BattleState | null): Charact
 export function consistencyFor(state: RealmState, instance: string, currentQuest: Quest | null): RealmConsistency {
   const issues: RealmConsistency["issues"] = [];
 
-  const activeQuests = state.quests.filter((quest) => quest.status === "active");
-  if (activeQuests.length > 1) {
+  // Varias campañas y varias quests listas son legítimas; lo que no puede
+  // duplicarse es el frente comprometido, el único con reloj corriendo.
+  const engagedQuests = state.quests.filter((quest) => quest.status === "active" && quest.battle?.status === "active");
+  if (engagedQuests.length > 1) {
     issues.push({
       code: "MULTIPLE_ACTIVE_QUESTS",
-      entityId: activeQuests[0].id,
-      message: `Hay ${activeQuests.length} quests activas y el MVP asume una sola.`,
+      entityId: engagedQuests[0].id,
+      message: `Hay ${engagedQuests.length} Battles con reloj corriendo y sólo puede haber una.`,
     });
   }
 
@@ -144,7 +146,7 @@ export function consistencyFor(state: RealmState, instance: string, currentQuest
     status: issues.some((issue) => issue.code === "MULTIPLE_ACTIVE_QUESTS") ? "desynced" : issues.length > 0 ? "warning" : "ok",
     instance,
     realmId: state.realmId,
-    activeQuestCount: activeQuests.length,
+    activeQuestCount: engagedQuests.length,
     currentQuestId: currentQuest?.id ?? null,
     issues,
   };
@@ -312,7 +314,7 @@ function sagaViewFor(state: RealmState, campaigns: CampaignView[]): (saga: Realm
   };
 }
 
-export function hierarchyFor(state: RealmState, currentQuest: Quest | null): RealmHierarchy {
+export function hierarchyFor(state: RealmState, currentQuest: Quest | null, engagedQuestId: string | null = null): RealmHierarchy {
   const campaigns = state.campaigns.map((campaign) => campaignViewFor(state, campaign));
   const sagas = state.sagas.map(sagaViewFor(state, campaigns));
 
@@ -330,6 +332,10 @@ export function hierarchyFor(state: RealmState, currentQuest: Quest | null): Rea
 
   return {
     sagas,
+    // MANY CAMPAIGNS: todas siguen vivas aunque el jugador mire sólo una.
+    activeCampaignIds: state.campaigns.filter((candidate) => candidate.status === "active").map((candidate) => candidate.id),
+    focusedCampaignId: state.focusedCampaignId ?? campaign?.id ?? null,
+    engagedQuestId,
     campaigns,
     currentSagaId: campaign?.sagaId ?? currentQuest?.sagaId ?? null,
     currentCampaignId: campaign?.id ?? null,
