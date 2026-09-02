@@ -526,7 +526,7 @@ function EnemyRow({ enemies }: { enemies: EnemyCombatant[] }) {
   return (
     <section className="enemy-row" aria-label="La Horda">
       {enemies.map((enemy) => (
-        <article key={enemy.id} className={`enemy-card ${enemy.status} ${enemy.position}`} title={enemy.abilityName ?? enemy.name}>
+        <article key={enemy.id} className={`enemy-card is-${enemy.status} ${enemy.position}`} title={enemy.abilityName ?? enemy.name}>
           <header>
             <strong>{enemy.name}</strong>
             <em>{enemy.status === "ko" ? "KO" : ROLE_LABELS[enemy.role] ?? enemy.role}</em>
@@ -565,7 +565,7 @@ function PartyHud({
         const pulse = flash[id];
         const badge = member.status === "ko" ? "KO" : pulse ? pulse.toUpperCase() : "ACTIVE";
         return (
-          <article key={id} className={`party-member ${member.status} ${pulse ?? ""}`}>
+          <article key={id} className={`party-member is-${member.status} ${pulse ?? ""}`}>
             <header>
               <strong>{member.name.toUpperCase()}</strong>
               <em>{badge}</em>
@@ -1355,7 +1355,7 @@ function Battle({
             </p>
             <ul className="defeat-party">
               {(["roko", "marques", "cordera"] as const).map((id) => (
-                <li key={id} className={battle.party[id].status}>
+                <li key={id} className={`is-${battle.party[id].status}`}>
                   <span>{battle.party[id].name}</span>
                   <b>{battle.party[id].health === 0 ? "KO" : `${battle.party[id].health} HP`}</b>
                 </li>

@@ -51,7 +51,7 @@ export interface CharacterStats {
   treasure: { currency: "COP"; amount: number };
 }
 
-export type BattleStatus = "pending" | "active" | "awaiting_replan" | "awaiting_recovery" | "won";
+export type BattleStatus = "pending" | "active" | "suspended_external" | "awaiting_replan" | "awaiting_recovery" | "won";
 export type CompanionId = "opus" | "codex" | "claude" | "gemini";
 export type InventoryItemId = "revive_tonic" | "health_potion";
 
@@ -137,7 +137,7 @@ export interface BattleRecord {
   startedAt: string;
   durationMinutes: number;
   deadlineAt: string;
-  status: "active" | "awaiting_replan" | "awaiting_recovery" | "won";
+  status: "active" | "suspended_external" | "awaiting_replan" | "awaiting_recovery" | "won";
 }
 
 export interface QuestNode {

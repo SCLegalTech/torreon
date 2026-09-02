@@ -994,8 +994,8 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 .party-member b { display: block; margin-top: .12rem; color: #b8ab93; font-family: ui-monospace, "Cascadia Mono", monospace; font-size: clamp(.28rem,.48vw,.42rem); }
 .party-member .shield-value { color: #8fd0ff; }
 /* Roko caído deja de proteger; Cordera caída deja de curar. La Battle sigue. */
-.party-member.ko { border-color: #6b2a25; opacity: .6; filter: grayscale(.55); }
-.party-member.ko em { color: #ff9d84; }
+.party-member.is-ko { border-color: #6b2a25; opacity: .6; filter: grayscale(.55); }
+.party-member.is-ko em { color: #ff9d84; }
 .party-member.heal { border-color: #2fbe86; box-shadow: 0 0 18px #36e9a955; }
 .party-member.heal em { color: #8dffc0; }
 .party-member.shield { border-color: #4b86a2; box-shadow: 0 0 18px #4bb6ff55; }
@@ -1066,27 +1066,34 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
    Los ocho combatientes deben verse a la vez en el teléfono: nada de
    carruseles que escondan a quien está a punto de caer.
    ===================================================================== */
+/* A la izquierda: el panel de órdenes ocupa la derecha y las taparía. */
 .enemy-row {
   position: absolute;
   z-index: 6;
-  top: 19.5%;
+  /* Bajo la barra de la Horda, su sitio natural. Con las órdenes abiertas
+     queda detrás de ellas a propósito: entonces el jugador mira los pasos. */
+  top: 20.5%;
   right: 1%;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: .4rem;
-  width: min(37%, 560px);
+  gap: .35rem;
+  width: min(36%, 545px);
 }
-.enemy-card { padding: .3rem .4rem; border: 1px solid #68406e; background: #0a070c; box-shadow: 0 8px 20px #000a; }
-.enemy-card header { display: flex; justify-content: space-between; align-items: baseline; gap: .2rem; }
+.enemy-card { display: grid; align-content: start; min-width: 0; min-height: 46px; padding: .3rem .4rem; overflow: hidden; border: 1px solid #68406e; background: #0a070c; box-shadow: 0 8px 20px #000a; }
+.enemy-card header { display: grid; gap: .05rem; min-width: 0; }
 .enemy-card strong { overflow: hidden; color: #e7c2ff; font-size: clamp(.3rem,.52vw,.46rem); letter-spacing: .03em; text-overflow: ellipsis; white-space: nowrap; }
-.enemy-card em { color: #b085d6; font-size: clamp(.26rem,.42vw,.36rem); font-style: normal; font-weight: 900; }
+.enemy-card em { overflow: hidden; color: #b085d6; font-size: clamp(.26rem,.42vw,.36rem); font-style: normal; font-weight: 900; text-overflow: ellipsis; white-space: nowrap; }
 .enemy-bar { height: 5px; margin-top: .18rem; overflow: hidden; border: 1px solid #1c0512; background: #070203; }
 .enemy-bar span { display: block; height: 100%; background: linear-gradient(90deg,#6e0505,#d52d21); transition: width .6s ease; }
 .enemy-card b { display: block; margin-top: .1rem; color: #b8ab93; font-family: ui-monospace, "Cascadia Mono", monospace; font-size: clamp(.26rem,.44vw,.38rem); }
-.enemy-card.ko { border-color: #3a2a3f; opacity: .45; filter: grayscale(.7); }
+.enemy-card.is-ko { border-color: #3a2a3f; background: #060406; }
+.enemy-card.is-ko strong { color: #7c718a; }
+.enemy-card.is-ko em { color: #6a5f78; }
+.enemy-card.is-ko b { color: #6a6257; }
+.enemy-card.is-ko .enemy-bar span { background: #3a2a3f; }
 .enemy-card.back { border-style: dashed; }
 
-.party-hud { grid-template-columns: repeat(4, minmax(0, 1fr)); width: min(46%, 700px); }
+.party-hud { grid-template-columns: repeat(4, minmax(0, 1fr)); width: min(52%, 780px); }
 .party-member.agent { border-color: #4b86a2; background: #060a0c; }
 .party-member.agent.undeployed { border-style: dashed; opacity: .72; }
 .party-member.agent.assist_validated { border-color: #2fbe86; box-shadow: 0 0 18px #36e9a955; }
@@ -1139,15 +1146,15 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 .defeat-party li { padding: .25rem; border: 1px solid #5c4a2a; background: rgba(10,8,7,.7); }
 .defeat-party span { display: block; color: #b8ab93; font-size: clamp(.3rem,.5vw,.42rem); }
 .defeat-party b { color: #f3d79a; font-family: ui-monospace, "Cascadia Mono", monospace; font-size: clamp(.36rem,.62vw,.54rem); }
-.defeat-party li.ko { border-color: #6b2a25; }
-.defeat-party li.ko b { color: #ff9d84; }
+.defeat-party li.is-ko { border-color: #6b2a25; }
+.defeat-party li.is-ko b { color: #ff9d84; }
 .defeat-bag { margin: 0 0 .6rem !important; color: #8fd0ff !important; font-size: clamp(.3rem,.52vw,.44rem) !important; }
 .defeat-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .defeat-actions .ghost-button { width: 100%; min-height: 42px; }
 .battle-defeat small { display: block; margin-top: .55rem; color: #9a8d78; font-size: clamp(.3rem,.5vw,.42rem); }
 
 @media (orientation: portrait) {
-  .enemy-row { top: 26%; right: 3%; width: 94%; }
+  .enemy-row { top: 34%; right: 3%; width: 94%; }
   .party-hud { width: 94%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .inventory-drawer { right: 3%; bottom: 30%; width: 94%; }
   .defeat-actions { grid-template-columns: 1fr; }

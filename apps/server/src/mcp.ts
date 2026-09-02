@@ -71,7 +71,7 @@ export function createMcpServer(service: QuestService): McpServer {
     { name: "torreon", version: "0.1.0" },
     {
       instructions:
-        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito —de cualquier dominio— en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño. La mejor partida es la que el jugador juega sin tocar el teléfono: la evidencia debe entrar por la conversación, no por la pantalla del juego. Si el archivo, la imagen o los datos están cargados en TU conversación, ábrelos, examínalos y regístralos con attest_evidence_artifact declarando qué viste. Si el archivo está en el disco donde corre este MCP, usa attach_evidence_artifact y el servidor comprobará los hechos (existe, tamaño, tipo, hash, extracto). Reutiliza un mismo artefacto entre pasos con reuse_evidence_artifact: no dupliques sus bytes ni su identidad, pero emite un veredicto independiente por paso. Solo después emite el veredicto con submit_quest_evidence citando los artifactIds; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante. Un artefacto que el servidor no pudo comprobar nunca justifica accepted por sí solo. Si la realidad refuta el plan activo, no borres ni reescribas la historia: propón un amendment y aplícalo sólo tras aceptación explícita. Un bloqueo externo sin acción disponible coloca la quest en waiting_external. La horda sólo contraataca mediante record_unexpected_requirement cuando aparece una complicación real y concreta; jamás por silencio ni por inactividad. El único ataque temporal legítimo lo aplica el propio servidor en diez ventanas repartidas por el plazo pactado en start_quest —con críticos derivados de la semilla del combate, nunca de un dado del cliente—, y una quest en waiting_external suspende esa presión. El grupo es Roko (guardia, escudo primero), Marqués (arquero: su caída cierra el intento) y Cordera (sanadora), más un cuarto slot que sólo ocupa un compañero que ejecutó algo real. La Horda son CUATRO enemigos con rostro: un arquero puede saltarse a Roko y un asesino puede caer sobre Cordera. Neutralizar a los cuatro detiene la presión pero NO es victoria: la victoria la firma el contrato validado al 100%. Puede haber varias campañas activas a la vez, pero UNA sola Battle con reloj: si ya hay una comprometida, otra quest se consulta pero no se inicia. Antes de crear estructura, usa classify_objective_scale: la escala la fijan los MINUTOS DE TRABAJO ACTIVO, nunca el calendario, y una microquest de quince minutos no necesita Acto ni Campaña.",
+        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito —de cualquier dominio— en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño. La mejor partida es la que el jugador juega sin tocar el teléfono: la evidencia debe entrar por la conversación, no por la pantalla del juego. Si el archivo, la imagen o los datos están cargados en TU conversación, ábrelos, examínalos y regístralos con attest_evidence_artifact declarando qué viste. Si el archivo está en el disco donde corre este MCP, usa attach_evidence_artifact y el servidor comprobará los hechos (existe, tamaño, tipo, hash, extracto). Reutiliza un mismo artefacto entre pasos con reuse_evidence_artifact: no dupliques sus bytes ni su identidad, pero emite un veredicto independiente por paso. Solo después emite el veredicto con submit_quest_evidence citando los artifactIds; no existe ningún atajo para cerrar un paso sin veredicto razonado; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante. Un artefacto que el servidor no pudo comprobar nunca justifica accepted por sí solo. Si la realidad refuta el plan activo, no borres ni reescribas la historia: propón un amendment y aplícalo sólo tras aceptación explícita. Un bloqueo externo sin acción disponible coloca la quest en waiting_external. La horda sólo contraataca mediante record_unexpected_requirement cuando aparece una complicación real y concreta; jamás por silencio ni por inactividad. El único ataque temporal legítimo lo aplica el propio servidor en diez ventanas repartidas por el plazo pactado en start_quest —con críticos derivados de la semilla del combate, nunca de un dado del cliente—, y una quest en waiting_external suspende esa presión. El grupo es Roko (guardia, escudo primero), Marqués (arquero: su caída cierra el intento) y Cordera (sanadora), más un cuarto slot que sólo ocupa un compañero que ejecutó algo real. La Horda son CUATRO enemigos con rostro: un arquero puede saltarse a Roko y un asesino puede caer sobre Cordera. Neutralizar a los cuatro detiene la presión pero NO es victoria: la victoria la firma el contrato validado al 100%. Puede haber varias campañas activas a la vez, pero UNA sola Battle con reloj: si ya hay una comprometida, otra quest se consulta pero no se inicia. Antes de crear estructura, usa classify_objective_scale: la escala la fijan los MINUTOS DE TRABAJO ACTIVO, nunca el calendario, y una microquest de quince minutos no necesita Acto ni Campaña.",
     },
   );
 
@@ -201,7 +201,7 @@ export function createMcpServer(service: QuestService): McpServer {
     {
       title: "Iniciar la batalla",
       description:
-        "Inicia una quest previamente aceptada cuando el usuario quiere comenzar la sesión de trabajo. AQUÍ arranca el reloj: no al redactar el borrador ni al aceptar el contrato. Desde este momento el servidor es la autoridad del tiempo y la Horda golpea al cruzar el 25%, 50%, 75% y 100% del plazo.",
+        "Inicia una quest previamente aceptada cuando el usuario quiere comenzar la sesión de trabajo. AQUÍ arranca el reloj: no al redactar el borrador ni al aceptar el contrato. Desde este momento el servidor es la autoridad del tiempo. Al iniciar se genera, con una semilla persistida, una formación de CUATRO enemigos tomada de un pool de arquetipos, cuyos máximos suman los 100 puntos del contrato. La presión es CONTINUA: cada enemigo vivo aporta su ritmo por minuto y el Core lo liquida por ventanas de un minuto, eligiendo objetivo según el arquetipo —el Arquero del Vacío dispara por encima de Roko, el Acechador caza al más herido, el Rompeescudos gasta escudo al doble—, con ventanas críticas derivadas de la misma semilla. Matar a un enemigo le quita su presión y su pasiva al instante.",
       inputSchema: {
         questId: z.string().uuid(),
         durationMinutes: z
@@ -218,7 +218,7 @@ export function createMcpServer(service: QuestService): McpServer {
       const quest = await service.start(questId, durationMinutes);
       const battle = (await service.snapshot()).battle;
       return toolResult(
-        `La batalla «${quest.title}» comenzó. El plazo pactado es de ${battle?.durationMinutes ?? quest.durationMinutes} minutos y termina en ${quest.battle?.deadlineAt}.`,
+        `La batalla «${quest.title}» comenzó: ${battle?.durationMinutes ?? quest.durationMinutes} min hasta ${quest.battle?.deadlineAt}, contra ${battle?.enemies.map((enemy) => `${enemy.name} (${enemy.maxHealth})`).join(", ")}.`,
         { quest, battle },
       );
     },
@@ -298,7 +298,10 @@ export function createMcpServer(service: QuestService): McpServer {
     },
     async ({ questId, reason, newDurationMinutes }) => {
       const battle = await service.proposeBattleRecontract(questId, { reason, newDurationMinutes });
-      return toolResult(`Nuevo pacto temporal propuesto: ${newDurationMinutes} min. Falta la aceptación del jugador.`, { battle });
+      return toolResult(
+        `Nuevo pacto temporal propuesto: ${newDurationMinutes} min (id ${battle.pendingRecontract?.id}). Falta la aceptación del jugador, y hay que sellarlo con ese id.`,
+        { battle },
+      );
     },
   );
 
@@ -306,12 +309,17 @@ export function createMcpServer(service: QuestService): McpServer {
     "accept_battle_recontract",
     {
       title: "Aceptar el nuevo pacto temporal",
-      description: "Aplica el nuevo plazo tras aceptación explícita del jugador. Abre un intento nuevo sobre el MISMO campo de batalla.",
-      inputSchema: { questId: z.string().uuid(), userAccepted: z.literal(true) },
+      description:
+        "Aplica el nuevo plazo tras aceptación explícita del jugador y abre un intento nuevo sobre el MISMO campo de batalla. Exige el `recontractId` de la propuesta concreta: si propusiste 30 min y luego 15, hay que saber cuál se está sellando. El id viene en `battle.pendingRecontract.id`.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        recontractId: z.string().uuid().describe("Id de la propuesta que el jugador está aceptando."),
+        userAccepted: z.literal(true),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async ({ questId, userAccepted }) => {
-      const battle = await service.acceptBattleRecontract(questId, userAccepted);
+    async ({ questId, recontractId, userAccepted }) => {
+      const battle = await service.acceptBattleRecontract(questId, recontractId, userAccepted);
       return toolResult(`El frente sigue igual con ${battle.durationMinutes} min nuevos (intento ${battle.attempt}).`, { battle });
     },
   );
@@ -523,6 +531,27 @@ export function createMcpServer(service: QuestService): McpServer {
   );
 
   server.registerTool(
+    "focus_campaign",
+    {
+      title: "Poner una campaña en foco",
+      description:
+        "Cambia la campaña que el jugador mira ahora. Sólo mueve `focusedCampaignId`: NO desactiva ninguna otra campaña, NO inicia ninguna Battle y NO toca `engagedQuestId`. Varias campañas siguen activas a la vez —trabajo, firma, desarrollo, personal— y las que no están en foco no atacan al jugador. Es idempotente. Usa null para soltar el foco.",
+      inputSchema: { campaignId: z.string().uuid().nullable().describe("Campaña a enfocar, o null para soltar el foco.") },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ campaignId }) => {
+      const snapshot = await service.focusCampaign(campaignId);
+      const focused = snapshot.realm.campaigns.find((candidate) => candidate.id === snapshot.hierarchy.focusedCampaignId);
+      return toolResult(
+        focused
+          ? `Campaña en foco: «${focused.title}». Las demás siguen activas y no se inició ninguna batalla.`
+          : "El reino quedó sin campaña en foco.",
+        { hierarchy: snapshot.hierarchy, currentQuest: snapshot.currentQuest },
+      );
+    },
+  );
+
+  server.registerTool(
     "create_act",
     {
       title: "Abrir un acto",
@@ -600,26 +629,13 @@ export function createMcpServer(service: QuestService): McpServer {
     },
   );
 
-  server.registerTool(
-    "complete_quest_step",
-    {
-      title: "Completar un paso",
-      description: "Compatibilidad del MVP: acepta toda la evidencia restante de un paso. Prefiere submit_quest_evidence para evaluaciones nuevas.",
-      inputSchema: {
-        questId: z.string().uuid(),
-        stepId: z.string().uuid(),
-        evidenceNote: z.string().min(3).max(1000).describe("Resumen concreto de la evidencia observada o aportada."),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    },
-    async ({ questId, stepId, evidenceNote }) => {
-      const result = await service.completeStep(questId, stepId, evidenceNote);
-      const message = result.battle.isKo
-        ? `KO. «${result.quest.title}» fue completada.`
-        : `Impacto confirmado. La horda conserva ${result.battle.enemyHealth} puntos de vida.`;
-      return toolResult(message, result);
-    },
-  );
+  // `complete_quest_step` YA NO SE EXPONE.
+  //
+  // Concedía todo el impacto restante de un paso sin veredicto razonado, y eso
+  // debilitaba el principio del juego: EVIDENCIA REAL -> VALIDACIÓN -> IMPACTO.
+  // El camino es attach/attest del artefacto y después submit_quest_evidence o
+  // verify_step_evidence. El método sigue en el servicio, marcado como legado,
+  // para la quest demostrativa y las pruebas; no para gameplay real.
 
   server.registerTool(
     "plan_quest_from_intent",

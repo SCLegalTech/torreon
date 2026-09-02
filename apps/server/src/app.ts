@@ -133,7 +133,9 @@ export function createHttpApp(service: QuestService) {
 
   app.post("/api/quests/:questId/battle/recontract/accept", async (req, res, next) => {
     try {
-      res.json({ battle: await service.acceptBattleRecontract(req.params.questId, req.body?.userAccepted === true) });
+      res.json({
+        battle: await service.acceptBattleRecontract(req.params.questId, String(req.body?.recontractId ?? ""), req.body?.userAccepted === true),
+      });
     } catch (error) {
       next(error);
     }

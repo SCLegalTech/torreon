@@ -259,6 +259,31 @@ export function buildEncounter(encounterSeed: string): EnemyCombatant[] {
   }));
 }
 
+/**
+ * Construye la formación conservando la vida que la Horda YA tenía.
+ *
+ * Al migrar una Battle anterior al 4v4, el enemigo no puede volver a nacer
+ * entero: se genera el encuentro con sus máximos y después se reparte entre
+ * ellos el HP restante histórico. Si al jugador le quedaban 10 puntos por
+ * derribar, siguen siendo 10.
+ */
+export function backfillEncounter(encounterSeed: string, remainingHealth: number): EnemyCombatant[] {
+  const enemies = buildEncounter(encounterSeed);
+  const total = enemies.reduce((sum, enemy) => sum + enemy.maxHealth, 0);
+  let left = Math.max(0, Math.min(total, Math.round(remainingHealth)));
+  if (left === total) return enemies;
+
+  // Se llena de atrás hacia delante: caen primero los que ya estaban rotos.
+  for (let index = enemies.length - 1; index >= 0; index -= 1) {
+    const enemy = enemies[index];
+    const health = Math.min(enemy.maxHealth, left);
+    enemy.health = health;
+    enemy.status = health === 0 ? "ko" : "active";
+    left -= health;
+  }
+  return enemies;
+}
+
 export function archetypeOf(enemy: EnemyCombatant): HordeArchetype | undefined {
   return HORDE_POOL.find((candidate) => candidate.id === enemy.archetypeId);
 }

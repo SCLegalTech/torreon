@@ -651,6 +651,7 @@ export class QuestService {
       const record = quest.battle;
       if (!record) throw new Error("Esta quest todavía no tiene Battle que reintentar.");
       if (record.status === "active") throw new Error("La Battle sigue en curso.");
+      if (record.status === "suspended_external") throw new Error("Este frente espera a un tercero: se reanuda al desbloquearse, no se reintenta.");
       if (record.status === "won") throw new Error("Esta Battle ya está ganada.");
       if (!["active", "waiting_external"].includes(quest.status)) throw new Error("Esta quest ya no tiene frente abierto: no hay Battle que reintentar.");
       // EL MARQUÉS CAÍDO NO VUELVE GRATIS: hay que levantarlo primero.
@@ -700,6 +701,7 @@ export class QuestService {
       const record = quest.battle;
       if (!record) throw new Error("Esta quest todavía no tiene Battle.");
       if (record.status !== "active") throw new Error("Sólo una Battle en curso puede repactar su tiempo.");
+      // Proponer otra vez sustituye la anterior: sólo hay un pacto sobre la mesa.
       record.pendingRecontract = {
         id: randomUUID(),
         reason: input.reason.trim(),
@@ -717,13 +719,18 @@ export class QuestService {
     return result;
   }
 
-  async acceptBattleRecontract(questId: string, userAccepted: boolean): Promise<BattleState> {
+  async acceptBattleRecontract(questId: string, recontractId: string, userAccepted: boolean): Promise<BattleState> {
     if (!userAccepted) throw new Error("Repactar el tiempo requiere aceptación explícita del jugador.");
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       const record = quest.battle;
       if (!record?.pendingRecontract) throw new Error("No hay ningún nuevo pacto temporal esperando decisión.");
       const proposal = record.pendingRecontract;
+      // Se sella una propuesta concreta: si Códice propuso 30 min y luego 15,
+      // el jugador tiene que estar aceptando exactamente la que está mirando.
+      if (proposal.id !== recontractId) {
+        throw new Error(`Ese pacto ya no está sobre la mesa. El vigente propone ${proposal.newDurationMinutes} min: acéptalo por su propio id.`);
+      }
       // Todo el estado de combate se preserva: sólo cambia el reloj.
       openAttempt(record, Date.now(), proposal.newDurationMinutes, "recontracted");
       quest.updatedAt = record.startedAt;
@@ -1194,6 +1201,13 @@ export class QuestService {
     return { ...applied, judgement, artifacts };
   }
 
+  /**
+   * LEGADO. No expuesto por MCP y fuera de los flujos nuevos.
+   *
+   * Concede todo el impacto restante de un paso sin veredicto razonado, así que
+   * salta el principio del juego: EVIDENCIA REAL -> VALIDACIÓN -> IMPACTO. Se
+   * conserva sólo para la quest demostrativa y las pruebas.
+   */
   async completeStep(questId: string, stepId: string, evidenceNote: string): Promise<{ quest: Quest; battle: BattleState }> {
     const snapshot = await this.snapshot();
     const step = snapshot.realm.quests.find((quest) => quest.id === questId)?.steps.find((candidate) => candidate.id === stepId);
@@ -1202,7 +1216,7 @@ export class QuestService {
       summary: evidenceNote,
       source: "user_declaration",
       verdict: "accepted",
-      reasoning: "Compatibilidad del MVP: evidencia declarada como suficiente.",
+      reasoning: "Camino legado: evidencia declarada como suficiente sin veredicto razonado.",
       impactAwarded: step.weight - step.impactAwarded,
     });
     return { quest: result.quest, battle: result.battle };

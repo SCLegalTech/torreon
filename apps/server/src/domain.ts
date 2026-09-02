@@ -9,11 +9,15 @@ export type ArtifactKind = "file" | "link" | "text";
  * Estado del frente.
  *
  *   active             — hay reloj corriendo.
+ *   suspended_external — la quest espera a un tercero. El slot está libre y la
+ *                        presión detenida: una Battle suspendida NO puede
+ *                        parecer activa, o el renderer mostraría un combate
+ *                        que el Core ya soltó.
  *   awaiting_replan    — venció el plazo con la Horda viva. No es el fin.
  *   awaiting_recovery  — el Marqués cayó. Hay que levantarlo antes de volver.
  *   won                — el contrato quedó validado al 100%.
  */
-export type BattleStatus = "active" | "awaiting_replan" | "awaiting_recovery" | "won";
+export type BattleStatus = "active" | "suspended_external" | "awaiting_replan" | "awaiting_recovery" | "won";
 export type AttemptEndReason = "won" | "timeout" | "recontracted" | "player_ko" | "abandoned";
 /** El cuarto slot no es un personaje fijo: lo ocupa quien de verdad peleó. */
 export type CompanionId = "opus" | "codex" | "claude" | "gemini";
@@ -220,7 +224,10 @@ export interface BattleRecord {
   enemies: EnemyCombatant[];
   agent: AgentSlot;
   hordeNeutralizedAt?: string;
-  /** Nuevo pacto temporal propuesto por Códice y aún sin aceptar. */
+  /**
+   * Nuevo pacto temporal propuesto por Códice y aún sin aceptar. Se acepta por
+   * `id`: si Códice propuso 30 min y luego 15, hay que saber cuál se selló.
+   */
   pendingRecontract?: { id: string; reason: string; newDurationMinutes: number; proposedAt: string };
   endedAt?: string;
 }

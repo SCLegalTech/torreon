@@ -111,7 +111,7 @@ export function battleClock(record: BattleRecord, nowMs: number): BattleClock {
     remainingMs,
     elapsedRatio: totalMs > 0 ? Math.min(1, elapsedMs / totalMs) : 0,
     expired: remainingMs === 0,
-    suspended: Boolean(record.suspendedAt),
+    suspended: record.status === "suspended_external" || Boolean(record.suspendedAt),
   };
 }
 
@@ -125,20 +125,28 @@ function pushGameEvent(state: RealmState, event: Omit<GameEvent, "id">): void {
 }
 
 /**
- * Sincroniza la suspensión con la realidad de la quest. No hay botón
- * `PAUSAR`: la presión sólo se detiene por un bloqueo externo reconocido.
+ * Sincroniza la suspensión con la realidad de la quest.
+ *
+ * No hay botón `PAUSAR`: la presión sólo se detiene por un bloqueo externo
+ * reconocido. Y una Battle suspendida NO puede seguir diciendo `active`: el
+ * Core ya soltó el frente, así que el renderer no debe pintar un combate vivo.
+ * Al desbloquear se reanuda el MISMO combate: ni HP ni formación se tocan.
  */
-function syncSuspension(quest: Quest, record: BattleRecord, nowMs: number): boolean {
+export function syncSuspension(quest: Quest, record: BattleRecord, nowMs: number): boolean {
   const shouldSuspend = quest.status === "waiting_external";
-  if (shouldSuspend && !record.suspendedAt) {
+  if (shouldSuspend && record.status === "active") {
     record.suspendedAt = new Date(nowMs).toISOString();
+    record.status = "suspended_external";
     return true;
   }
-  if (!shouldSuspend && record.suspendedAt) {
-    const suspended = Math.max(0, nowMs - Date.parse(record.suspendedAt));
-    record.suspendedMs += suspended;
-    record.deadlineAt = new Date(Date.parse(record.deadlineAt) + suspended).toISOString();
-    delete record.suspendedAt;
+  if (!shouldSuspend && record.status === "suspended_external") {
+    if (record.suspendedAt) {
+      const suspended = Math.max(0, nowMs - Date.parse(record.suspendedAt));
+      record.suspendedMs += suspended;
+      record.deadlineAt = new Date(Date.parse(record.deadlineAt) + suspended).toISOString();
+      delete record.suspendedAt;
+    }
+    record.status = "active";
     return true;
   }
   return false;
@@ -253,10 +261,12 @@ export function advanceBattles(state: RealmState, nowMs: number): BattleTickOutc
 
   for (const quest of state.quests) {
     const record = quest.battle;
-    if (!record || record.status !== "active") continue;
+    if (!record || !["active", "suspended_external"].includes(record.status)) continue;
     if (["completed", "abandoned"].includes(quest.status)) continue;
 
     if (syncSuspension(quest, record, nowMs)) outcome.changed = true;
+    // Suspendida no muerde: ni presión, ni plazo, ni resolución.
+    if (record.status !== "active") continue;
 
     // Con la Horda neutralizada el reloj deja de morder, pero el contrato sigue.
     if (!hordeIsDown(record)) {
@@ -340,9 +350,11 @@ export function resolve(state: RealmState, quest: Quest, record: BattleRecord, s
 export function needsAdvance(state: RealmState, nowMs: number): boolean {
   return state.quests.some((quest) => {
     const record = quest.battle;
-    if (!record || record.status !== "active") return false;
+    if (!record || !["active", "suspended_external"].includes(record.status)) return false;
     if (["completed", "abandoned"].includes(quest.status)) return false;
-    if (Boolean(record.suspendedAt) !== (quest.status === "waiting_external")) return true;
+    // Desajuste entre lo que dice la quest y lo que dice la Battle: hay que sincronizar.
+    if ((record.status === "suspended_external") !== (quest.status === "waiting_external")) return true;
+    if (record.status !== "active") return false;
     if (record.party.marques.health === 0) return true;
     const clock = battleClock(record, nowMs);
     if (clock.expired) return true;

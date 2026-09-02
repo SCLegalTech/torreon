@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { emptyAgentSlot } from "./companions.js";
 import type { RealmState } from "./domain.js";
-import { buildEncounter } from "./horde.js";
+import { backfillEncounter } from "./horde.js";
 import { freshParty } from "./party.js";
 
 const now = () => new Date().toISOString();
@@ -109,8 +109,23 @@ export class JsonRealmStore {
         // Una Battle anterior al grupo y a la formación 4v4 los estrena ahora.
         battle.party ??= freshParty();
         battle.agent ??= emptyAgentSlot();
-        if (!battle.enemies || battle.enemies.length === 0) battle.enemies = buildEncounter(battle.encounterSeed);
+        // UNA MIGRACIÓN NO PUEDE RESUCITAR AL ENEMIGO.
+        // Antes de la formación 4v4 la Horda era una barra: si estaba en 10 HP
+        // porque el jugador la había bajado a golpes reales, la formación nueva
+        // tiene que nacer con esos mismos 10 repartidos, no con 100.
+        const validatedImpact = quest.steps.reduce((sum, step) => sum + (step.impactAwarded ?? 0), 0);
+        const historicHealth = Math.max(0, 100 - validatedImpact);
+        if (!battle.enemies || battle.enemies.length === 0) {
+          battle.enemies = backfillEncounter(battle.encounterSeed, historicHealth);
+        } else if (battle.enemies.reduce((sum, enemy) => sum + enemy.health, 0) > historicHealth) {
+          // Repara una formación que YA nació resucitada por una migración
+          // anterior. Sólo baja, nunca sube: si el combo de un compañero dejó a
+          // la Horda por debajo del contrato, ese daño extra se respeta.
+          battle.enemies = backfillEncounter(battle.encounterSeed, historicHealth);
+        }
         if ((battle.status as string) === "lost") battle.status = "awaiting_replan";
+        // Una espera externa nunca puede exponer una Battle activa.
+        if (battle.status === "active" && quest.status === "waiting_external") battle.status = "suspended_external";
       }
       for (const step of quest.steps) {
         step.impactAwarded ??= step.status === "completed" ? step.weight : 0;

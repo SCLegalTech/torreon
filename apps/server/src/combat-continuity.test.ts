@@ -180,7 +180,9 @@ describe("Continuidad entre intentos", () => {
     });
     expect(proposed.pendingRecontract?.newDurationMinutes).toBe(30);
 
-    const accepted = await service.acceptBattleRecontract(active.id, true);
+    // T6: se sella la propuesta concreta, por su id.
+    await expect(service.acceptBattleRecontract(active.id, "00000000-0000-0000-0000-000000000000", true)).rejects.toThrow(/ya no está sobre la mesa/);
+    const accepted = await service.acceptBattleRecontract(active.id, proposed.pendingRecontract!.id, true);
     // RC-001: el intento anterior se cierra como repactado, no como vencido.
     expect(accepted.attempts[0].endReason).toBe("recontracted");
     expect(accepted.attempt).toBe(2);
