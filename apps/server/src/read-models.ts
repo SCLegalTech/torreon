@@ -1,14 +1,21 @@
 import type {
+  Act,
+  ActView,
   BattleState,
+  Campaign,
+  CampaignView,
   CharacterStats,
   CurrentStepSummary,
   EvidenceArtifact,
   EvidenceRecord,
   Quest,
   QuestDetail,
+  QuestNode,
   QuestProgress,
   RealmConsistency,
+  RealmHierarchy,
   RealmState,
+  SagaView,
 } from "./domain.js";
 
 /**
@@ -194,5 +201,140 @@ export function questDetailFor(state: RealmState, questId: string): QuestDetail 
       artifacts: state.artifacts.filter((artifact) => artifact.stepIds.includes(step.id)),
       verdicts: state.evidence.filter((record) => record.stepId === step.id),
     })),
+  };
+}
+
+
+// ---------------------------------------------------------------------------
+// SAGA -> CAMPAÑA -> ACTO -> QUEST
+//
+// El progreso siempre se deriva de resultados reales: una Quest cuenta cuando
+// su impacto validado llegó a 100, no cuando alguien la tocó. Y nada de esto se
+// guarda: si se guardara, podría mentir.
+// ---------------------------------------------------------------------------
+
+const CLOSED_QUEST = new Set(["completed", "abandoned"]);
+
+function questNodeFor(quest: Quest, position: number, locked: boolean, isBoss: boolean): QuestNode {
+  const validatedImpact = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
+  return {
+    id: quest.id,
+    position,
+    title: quest.title,
+    outcome: quest.outcome,
+    status: quest.status,
+    durationMinutes: quest.durationMinutes,
+    validatedImpact,
+    percent: Math.min(100, validatedImpact),
+    battleStatus: quest.battle?.status ?? "pending",
+    locked,
+    isBoss,
+  };
+}
+
+function actViewFor(state: RealmState, act: Act, position: number, locked: boolean): ActView {
+  const quests = act.questIds
+    .map((questId) => state.quests.find((quest) => quest.id === questId))
+    .filter((quest): quest is Quest => Boolean(quest));
+
+  let previousDone = true;
+  const nodes = quests.map((quest, index) => {
+    // El camino se abre en orden: un nodo espera a que caiga el anterior.
+    const node = questNodeFor(quest, index + 1, locked || !previousDone, index === quests.length - 1 && quests.length > 1);
+    previousDone = quest.status === "completed";
+    return node;
+  });
+
+  const completedQuests = quests.filter((quest) => quest.status === "completed").length;
+  return {
+    id: act.id,
+    position,
+    title: act.title,
+    subtitle: act.subtitle,
+    scenario: act.scenario,
+    status: act.status,
+    estimatedActiveMinutes: act.estimatedActiveMinutes,
+    quests: nodes,
+    completedQuests,
+    totalQuests: nodes.length,
+    percent: nodes.length > 0 ? Math.round((completedQuests / nodes.length) * 100) : 0,
+    locked,
+  };
+}
+
+function campaignViewFor(state: RealmState, campaign: Campaign): CampaignView {
+  let previousDone = true;
+  const acts = campaign.actIds
+    .map((actId) => state.acts.find((act) => act.id === actId))
+    .filter((act): act is Act => Boolean(act))
+    .map((act, index) => {
+      const view = actViewFor(state, act, index + 1, !previousDone);
+      previousDone = act.status === "completed";
+      return view;
+    });
+
+  const completedActs = acts.filter((act) => act.status === "completed").length;
+  const totalQuests = acts.reduce((sum, act) => sum + act.totalQuests, 0);
+  const completedQuests = acts.reduce((sum, act) => sum + act.completedQuests, 0);
+  return {
+    id: campaign.id,
+    title: campaign.title,
+    summary: campaign.summary,
+    objective: campaign.objective,
+    status: campaign.status,
+    estimatedActiveMinutes: campaign.estimatedActiveMinutes,
+    scenario: campaign.scenario,
+    bossTitle: campaign.bossTitle,
+    bossDescription: campaign.bossDescription,
+    acts,
+    completedActs,
+    totalActs: acts.length,
+    completedQuests,
+    totalQuests,
+    percent: totalQuests > 0 ? Math.round((completedQuests / totalQuests) * 100) : 0,
+  };
+}
+
+function sagaViewFor(state: RealmState, campaigns: CampaignView[]): (saga: RealmState["sagas"][number]) => SagaView {
+  return (saga) => {
+    const own = campaigns.filter((campaign) => saga.campaignIds.includes(campaign.id));
+    const completedCampaigns = own.filter((campaign) => campaign.status === "completed").length;
+    return {
+      id: saga.id,
+      title: saga.title,
+      summary: saga.summary,
+      status: saga.status,
+      campaignIds: saga.campaignIds,
+      completedCampaigns,
+      totalCampaigns: own.length,
+      percent: own.length > 0 ? Math.round((completedCampaigns / own.length) * 100) : 0,
+    };
+  };
+}
+
+export function hierarchyFor(state: RealmState, currentQuest: Quest | null): RealmHierarchy {
+  const campaigns = state.campaigns.map((campaign) => campaignViewFor(state, campaign));
+  const sagas = state.sagas.map(sagaViewFor(state, campaigns));
+
+  const act = currentQuest?.actId ? state.acts.find((candidate) => candidate.id === currentQuest.actId) ?? null : null;
+  const campaign = act?.campaignId
+    ? state.campaigns.find((candidate) => candidate.id === act.campaignId) ?? null
+    : currentQuest?.campaignId
+      ? state.campaigns.find((candidate) => candidate.id === currentQuest.campaignId) ?? null
+      : null;
+
+  // Microquests: sin Acto ni Campaña, y eso es legítimo. No se les fabrica padre.
+  const standaloneQuests = state.quests
+    .filter((quest) => !quest.actId && !CLOSED_QUEST.has(quest.status))
+    .map((quest, index) => questNodeFor(quest, index + 1, false, false));
+
+  return {
+    sagas,
+    campaigns,
+    currentSagaId: campaign?.sagaId ?? currentQuest?.sagaId ?? null,
+    currentCampaignId: campaign?.id ?? null,
+    currentActId: act?.id ?? null,
+    currentQuestId: currentQuest?.id ?? null,
+    standaloneQuests,
   };
 }

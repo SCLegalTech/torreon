@@ -5,6 +5,8 @@ export type EvidenceSource = "user_declaration" | "file" | "mcp" | "integration"
 export type EvidenceVerdict = "rejected" | "partial" | "accepted";
 export type EvidenceKind = "file" | "link" | "screenshot" | "photo" | "number" | "text" | "declaration";
 export type ArtifactKind = "file" | "link" | "text";
+export type BattleStatus = "active" | "won" | "lost";
+export type ActStatus = "pending" | "active" | "completed" | "abandoned";
 
 export interface QuestStepInput {
   title: string;
@@ -108,6 +110,10 @@ export interface QuestPlanInput {
 export interface Quest extends Omit<QuestPlanInput, "steps"> {
   id: string;
   status: QuestStatus;
+  /** Padres opcionales. Una microquest los tiene todos vacíos y eso es legítimo. */
+  actId?: string;
+  campaignId?: string;
+  sagaId?: string;
   steps: QuestStep[];
   createdAt: string;
   updatedAt: string;
@@ -117,6 +123,30 @@ export interface Quest extends Omit<QuestPlanInput, "steps"> {
   abandonedAt?: string;
   version: number;
   amendments: QuestAmendment[];
+  /** La Battle temporizada de esta Quest. No existe hasta que el jugador inicia. */
+  battle?: BattleRecord;
+}
+
+/**
+ * EL RELOJ ES PARTE DEL ENEMIGO.
+ *
+ * El registro vive en el Core, no en el renderer: cerrar la app, bloquear el
+ * teléfono o cambiar de pantalla no congela la Battle. Al volver, el servidor
+ * calcula cuánto tiempo pasó de verdad.
+ */
+export interface BattleRecord {
+  /** Cada reintento es una Battle nueva sobre la misma Quest. */
+  attempt: number;
+  startedAt: string;
+  durationMinutes: number;
+  deadlineAt: string;
+  status: BattleStatus;
+  /** Umbrales temporales ya cobrados. Recargar no puede repetir el daño. */
+  appliedThresholds: number[];
+  /** Presión suspendida por un bloqueo externo real, en milisegundos. */
+  suspendedMs: number;
+  suspendedAt?: string;
+  endedAt?: string;
 }
 
 export interface FinancialState {
@@ -139,6 +169,10 @@ export interface RealmEvent {
     | "quest_waiting_external"
     | "quest_unblocked"
     | "horde_attack"
+    | "battle_started"
+    | "battle_won"
+    | "battle_lost"
+    | "battle_restarted"
     | "evidence_attached"
     | "step_completed"
     | "quest_completed"
@@ -205,16 +239,82 @@ export interface LifeEvent {
   createdAt: string;
 }
 
+/**
+ * Contrato renderer-agnóstico. React lo dibuja hoy; Unity podrá consumir los
+ * mismos eventos mañana sin portar ninguna regla de negocio.
+ */
 export interface GameEvent {
   id: string;
-  type: "quest_attack" | "horde_attack";
-  sourceLifeEventId: string;
+  type: "quest_attack" | "horde_attack" | "battle_started" | "battle_won" | "battle_lost";
+  /** Los eventos de ciclo de vida de la Battle no nacen de un LifeEvent. */
+  sourceLifeEventId?: string;
   questId: string;
   stepId?: string;
   damage: number;
+  /** Por qué atacó la Horda: `time_pressure` es el reloj, no la inactividad. */
   reason?: string;
+  /** Umbral temporal cobrado. `questId + threshold` se aplica una sola vez. */
+  threshold?: number;
+  /** Intento de Battle al que pertenece: un reintento no arrastra daño viejo. */
+  battleAttempt?: number;
   message: string;
   createdAt: string;
+}
+
+/**
+ * SAGA -> CAMPAÑA -> ACTO -> QUEST -> BATALLA -> PASOS.
+ *
+ * `scenario` NO es una unidad de la jerarquía: es el entorno visual de un Acto
+ * o de una Campaña. Y una microquest puede vivir sin padres: no se fabrican
+ * Actos ceremoniales para un correo de quince minutos.
+ */
+export interface Act {
+  id: string;
+  campaignId?: string;
+  sagaId?: string;
+  title: string;
+  /** Subtítulo del acto: «La comunicación bloqueada». */
+  subtitle?: string;
+  status: ActStatus;
+  questIds: string[];
+  estimatedActiveMinutes: number;
+  /** Ambientación visual, no jerarquía. */
+  scenario?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface Campaign {
+  id: string;
+  sagaId?: string;
+  title: string;
+  /** Qué recupera el reino con esta campaña. */
+  summary?: string;
+  /** Resultado final verificable de toda la campaña. */
+  objective?: string;
+  status: ActStatus;
+  actIds: string[];
+  estimatedActiveMinutes: number;
+  scenario?: string;
+  /** Nombre del jefe final: hoy sólo la representación de la última Quest. */
+  bossTitle?: string;
+  bossDescription?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface Saga {
+  id: string;
+  title: string;
+  summary?: string;
+  status: ActStatus;
+  campaignIds: string[];
+  estimatedActiveMinutes: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
 }
 
 export interface RealmState {
@@ -227,6 +327,9 @@ export interface RealmState {
   };
   character: CharacterState;
   financial: FinancialState;
+  sagas: Saga[];
+  campaigns: Campaign[];
+  acts: Act[];
   quests: Quest[];
   events: RealmEvent[];
   evidence: EvidenceRecord[];
@@ -234,6 +337,27 @@ export interface RealmState {
   lifeEvents: LifeEvent[];
   gameEvents: GameEvent[];
   updatedAt: string;
+}
+
+/**
+ * Reloj de la Battle derivado del servidor.
+ *
+ * PROHIBIDO que el renderer sea la única autoridad del tiempo: React interpola
+ * entre lecturas, pero `elapsedMs` y `remainingMs` los calcula el Core contra
+ * su propio reloj.
+ */
+export interface BattleClock {
+  startedAt: string;
+  deadlineAt: string;
+  durationMinutes: number;
+  serverNow: string;
+  elapsedMs: number;
+  remainingMs: number;
+  /** 0 a 1. Los ataques de la Horda se cobran al cruzar 0.25, 0.5, 0.75 y 1. */
+  elapsedRatio: number;
+  expired: boolean;
+  /** La presión está suspendida por un bloqueo externo real, no por un botón. */
+  suspended: boolean;
 }
 
 export interface BattleState {
@@ -249,6 +373,13 @@ export interface BattleState {
   totalSteps: number;
   isKo: boolean;
   isPlayerKo: boolean;
+  /** Duración pactada de la Battle. Nunca mayor que 60 minutos. */
+  durationMinutes: number;
+  /** `active` mientras corre; `won` con la Horda muerta; `lost` con el reloj vencido. */
+  status: BattleStatus | "pending";
+  attempt: number;
+  /** Null hasta que el jugador inicia: el reloj no corre en el borrador. */
+  clock: BattleClock | null;
 }
 
 
@@ -325,6 +456,81 @@ export interface QuestDetail {
   steps: QuestStepDetail[];
 }
 
+/** Nodo de mapa: una Quest vista desde el Acto que la contiene. */
+export interface QuestNode {
+  id: string;
+  position: number;
+  title: string;
+  outcome: string;
+  status: QuestStatus;
+  durationMinutes: number;
+  validatedImpact: number;
+  percent: number;
+  battleStatus: BattleStatus | "pending";
+  /** El camino se abre en orden: un nodo bloqueado espera al anterior. */
+  locked: boolean;
+  isBoss: boolean;
+}
+
+export interface ActView {
+  id: string;
+  position: number;
+  title: string;
+  subtitle?: string;
+  scenario?: string;
+  status: ActStatus;
+  estimatedActiveMinutes: number;
+  quests: QuestNode[];
+  completedQuests: number;
+  totalQuests: number;
+  percent: number;
+  locked: boolean;
+}
+
+export interface CampaignView {
+  id: string;
+  title: string;
+  summary?: string;
+  objective?: string;
+  status: ActStatus;
+  estimatedActiveMinutes: number;
+  scenario?: string;
+  bossTitle?: string;
+  bossDescription?: string;
+  acts: ActView[];
+  completedActs: number;
+  totalActs: number;
+  completedQuests: number;
+  totalQuests: number;
+  percent: number;
+}
+
+export interface SagaView {
+  id: string;
+  title: string;
+  summary?: string;
+  status: ActStatus;
+  campaignIds: string[];
+  completedCampaigns: number;
+  totalCampaigns: number;
+  percent: number;
+}
+
+/**
+ * Lo que necesita cualquier renderer para dibujar Campaña, Acto y Quest sin
+ * recalcular reglas: la jerarquía y dónde está el jugador dentro de ella.
+ */
+export interface RealmHierarchy {
+  sagas: SagaView[];
+  campaigns: CampaignView[];
+  currentSagaId: string | null;
+  currentCampaignId: string | null;
+  currentActId: string | null;
+  currentQuestId: string | null;
+  /** Quests sin padres. Una microquest legítima entra en batalla sin ceremonia. */
+  standaloneQuests: QuestNode[];
+}
+
 export interface RealmSnapshot {
   realm: RealmState;
   currentQuest: Quest | null;
@@ -335,6 +541,13 @@ export interface RealmSnapshot {
   battle: BattleState | null;
   /** Hoja de personaje derivada: HP de combate, XP, Aura, maestría y Tesoro. */
   stats: CharacterStats;
+  /** Saga, Campaña, Acto y Quest derivados en la lectura, nunca guardados. */
+  hierarchy: RealmHierarchy;
+  /**
+   * Lo que concederá esta quest si se valida: XP, Aura y maestría.
+   * Nunca monedas ni gemas: el Tesoro sólo cambia con un hecho financiero real.
+   */
+  rewardPreview: { xp: number; aura: number; masteryDomain?: string } | null;
   consistency: RealmConsistency;
   projectedMargin: number;
 }

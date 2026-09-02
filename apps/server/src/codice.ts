@@ -1,4 +1,5 @@
 import type { EvidenceVerdict, Quest, QuestPlanInput, QuestStep, QuestStepInput } from "./domain.js";
+import { MAX_BATTLE_MINUTES } from "./scale.js";
 import type { EvidenceArtifact } from "./domain.js";
 
 /**
@@ -60,6 +61,7 @@ export const CODICE_INSTRUCTIONS = [
   "7. epic narra el paso como escena de fantasía medieval; real dice literalmente qué hacer en la vida real. Nunca uses la épica para esconder la instrucción real.",
   "8. No inventes hechos del jugador: ni vacantes, ni saldos, ni documentos, ni contactos. Si falta un dato, conviértelo en un paso que lo consiga.",
   "9. Respeta el bienestar: alcance pequeño, duración realista, sin culpabilizar.",
+  `9b. Una Battle dura como máximo ${MAX_BATTLE_MINUTES} minutos de trabajo activo. Si el objetivo pide más, no infles la duración: recorta el alcance de ESTA quest y deja el resto para otra Quest del mismo Acto.`,
   "10. masteryDomain nombra el dominio real que la quest entrena (autocuidado, finanzas, oficio, hogar, vínculos…). Es la maestría que el jugador acumula al ganar; no inventes un dominio que la tarea no entrene.",
 ].join("\n");
 
@@ -70,7 +72,7 @@ const PLAN_SCHEMA = {
     title: { type: "string", description: "Nombre épico y breve de la quest." },
     outcome: { type: "string", description: "Resultado verificable en el mundo real." },
     rationale: { type: "string", description: "Por qué esta descomposición produce el resultado." },
-    durationMinutes: { type: "integer", minimum: 5, maximum: 240 },
+    durationMinutes: { type: "integer", minimum: 5, maximum: 60 },
     wellbeingConstraints: { type: "array", items: { type: "string" }, maxItems: 5 },
     allowedApps: { type: "array", items: { type: "string" }, maxItems: 8 },
     masteryDomain: { type: "string", description: "Dominio real que esta quest entrena, en una o dos palabras (autocuidado, finanzas, oficio, hogar, vínculos…)." },
@@ -171,7 +173,8 @@ export function planFromRaw(raw: RawPlan, intent: string): QuestPlanInput {
     intent: intent.trim(),
     outcome: raw.outcome.trim(),
     rationale: raw.rationale.trim(),
-    durationMinutes: Math.min(240, Math.max(5, Math.round(raw.durationMinutes))),
+    // Una Battle es un reloj, no una jornada: nada por encima de 60 minutos.
+    durationMinutes: Math.min(MAX_BATTLE_MINUTES, Math.max(5, Math.round(raw.durationMinutes))),
     wellbeingConstraints: (raw.wellbeingConstraints ?? []).slice(0, 5),
     allowedApps: (raw.allowedApps ?? []).slice(0, 8),
     // El resto de la recompensa la deriva el servidor del propio contrato.
@@ -196,8 +199,8 @@ export function validatePlan(plan: QuestPlanInput): void {
   if (totalWeight !== 100) {
     throw new Error(`Los pesos de los pasos deben sumar 100; actualmente suman ${totalWeight}.`);
   }
-  if (plan.durationMinutes < 5 || plan.durationMinutes > 240) {
-    throw new Error("La duración debe estar entre 5 y 240 minutos.");
+  if (plan.durationMinutes < 5 || plan.durationMinutes > MAX_BATTLE_MINUTES) {
+    throw new Error(`Una Battle dura como máximo ${MAX_BATTLE_MINUTES} minutos; si el trabajo pide más, descomponlo en varias Quests dentro de un Acto.`);
   }
 }
 
@@ -263,7 +266,7 @@ function resumeQuest(intent: string): QuestPlanInput {
     outcome: `Enviar ${count} candidatura${count === 1 ? "" : "s"} verificable${count === 1 ? "" : "s"} a oportunidades compatibles con el perfil del marqués.`,
     rationale:
       "Códice no acepta que una hoja de vida sea solo un trámite: cada candidatura es una carta sellada enviada a un puesto estratégico del reino. La misión separa preparación, selección, adaptación, envío y registro para que la batalla avance con evidencia real.",
-    durationMinutes: count > 5 ? 90 : 60,
+    durationMinutes: count > 5 ? 60 : 45,
     wellbeingConstraints: ["Priorizar vacantes compatibles", "No enviar candidaturas genéricas", "Registrar evidencia de cada envío"],
     allowedApps: ["Gmail", "LinkedIn", "Google Drive", "Navegador", "Portal de empleo"],
     rewardProfile: { masteryDomain: "empleo" },

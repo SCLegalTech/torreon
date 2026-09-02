@@ -26,6 +26,9 @@ export function createInitialState(): RealmState {
       committedExpenses: 2_100_000,
       reserveTarget: 500_000,
     },
+    sagas: [],
+    campaigns: [],
+    acts: [],
     quests: [],
     events: [],
     evidence: [],
@@ -56,6 +59,10 @@ export class JsonRealmStore {
     // Reinos creados antes de que existiera la identidad reciben una al leerse.
     state.realmId ??= randomUUID();
     state.evidence ??= [];
+    // Reinos anteriores a la jerarquía no tenían padres: la microquest es válida.
+    state.sagas ??= [];
+    state.campaigns ??= [];
+    state.acts ??= [];
     state.artifacts ??= [];
     state.lifeEvents ??= [];
     state.gameEvents ??= [];
@@ -66,6 +73,11 @@ export class JsonRealmStore {
     for (const quest of state.quests) {
       quest.version ??= 1;
       quest.amendments ??= [];
+      if (quest.battle) {
+        quest.battle.attempt ??= 1;
+        quest.battle.appliedThresholds ??= [];
+        quest.battle.suspendedMs ??= 0;
+      }
       for (const step of quest.steps) {
         step.impactAwarded ??= step.status === "completed" ? step.weight : 0;
         step.evidenceIds ??= [];

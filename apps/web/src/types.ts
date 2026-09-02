@@ -51,9 +51,105 @@ export interface CharacterStats {
   treasure: { currency: "COP"; amount: number };
 }
 
+export type BattleStatus = "pending" | "active" | "won" | "lost";
+export type ActStatus = "pending" | "active" | "completed" | "abandoned";
+
+/** El reloj lo calcula el servidor; React sólo interpola entre lecturas. */
+export interface BattleClock {
+  startedAt: string;
+  deadlineAt: string;
+  durationMinutes: number;
+  serverNow: string;
+  elapsedMs: number;
+  remainingMs: number;
+  elapsedRatio: number;
+  expired: boolean;
+  suspended: boolean;
+}
+
+export interface BattleRecord {
+  attempt: number;
+  startedAt: string;
+  durationMinutes: number;
+  deadlineAt: string;
+  status: "active" | "won" | "lost";
+}
+
+export interface QuestNode {
+  id: string;
+  position: number;
+  title: string;
+  outcome: string;
+  status: QuestStatus;
+  durationMinutes: number;
+  validatedImpact: number;
+  percent: number;
+  battleStatus: BattleStatus;
+  locked: boolean;
+  isBoss: boolean;
+}
+
+export interface ActView {
+  id: string;
+  position: number;
+  title: string;
+  subtitle?: string;
+  scenario?: string;
+  status: ActStatus;
+  estimatedActiveMinutes: number;
+  quests: QuestNode[];
+  completedQuests: number;
+  totalQuests: number;
+  percent: number;
+  locked: boolean;
+}
+
+export interface CampaignView {
+  id: string;
+  title: string;
+  summary?: string;
+  objective?: string;
+  status: ActStatus;
+  estimatedActiveMinutes: number;
+  scenario?: string;
+  bossTitle?: string;
+  bossDescription?: string;
+  acts: ActView[];
+  completedActs: number;
+  totalActs: number;
+  completedQuests: number;
+  totalQuests: number;
+  percent: number;
+}
+
+export interface SagaView {
+  id: string;
+  title: string;
+  summary?: string;
+  status: ActStatus;
+  campaignIds: string[];
+  completedCampaigns: number;
+  totalCampaigns: number;
+  percent: number;
+}
+
+export interface RealmHierarchy {
+  sagas: SagaView[];
+  campaigns: CampaignView[];
+  currentSagaId: string | null;
+  currentCampaignId: string | null;
+  currentActId: string | null;
+  currentQuestId: string | null;
+  standaloneQuests: QuestNode[];
+}
+
 export interface Quest {
   id: string;
   campaignTitle: string;
+  actId?: string;
+  campaignId?: string;
+  sagaId?: string;
+  battle?: BattleRecord;
   title: string;
   intent: string;
   outcome: string;
@@ -96,7 +192,18 @@ export interface RealmSnapshot {
       verification: { verified: boolean; detail: string };
     }>;
     lifeEvents: Array<{ id: string; evidenceId: string; impactAwarded: number }>;
-    gameEvents: Array<{ id: string; type: "quest_attack" | "horde_attack"; questId: string; sourceLifeEventId: string; damage: number; message: string; reason?: string; createdAt: string }>;
+    gameEvents: Array<{
+      id: string;
+      type: "quest_attack" | "horde_attack" | "battle_started" | "battle_won" | "battle_lost";
+      questId: string;
+      sourceLifeEventId?: string;
+      damage: number;
+      message: string;
+      reason?: string;
+      threshold?: number;
+      battleAttempt?: number;
+      createdAt: string;
+    }>;
   };
   currentQuest: Quest | null;
   stats: CharacterStats;
@@ -113,7 +220,14 @@ export interface RealmSnapshot {
     totalSteps: number;
     isKo: boolean;
     isPlayerKo: boolean;
+    durationMinutes: number;
+    status: BattleStatus;
+    attempt: number;
+    clock: BattleClock | null;
   };
+  hierarchy: RealmHierarchy;
+  /** Lo que concede el Core al validar esta quest. Ni monedas ni gemas inventadas. */
+  rewardPreview: { xp: number; aura: number; masteryDomain?: string } | null;
   consistency: {
     status: "ok" | "warning" | "desynced";
     instance: string;

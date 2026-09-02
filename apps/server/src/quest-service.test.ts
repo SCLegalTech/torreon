@@ -78,7 +78,9 @@ describe("QuestService", () => {
     const snapshot = await service.snapshot();
     expect(snapshot.realm.evidence).toHaveLength(3);
     expect(snapshot.realm.lifeEvents).toHaveLength(3);
-    expect(snapshot.realm.gameEvents).toHaveLength(2);
+    // Dos ataques por evidencia validada, más el battle_started que abre el reloj.
+    expect(snapshot.realm.gameEvents.filter((event) => event.type === "quest_attack")).toHaveLength(2);
+    expect(snapshot.realm.gameEvents.filter((event) => event.type === "battle_started")).toHaveLength(1);
     const gameEvent = snapshot.realm.gameEvents[0];
     expect(snapshot.realm.lifeEvents.some((event) => event.id === gameEvent.sourceLifeEventId)).toBe(true);
   });
@@ -288,7 +290,7 @@ describe("QuestService", () => {
       intent: "Cargar evidencias mensuales.",
       outcome: "Evidencias disponibles cargadas y meses futuros preparados.",
       rationale: "El contrato inicial era una hipótesis del flujo.",
-      durationMinutes: 90,
+      durationMinutes: 60,
       wellbeingConstraints: [],
       allowedApps: ["SECOP"],
       steps: [

@@ -26,7 +26,7 @@ const planShape = {
   intent: z.string().min(1).max(1000),
   outcome: z.string().min(1).max(1000),
   rationale: z.string().min(1).max(1000),
-  durationMinutes: z.number().int().min(5).max(240),
+  durationMinutes: z.number().int().min(5).max(60).describe("Minutos de trabajo activo. Una Battle nunca pasa de 60: si el objetivo pide mas, descomponlo en varias Quests de un Acto."),
   wellbeingConstraints: z.array(z.string().min(1).max(200)).max(10).default([]),
   allowedApps: z.array(z.string().min(1).max(100)).max(20).default([]),
   steps: z.array(z.object(stepShape)).min(1).max(12),
@@ -71,7 +71,7 @@ export function createMcpServer(service: QuestService): McpServer {
     { name: "torreon", version: "0.1.0" },
     {
       instructions:
-        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito —de cualquier dominio— en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño. La mejor partida es la que el jugador juega sin tocar el teléfono: la evidencia debe entrar por la conversación, no por la pantalla del juego. Si el archivo, la imagen o los datos están cargados en TU conversación, ábrelos, examínalos y regístralos con attest_evidence_artifact declarando qué viste. Si el archivo está en el disco donde corre este MCP, usa attach_evidence_artifact y el servidor comprobará los hechos (existe, tamaño, tipo, hash, extracto). Reutiliza un mismo artefacto entre pasos con reuse_evidence_artifact: no dupliques sus bytes ni su identidad, pero emite un veredicto independiente por paso. Solo después emite el veredicto con submit_quest_evidence citando los artifactIds; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante. Un artefacto que el servidor no pudo comprobar nunca justifica accepted por sí solo. Si la realidad refuta el plan activo, no borres ni reescribas la historia: propón un amendment y aplícalo sólo tras aceptación explícita. Un bloqueo externo sin acción disponible coloca la quest en waiting_external. La horda sólo contraataca mediante record_unexpected_requirement cuando aparece una complicación real y concreta; jamás por tiempo transcurrido, espera externa, silencio o inactividad.",
+        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito —de cualquier dominio— en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño. La mejor partida es la que el jugador juega sin tocar el teléfono: la evidencia debe entrar por la conversación, no por la pantalla del juego. Si el archivo, la imagen o los datos están cargados en TU conversación, ábrelos, examínalos y regístralos con attest_evidence_artifact declarando qué viste. Si el archivo está en el disco donde corre este MCP, usa attach_evidence_artifact y el servidor comprobará los hechos (existe, tamaño, tipo, hash, extracto). Reutiliza un mismo artefacto entre pasos con reuse_evidence_artifact: no dupliques sus bytes ni su identidad, pero emite un veredicto independiente por paso. Solo después emite el veredicto con submit_quest_evidence citando los artifactIds; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante. Un artefacto que el servidor no pudo comprobar nunca justifica accepted por sí solo. Si la realidad refuta el plan activo, no borres ni reescribas la historia: propón un amendment y aplícalo sólo tras aceptación explícita. Un bloqueo externo sin acción disponible coloca la quest en waiting_external. La horda sólo contraataca mediante record_unexpected_requirement cuando aparece una complicación real y concreta; jamás por silencio ni por inactividad. El único ataque temporal legítimo lo aplica el propio servidor al cruzar el 25%, 50%, 75% y 100% del plazo pactado en start_quest, y una quest en waiting_external suspende esa presión. Antes de crear estructura, usa classify_objective_scale: la escala la fijan los MINUTOS DE TRABAJO ACTIVO, nunca el calendario, y una microquest de quince minutos no necesita Acto ni Campaña.",
     },
   );
 
@@ -200,14 +200,149 @@ export function createMcpServer(service: QuestService): McpServer {
     "start_quest",
     {
       title: "Iniciar la batalla",
-      description: "Inicia una quest previamente aceptada cuando el usuario quiere comenzar la sesión de trabajo.",
-      inputSchema: { questId: z.string().uuid() },
+      description:
+        "Inicia una quest previamente aceptada cuando el usuario quiere comenzar la sesión de trabajo. AQUÍ arranca el reloj: no al redactar el borrador ni al aceptar el contrato. Desde este momento el servidor es la autoridad del tiempo y la Horda golpea al cruzar el 25%, 50%, 75% y 100% del plazo.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        durationMinutes: z
+          .number()
+          .int()
+          .min(1)
+          .max(60)
+          .optional()
+          .describe("Duración pactada de la Battle. Máximo 60 minutos; por defecto la duración del contrato."),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async ({ questId }) => {
-      const quest = await service.start(questId);
+    async ({ questId, durationMinutes }) => {
+      const quest = await service.start(questId, durationMinutes);
       const battle = (await service.snapshot()).battle;
-      return toolResult(`La batalla «${quest.title}» comenzó.`, { quest, battle });
+      return toolResult(
+        `La batalla «${quest.title}» comenzó. El plazo pactado es de ${battle?.durationMinutes ?? quest.durationMinutes} minutos y termina en ${quest.battle?.deadlineAt}.`,
+        { quest, battle },
+      );
+    },
+  );
+
+  server.registerTool(
+    "retry_battle",
+    {
+      title: "Reintentar una batalla perdida",
+      description:
+        "Vuelve a abrir el reloj de una Battle que venció con la Horda viva. Perder no borró nada: la evidencia validada, el impacto, el XP, el Aura y el historial siguen en pie; lo único que empieza de cero es el tiempo y el HP del Marqués. Si el plan ya no representa la realidad, propone antes un amendment.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        durationMinutes: z.number().int().min(1).max(60).optional().describe("Nuevo plazo pactado. Máximo 60 minutos."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId, durationMinutes }) => {
+      const result = await service.retryBattle(questId, durationMinutes);
+      return toolResult(`«${result.quest.title}» vuelve al frente con ${result.battle.durationMinutes} minutos.`, result);
+    },
+  );
+
+  server.registerTool(
+    "classify_objective_scale",
+    {
+      title: "Elegir la escala del objetivo",
+      description:
+        "Decide si un propósito es una Quest, un Acto, una Campaña o una Saga. Mira MINUTOS DE TRABAJO ACTIVO, no calendario: diez minutos de trabajo más tres días esperando una firma siguen siendo una Quest en espera externa, jamás una Campaña. No crea nada: propone la escala y cuántas Battles, Actos y Campañas harían falta.",
+      inputSchema: {
+        intent: z.string().min(4).max(2000).describe("El objetivo tal como lo expresó el jugador."),
+        activeMinutes: z.number().int().min(1).max(100000).optional().describe("Minutos de trabajo activo estimados."),
+        externalWaitMinutes: z
+          .number()
+          .int()
+          .min(0)
+          .max(1000000)
+          .optional()
+          .describe("Espera ajena al jugador. No infla la escala; sólo explica el calendario."),
+        naturalCampaigns: z.number().int().min(1).max(20).optional().describe("Campañas que el objetivo ya contiene de por sí."),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ intent, activeMinutes, externalWaitMinutes, naturalCampaigns }) => {
+      const proposal = service.classifyObjective(intent, { activeMinutes, externalWaitMinutes, naturalCampaigns });
+      return toolResult(`Escala propuesta: ${proposal.scale}. ${proposal.reason}`, { proposal });
+    },
+  );
+
+  server.registerTool(
+    "create_saga",
+    {
+      title: "Abrir una saga",
+      description:
+        "Crea una Saga: un objetivo multisemana que agrupa dos o más Campañas. No la uses para nada más pequeño; una microquest no necesita padres.",
+      inputSchema: {
+        title: z.string().min(3).max(120),
+        summary: z.string().max(500).optional(),
+        estimatedActiveMinutes: z.number().int().min(0).max(1000000).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const saga = await service.createSaga(args);
+      return toolResult(`Saga «${saga.title}» abierta.`, { saga });
+    },
+  );
+
+  server.registerTool(
+    "create_campaign",
+    {
+      title: "Abrir una campaña",
+      description:
+        "Crea una Campaña: un objetivo significativo de 1 a 7 Actos, aproximadamente hasta una semana de trabajo activo. El escenario es ambientación visual, no jerarquía.",
+      inputSchema: {
+        title: z.string().min(3).max(120),
+        summary: z.string().max(500).optional().describe("Qué recupera el reino con esta campaña."),
+        objective: z.string().max(500).optional().describe("Resultado final verificable de toda la campaña."),
+        sagaId: z.string().uuid().optional(),
+        estimatedActiveMinutes: z.number().int().min(0).max(1000000).optional(),
+        scenario: z.string().max(120).optional().describe("Ambientación visual. No es una unidad de la jerarquía."),
+        bossTitle: z.string().max(120).optional().describe("Nombre del jefe final: hoy sólo representa la última Quest."),
+        bossDescription: z.string().max(300).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const campaign = await service.createCampaign(args);
+      return toolResult(`Campaña «${campaign.title}» abierta.`, { campaign });
+    },
+  );
+
+  server.registerTool(
+    "create_act",
+    {
+      title: "Abrir un acto",
+      description:
+        "Crea un Acto: una fase jugable de una jornada, de 2 a 8 Battles y como máximo 8 horas de trabajo activo. Un Acto puede vivir sin Campaña si el objetivo cabe en un día.",
+      inputSchema: {
+        title: z.string().min(3).max(120),
+        subtitle: z.string().max(200).optional().describe("Subtítulo del acto: «La comunicación bloqueada»."),
+        campaignId: z.string().uuid().optional(),
+        scenario: z.string().max(120).optional(),
+        estimatedActiveMinutes: z.number().int().min(0).max(100000).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const act = await service.createAct(args);
+      return toolResult(`Acto «${act.title}» abierto.`, { act });
+    },
+  );
+
+  server.registerTool(
+    "assign_quest_to_act",
+    {
+      title: "Colocar una quest dentro de un acto",
+      description: "Adopta una Quest ya existente dentro de un Acto. Un Acto no sostiene más de 8 Battles.",
+      inputSchema: { questId: z.string().uuid(), actId: z.string().uuid() },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId, actId }) => {
+      const result = await service.assignQuestToAct(questId, actId);
+      return toolResult(`«${result.quest.title}» ahora pertenece al acto «${result.act.title}».`, result);
     },
   );
 
@@ -272,12 +407,13 @@ export function createMcpServer(service: QuestService): McpServer {
         "Deja que el motor de Códice del servidor convierta una intención libre en el borrador de una quest. Úsala cuando prefieras el plan del motor en vez de redactarlo tú; el borrador sigue necesitando aceptación explícita.",
       inputSchema: {
         intent: z.string().min(8).max(2000).describe("La intención tal como la expresó el jugador."),
-        minutesAvailable: z.number().int().min(5).max(240).optional(),
+        minutesAvailable: z.number().int().min(5).max(60).optional().describe("Minutos de trabajo activo disponibles. Maximo 60: el resto se descompone."),
+        actId: z.string().uuid().optional().describe("Acto que adopta esta Quest. Omitelo para una microquest sin padres."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async ({ intent, minutesAvailable }) => {
-      const quest = await service.createDraftFromIntent(intent, minutesAvailable);
+    async ({ intent, minutesAvailable, actId }) => {
+      const quest = await service.createDraftFromIntent(intent, minutesAvailable, actId);
       return toolResult(`Borrador «${quest.title}» creado por el motor; falta la aceptación explícita del usuario.`, { quest });
     },
   );

@@ -70,7 +70,11 @@ export function createHttpApp(service: QuestService) {
       }
       const minutes = Number(req.body?.minutesAvailable);
       res.status(201).json({
-        quest: await service.createDraftFromIntent(String(req.body?.intent ?? ""), Number.isFinite(minutes) ? minutes : undefined),
+        quest: await service.createDraftFromIntent(
+          String(req.body?.intent ?? ""),
+          Number.isFinite(minutes) ? minutes : undefined,
+          req.body?.actId ? String(req.body.actId) : undefined,
+        ),
         reused: false,
       });
     } catch (error) {
@@ -86,9 +90,96 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
+  // El reloj arranca aquí y sólo aquí: nunca al redactar ni al aceptar.
   app.post("/api/quests/:questId/start", async (req, res, next) => {
     try {
-      res.json({ quest: await service.start(req.params.questId) });
+      const minutes = Number(req.body?.durationMinutes);
+      res.json({ quest: await service.start(req.params.questId, Number.isFinite(minutes) ? minutes : undefined) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Perder una Battle no borra nada: este reintento sólo devuelve reloj y HP.
+  app.post("/api/quests/:questId/battle/retry", async (req, res, next) => {
+    try {
+      const minutes = Number(req.body?.durationMinutes);
+      res.json(await service.retryBattle(req.params.questId, Number.isFinite(minutes) ? minutes : undefined));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Códice elige la escala; esta lectura no crea nada, sólo propone.
+  app.post("/api/scale/classify", async (req, res, next) => {
+    try {
+      const activeMinutes = Number(req.body?.activeMinutes);
+      const externalWaitMinutes = Number(req.body?.externalWaitMinutes);
+      const naturalCampaigns = Number(req.body?.naturalCampaigns);
+      res.json({
+        proposal: service.classifyObjective(String(req.body?.intent ?? ""), {
+          activeMinutes: Number.isFinite(activeMinutes) ? activeMinutes : undefined,
+          externalWaitMinutes: Number.isFinite(externalWaitMinutes) ? externalWaitMinutes : undefined,
+          naturalCampaigns: Number.isFinite(naturalCampaigns) ? naturalCampaigns : undefined,
+        }),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/sagas", async (req, res, next) => {
+    try {
+      res.status(201).json({
+        saga: await service.createSaga({
+          title: String(req.body?.title ?? ""),
+          summary: req.body?.summary ? String(req.body.summary) : undefined,
+          estimatedActiveMinutes: Number(req.body?.estimatedActiveMinutes ?? 0),
+        }),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/campaigns", async (req, res, next) => {
+    try {
+      res.status(201).json({
+        campaign: await service.createCampaign({
+          title: String(req.body?.title ?? ""),
+          summary: req.body?.summary ? String(req.body.summary) : undefined,
+          objective: req.body?.objective ? String(req.body.objective) : undefined,
+          sagaId: req.body?.sagaId ? String(req.body.sagaId) : undefined,
+          estimatedActiveMinutes: Number(req.body?.estimatedActiveMinutes ?? 0),
+          scenario: req.body?.scenario ? String(req.body.scenario) : undefined,
+          bossTitle: req.body?.bossTitle ? String(req.body.bossTitle) : undefined,
+          bossDescription: req.body?.bossDescription ? String(req.body.bossDescription) : undefined,
+        }),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/acts", async (req, res, next) => {
+    try {
+      res.status(201).json({
+        act: await service.createAct({
+          title: String(req.body?.title ?? ""),
+          subtitle: req.body?.subtitle ? String(req.body.subtitle) : undefined,
+          campaignId: req.body?.campaignId ? String(req.body.campaignId) : undefined,
+          scenario: req.body?.scenario ? String(req.body.scenario) : undefined,
+          estimatedActiveMinutes: Number(req.body?.estimatedActiveMinutes ?? 0),
+        }),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/acts/:actId/quests/:questId", async (req, res, next) => {
+    try {
+      res.json(await service.assignQuestToAct(req.params.questId, req.params.actId));
     } catch (error) {
       next(error);
     }

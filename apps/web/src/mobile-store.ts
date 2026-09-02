@@ -37,6 +37,8 @@ function freshSnapshot(): RealmSnapshot {
       treasure: { currency: "COP", amount: 400000 },
     },
     battle: null,
+    hierarchy: { sagas: [], campaigns: [], currentSagaId: null, currentCampaignId: null, currentActId: null, currentQuestId: null, standaloneQuests: [] },
+    rewardPreview: null,
     consistency: { status: "warning", instance: "torreon-offline", realmId, currentQuestId: null },
     projectedMargin: 200000,
   };
@@ -106,6 +108,11 @@ function withBattle(snapshot: RealmSnapshot): RealmSnapshot {
       totalSteps: quest.steps.length,
       isKo: progress === 100,
       isPlayerKo: false,
+      durationMinutes: quest.durationMinutes,
+      // Sin servidor no hay autoridad del tiempo: aquí el reloj no corre.
+      status: "pending",
+      attempt: 1,
+      clock: null,
     },
   };
 }

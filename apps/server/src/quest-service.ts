@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { ingestArtifact, witnessArtifact, type ArtifactInput, type WitnessInput } from "./artifacts.js";
+import { advanceBattles, battleClock, clampBattleMinutes, createBattleRecord, needsAdvance, resolve as resolveBattle } from "./battle.js";
 import { HeuristicCodice, questFromIntent, validatePlan, type CodicePlanner, type Judgement } from "./codice.js";
 import type {
+  Act,
   BattleState,
+  Campaign,
   EvidenceArtifact,
   EvidenceSource,
   EvidenceVerdict,
@@ -17,8 +20,16 @@ import type {
   RealmSnapshot,
   RealmState,
   RewardProfile,
+  Saga,
 } from "./domain.js";
-import { consistencyFor, currentStepFor, progressFor, questDetailFor, statsFor } from "./read-models.js";
+import { consistencyFor, currentStepFor, hierarchyFor, progressFor, questDetailFor, statsFor } from "./read-models.js";
+import {
+  classifyScale,
+  estimateActiveMinutes,
+  MAX_ACTS_PER_CAMPAIGN,
+  MAX_QUESTS_PER_ACT,
+  type ScaleProposal,
+} from "./scale.js";
 import { JsonRealmStore } from "./store.js";
 
 export { questFromIntent } from "./codice.js";
@@ -36,11 +47,13 @@ function addEvent(state: RealmState, event: Omit<RealmEvent, "id" | "createdAt">
   state.events = state.events.slice(0, 100);
 }
 
-export function battleFor(quest: Quest | null, gameEvents: GameEvent[] = []): BattleState | null {
+export function battleFor(quest: Quest | null, gameEvents: GameEvent[] = [], nowMs = Date.now()): BattleState | null {
   if (!quest) return null;
   const damage = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
+  const attempt = quest.battle?.attempt ?? 1;
+  // Un reintento no arrastra el daño del intento perdido: es otra Battle.
   const playerDamage = gameEvents
-    .filter((event) => event.questId === quest.id && event.type === "horde_attack")
+    .filter((event) => event.questId === quest.id && event.type === "horde_attack" && (event.battleAttempt ?? 1) === attempt)
     .reduce((sum, event) => sum + event.damage, 0);
   const playerHealth = Math.max(0, 100 - playerDamage);
   const enemyHealth = Math.max(0, 100 - damage);
@@ -58,6 +71,11 @@ export function battleFor(quest: Quest | null, gameEvents: GameEvent[] = []): Ba
     totalSteps: quest.steps.length,
     isKo: damage === 100,
     isPlayerKo: playerHealth === 0,
+    durationMinutes: quest.battle?.durationMinutes ?? clampBattleMinutes(quest.durationMinutes),
+    status: quest.battle?.status ?? "pending",
+    attempt,
+    // El reloj no corre en el borrador: sólo existe desde que el jugador inicia.
+    clock: quest.battle ? battleClock(quest.battle, nowMs) : null,
   };
 }
 
@@ -75,6 +93,12 @@ export function defaultRewardProfile(quest: Quest): Required<Pick<RewardProfile,
     auraMax: quest.rewardProfile?.auraMax ?? Math.min(5, 1 + quest.wellbeingConstraints.length),
     masteryDomain: quest.rewardProfile?.masteryDomain,
   };
+}
+
+/** Lo que la quest concederá al validarse. La pantalla no recalcula la regla. */
+export function previewRewards(quest: Quest): { xp: number; aura: number; masteryDomain?: string } {
+  const profile = defaultRewardProfile(quest);
+  return { xp: Math.max(0, Math.round(profile.xpMax)), aura: Math.max(0, Math.round(profile.auraMax)), masteryDomain: profile.masteryDomain };
 }
 
 export interface RewardGrant {
@@ -145,6 +169,46 @@ function currentQuest(state: RealmState): Quest | null {
     state.quests[0] ??
     null
   );
+}
+
+/**
+ * EL PROGRESO SUBE SOLO CON RESULTADOS REALES.
+ *
+ * Una Quest completada cierra su Acto cuando ya no queda ninguna Quest viva en
+ * el; un Acto cerrado cierra su Campaña; una Campaña cerrada cierra su Saga.
+ * Nada de esto se marca a mano ni con un clic.
+ */
+function closeParents(state: RealmState, quest: Quest): void {
+  const timestamp = now();
+  const act = quest.actId ? state.acts.find((candidate) => candidate.id === quest.actId) : undefined;
+  if (!act) return;
+  const questsOfAct = act.questIds
+    .map((questId) => state.quests.find((candidate) => candidate.id === questId))
+    .filter((candidate): candidate is Quest => Boolean(candidate));
+  if (!questsOfAct.every((candidate) => ["completed", "abandoned"].includes(candidate.status))) return;
+  act.status = "completed";
+  act.completedAt = timestamp;
+  act.updatedAt = timestamp;
+
+  const campaign = act.campaignId ? state.campaigns.find((candidate) => candidate.id === act.campaignId) : undefined;
+  if (!campaign) return;
+  const actsOfCampaign = campaign.actIds
+    .map((actId) => state.acts.find((candidate) => candidate.id === actId))
+    .filter((candidate): candidate is Act => Boolean(candidate));
+  if (!actsOfCampaign.every((candidate) => ["completed", "abandoned"].includes(candidate.status))) return;
+  campaign.status = "completed";
+  campaign.completedAt = timestamp;
+  campaign.updatedAt = timestamp;
+
+  const saga = campaign.sagaId ? state.sagas.find((candidate) => candidate.id === campaign.sagaId) : undefined;
+  if (!saga) return;
+  const campaignsOfSaga = saga.campaignIds
+    .map((campaignId) => state.campaigns.find((candidate) => candidate.id === campaignId))
+    .filter((candidate): candidate is Campaign => Boolean(candidate));
+  if (!campaignsOfSaga.every((candidate) => ["completed", "abandoned"].includes(candidate.status))) return;
+  saga.status = "completed";
+  saga.completedAt = timestamp;
+  saga.updatedAt = timestamp;
 }
 
 function requireStep(quest: Quest, stepId: string): QuestStep {
@@ -234,8 +298,22 @@ export class QuestService {
     return this.codice.name;
   }
 
+  /**
+   * EL SERVIDOR ES AUTORIDAD DEL TIEMPO.
+   *
+   * Antes de responder a nadie —app, MCP o Unity— el Core cobra lo que el reloj
+   * debía haber cobrado mientras la app estaba cerrada. Sólo escribe si de
+   * verdad hay algo pendiente: leer el reino no puede ensuciar el archivo.
+   */
+  private async tick(): Promise<RealmState> {
+    const state = await this.store.read();
+    if (!needsAdvance(state, Date.now())) return state;
+    const { state: fresh } = await this.store.mutate((draft) => advanceBattles(draft, Date.now()));
+    return fresh;
+  }
+
   async snapshot(): Promise<RealmSnapshot> {
-    const realm = await this.store.read();
+    const realm = await this.tick();
     const quest = currentQuest(realm);
     const { availableBalance, expectedIncome, committedExpenses, reserveTarget } = realm.financial;
     const battle = battleFor(quest, realm.gameEvents);
@@ -246,6 +324,8 @@ export class QuestService {
       currentStep: currentStepFor(quest),
       battle,
       stats: statsFor(realm, battle),
+      hierarchy: hierarchyFor(realm, quest),
+      rewardPreview: quest ? previewRewards(quest) : null,
       consistency: consistencyFor(realm, this.instance, quest),
       projectedMargin: availableBalance + expectedIncome - committedExpenses - reserveTarget,
     };
@@ -257,19 +337,27 @@ export class QuestService {
    * de la panorámica que da snapshot().
    */
   async questDetail(questId: string): Promise<QuestDetail> {
-    return questDetailFor(await this.store.read(), questId);
+    return questDetailFor(await this.tick(), questId);
   }
 
-  async createDraft(plan: QuestPlanInput): Promise<Quest> {
+  async createDraft(plan: QuestPlanInput, parents: { actId?: string } = {}): Promise<Quest> {
     validatePlan(plan);
     const { result } = await this.store.mutate((state) => {
       const conflicting = state.quests.find((quest) => ["accepted", "active", "waiting_external"].includes(quest.status));
       if (conflicting) throw new Error(`Ya existe una quest ${conflicting.status}: ${conflicting.title}`);
+      const act = parents.actId ? state.acts.find((candidate) => candidate.id === parents.actId) : undefined;
+      if (parents.actId && !act) throw new Error(`Acto no encontrado: ${parents.actId}`);
+      if (act && act.questIds.length >= MAX_QUESTS_PER_ACT) {
+        throw new Error(`El acto «${act.title}» ya sostiene ${MAX_QUESTS_PER_ACT} Battles: parte el trabajo en otro Acto.`);
+      }
       const timestamp = now();
       const quest: Quest = {
         ...plan,
         id: randomUUID(),
         status: "draft",
+        actId: act?.id,
+        campaignId: act?.campaignId,
+        sagaId: act?.sagaId,
         steps: plan.steps.map((step) => ({
           ...step,
           id: randomUUID(),
@@ -284,6 +372,11 @@ export class QuestService {
         amendments: [],
       };
       state.quests.unshift(quest);
+      if (act) {
+        act.questIds.push(quest.id);
+        act.updatedAt = timestamp;
+        if (act.status === "pending") act.status = "active";
+      }
       addEvent(state, { type: "quest_created", questId: quest.id, message: `El Códice redactó «${quest.title}».` });
       return quest;
     });
@@ -294,7 +387,7 @@ export class QuestService {
    * Cualquier objetivo, en cualquier dominio, entra por aquí. El Códice activo
    * decide la descomposición; el servidor solo valida que el contrato sea jugable.
    */
-  async createDraftFromIntent(intent: string, minutesAvailable?: number): Promise<Quest> {
+  async createDraftFromIntent(intent: string, minutesAvailable?: number, actId?: string): Promise<Quest> {
     const clean = intent.trim();
     if (clean.length < 8) throw new Error("Describe una quest con un poco más de detalle.");
     const realm = await this.store.read();
@@ -304,7 +397,23 @@ export class QuestService {
       activeCampaign: realm.quests.find((quest) => quest.status === "active")?.campaignTitle,
       minutesAvailable,
     });
-    return this.createDraft(plan);
+    return this.createDraft(plan, { actId });
+  }
+
+  /**
+   * CÓDICE ELIGE LA ESCALA.
+   *
+   * El jugador sólo expresa el objetivo; esta lectura dice si eso es una Quest,
+   * un Acto, una Campaña o una Saga. No crea nada: propone. Y una espera ajena
+   * al jugador nunca infla artificialmente la escala.
+   */
+  classifyObjective(intent: string, input: { activeMinutes?: number; externalWaitMinutes?: number; naturalCampaigns?: number } = {}): ScaleProposal {
+    const estimated = estimateActiveMinutes(intent, input.activeMinutes);
+    return classifyScale({
+      activeMinutes: estimated.activeMinutes,
+      externalWaitMinutes: input.externalWaitMinutes ?? estimated.externalWaitMinutes,
+      naturalCampaigns: input.naturalCampaigns,
+    });
   }
 
   async reviseDraft(questId: string, plan: QuestPlanInput): Promise<Quest> {
@@ -336,15 +445,77 @@ export class QuestService {
     return result;
   }
 
-  async start(questId: string): Promise<Quest> {
+  /**
+   * EL RELOJ COMIENZA SÓLO AL INICIAR.
+   *
+   * No al crear el borrador. No al aceptar el contrato. Aquí —y sólo aquí— se
+   * persisten `startedAt`, `durationMinutes` y `deadlineAt` en el Core.
+   */
+  async start(questId: string, durationMinutes?: number): Promise<Quest> {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (quest.status !== "accepted") throw new Error("La quest debe estar aceptada antes de comenzar.");
+      const startedAtMs = Date.now();
+      const duration = clampBattleMinutes(durationMinutes ?? quest.durationMinutes);
       quest.status = "active";
-      quest.startedAt = now();
+      quest.startedAt = new Date(startedAtMs).toISOString();
       quest.updatedAt = quest.startedAt;
-      addEvent(state, { type: "quest_started", questId, message: `Comienza la batalla: «${quest.title}».` });
+      quest.battle = createBattleRecord(startedAtMs, duration);
+      state.gameEvents.unshift({
+        id: randomUUID(),
+        type: "battle_started",
+        questId,
+        damage: 0,
+        battleAttempt: quest.battle.attempt,
+        message: `Comienza la Battle de «${quest.title}»: ${duration} min pactados.`,
+        createdAt: quest.startedAt,
+      });
+      state.gameEvents = state.gameEvents.slice(0, 200);
+      addEvent(state, {
+        type: "battle_started",
+        questId,
+        message: `Comienza la batalla: «${quest.title}». El reloj corre ${duration} min y la Horda lo aprovechará.`,
+      });
       return quest;
+    });
+    return result;
+  }
+
+  /**
+   * Vuelve a intentar una Battle perdida.
+   *
+   * Perder no borra nada: la evidencia validada sigue en pie y la Horda
+   * conserva el daño que ya recibió. Lo que empieza de cero es el reloj y el HP
+   * del Marqués, porque es otra Battle sobre la misma Quest.
+   */
+  async retryBattle(questId: string, durationMinutes?: number): Promise<{ quest: Quest; battle: BattleState }> {
+    const { result } = await this.store.mutate((state) => {
+      const quest = requireQuest(state, questId);
+      if (!quest.battle || quest.battle.status !== "lost") throw new Error("Sólo una Battle perdida puede reintentarse.");
+      if (!["active", "waiting_external"].includes(quest.status)) throw new Error("Esta quest ya no tiene frente abierto: no hay Battle que reintentar.");
+      if (quest.steps.every((step) => step.impactAwarded >= step.weight)) throw new Error("Esta quest ya no tiene impacto pendiente.");
+      const startedAtMs = Date.now();
+      const duration = clampBattleMinutes(durationMinutes ?? quest.battle.durationMinutes);
+      const attempt = quest.battle.attempt + 1;
+      quest.battle = createBattleRecord(startedAtMs, duration, attempt);
+      quest.status = "active";
+      quest.updatedAt = quest.battle.startedAt;
+      state.gameEvents.unshift({
+        id: randomUUID(),
+        type: "battle_started",
+        questId,
+        damage: 0,
+        battleAttempt: attempt,
+        message: `Segunda oportunidad sobre «${quest.title}»: ${duration} min pactados.`,
+        createdAt: quest.battle.startedAt,
+      });
+      state.gameEvents = state.gameEvents.slice(0, 200);
+      addEvent(state, {
+        type: "battle_restarted",
+        questId,
+        message: `El Marqués vuelve al frente de «${quest.title}» (intento ${attempt}). La evidencia validada se conserva.`,
+      });
+      return { quest, battle: battleFor(quest, state.gameEvents)! };
     });
     return result;
   }
@@ -364,6 +535,9 @@ export class QuestService {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (quest.status !== "active") throw new Error("La quest debe estar activa para evaluar evidencia.");
+      if (quest.battle?.status === "lost") {
+        throw new Error("El tiempo pactado terminó con la Horda viva. Reinicia la Battle o pide un replan al Códice antes de entregar más evidencia.");
+      }
       const step = quest.steps.find((candidate) => candidate.id === stepId);
       if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
       if (step.status === "completed") throw new Error("Este paso ya recibió todo su impacto.");
@@ -418,6 +592,9 @@ export class QuestService {
         quest.status = "completed";
         quest.completedAt = now();
         quest.updatedAt = quest.completedAt;
+        // Si la Horda cae antes del plazo, el reloj deja de ser enemigo.
+        if (quest.battle?.status === "active") resolveBattle(state, quest, quest.battle, "won", Date.now());
+        closeParents(state, quest);
         addEvent(state, { type: "quest_completed", questId, message: `KO: «${quest.title}» fue completada.` });
         const reward = grantQuestRewards(state, quest);
         if (reward) {
@@ -658,14 +835,149 @@ export class QuestService {
         stepId: input.stepId,
         damage: input.damage,
         reason: input.reason.trim(),
+        battleAttempt: quest.battle?.attempt ?? 1,
         message: `La Horda contraataca: ${input.reason.trim()} (-${input.damage} HP).`,
         createdAt: timestamp,
       });
       state.lifeEvents = state.lifeEvents.slice(0, 200);
       state.gameEvents = state.gameEvents.slice(0, 200);
-      const battle = battleFor(quest, state.gameEvents)!;
-      addEvent(state, { type: "horde_attack", questId, message: `${state.gameEvents[0].message} El Marqués conserva ${battle.playerHealth} HP.` });
+      const attackMessage = state.gameEvents[0].message;
+      let battle = battleFor(quest, state.gameEvents)!;
+      addEvent(state, { type: "horde_attack", questId, message: `${attackMessage} El Marqués conserva ${battle.playerHealth} HP.` });
+      if (battle.isPlayerKo && quest.battle?.status === "active") {
+        resolveBattle(state, quest, quest.battle, "lost", Date.now());
+        battle = battleFor(quest, state.gameEvents)!;
+      }
       return { battle, lifeEventId, gameEventId };
+    });
+    return result;
+  }
+
+  // -------------------------------------------------------------------------
+  // SAGA -> CAMPANA -> ACTO
+  //
+  // Los padres se crean sólo cuando la vida los pide. Una microquest de quince
+  // minutos no genera Acto ni Campaña ceremonial: entra directo en batalla.
+  // -------------------------------------------------------------------------
+
+  async createSaga(input: { title: string; summary?: string; estimatedActiveMinutes?: number }): Promise<Saga> {
+    if (input.title.trim().length < 3) throw new Error("La saga necesita un título.");
+    const { result } = await this.store.mutate((state) => {
+      const timestamp = now();
+      const saga: Saga = {
+        id: randomUUID(),
+        title: input.title.trim().slice(0, 120),
+        summary: input.summary?.trim().slice(0, 500),
+        status: "active",
+        campaignIds: [],
+        estimatedActiveMinutes: Math.max(0, Math.round(input.estimatedActiveMinutes ?? 0)),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      state.sagas.unshift(saga);
+      return saga;
+    });
+    return result;
+  }
+
+  async createCampaign(input: {
+    title: string;
+    summary?: string;
+    objective?: string;
+    sagaId?: string;
+    estimatedActiveMinutes?: number;
+    scenario?: string;
+    bossTitle?: string;
+    bossDescription?: string;
+  }): Promise<Campaign> {
+    if (input.title.trim().length < 3) throw new Error("La campaña necesita un título.");
+    const { result } = await this.store.mutate((state) => {
+      const saga = input.sagaId ? state.sagas.find((candidate) => candidate.id === input.sagaId) : undefined;
+      if (input.sagaId && !saga) throw new Error(`Saga no encontrada: ${input.sagaId}`);
+      const timestamp = now();
+      const campaign: Campaign = {
+        id: randomUUID(),
+        sagaId: saga?.id,
+        title: input.title.trim().slice(0, 120),
+        summary: input.summary?.trim().slice(0, 500),
+        objective: input.objective?.trim().slice(0, 500),
+        status: "active",
+        actIds: [],
+        estimatedActiveMinutes: Math.max(0, Math.round(input.estimatedActiveMinutes ?? 0)),
+        scenario: input.scenario?.trim().slice(0, 120),
+        bossTitle: input.bossTitle?.trim().slice(0, 120),
+        bossDescription: input.bossDescription?.trim().slice(0, 300),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      state.campaigns.unshift(campaign);
+      if (saga) {
+        saga.campaignIds.push(campaign.id);
+        saga.updatedAt = timestamp;
+      }
+      return campaign;
+    });
+    return result;
+  }
+
+  async createAct(input: {
+    title: string;
+    subtitle?: string;
+    campaignId?: string;
+    scenario?: string;
+    estimatedActiveMinutes?: number;
+  }): Promise<Act> {
+    if (input.title.trim().length < 3) throw new Error("El acto necesita un título.");
+    const { result } = await this.store.mutate((state) => {
+      const campaign = input.campaignId ? state.campaigns.find((candidate) => candidate.id === input.campaignId) : undefined;
+      if (input.campaignId && !campaign) throw new Error(`Campaña no encontrada: ${input.campaignId}`);
+      if (campaign && campaign.actIds.length >= MAX_ACTS_PER_CAMPAIGN) {
+        throw new Error(`La campaña «${campaign.title}» ya sostiene ${MAX_ACTS_PER_CAMPAIGN} Actos: abre otra Campaña bajo una Saga.`);
+      }
+      const timestamp = now();
+      const act: Act = {
+        id: randomUUID(),
+        campaignId: campaign?.id,
+        sagaId: campaign?.sagaId,
+        title: input.title.trim().slice(0, 120),
+        subtitle: input.subtitle?.trim().slice(0, 200),
+        status: "pending",
+        questIds: [],
+        estimatedActiveMinutes: Math.max(0, Math.round(input.estimatedActiveMinutes ?? 0)),
+        scenario: input.scenario?.trim().slice(0, 120),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      state.acts.unshift(act);
+      if (campaign) {
+        campaign.actIds.push(act.id);
+        campaign.updatedAt = timestamp;
+      }
+      return act;
+    });
+    return result;
+  }
+
+  /** Adopta una quest ya existente dentro de un Acto, sin duplicarla. */
+  async assignQuestToAct(questId: string, actId: string): Promise<{ quest: Quest; act: Act }> {
+    const { result } = await this.store.mutate((state) => {
+      const quest = requireQuest(state, questId);
+      const act = state.acts.find((candidate) => candidate.id === actId);
+      if (!act) throw new Error(`Acto no encontrado: ${actId}`);
+      if (act.questIds.includes(questId)) return { quest, act };
+      if (act.questIds.length >= MAX_QUESTS_PER_ACT) {
+        throw new Error(`El acto «${act.title}» ya sostiene ${MAX_QUESTS_PER_ACT} Battles: parte el trabajo en otro Acto.`);
+      }
+      const previous = quest.actId ? state.acts.find((candidate) => candidate.id === quest.actId) : undefined;
+      if (previous) previous.questIds = previous.questIds.filter((candidate) => candidate !== questId);
+      act.questIds.push(questId);
+      act.updatedAt = now();
+      if (act.status === "pending") act.status = "active";
+      quest.actId = act.id;
+      quest.campaignId = act.campaignId;
+      quest.sagaId = act.sagaId;
+      quest.updatedAt = act.updatedAt;
+      return { quest, act };
     });
     return result;
   }
@@ -679,6 +991,8 @@ export class QuestService {
       quest.status = "abandoned";
       quest.abandonedAt = now();
       quest.updatedAt = quest.abandonedAt;
+      // Retirarse cierra el reloj: una quest abandonada ya no recibe ataques.
+      if (quest.battle?.status === "active") resolveBattle(state, quest, quest.battle, "lost", Date.now());
       addEvent(state, { type: "quest_abandoned", questId, message: `Retirada: ${reason.trim() || "sin motivo registrado"}.` });
       return quest;
     });

@@ -2,10 +2,10 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 import { Sprite } from "./Sprite";
-import type { CharacterStats, Quest, RealmSnapshot } from "./types";
+import type { ActView, BattleClock, BattleStatus, CampaignView, CharacterStats, Quest, RealmSnapshot } from "./types";
 import "./styles.css";
 
-type Screen = "loading" | "realm" | "thinking" | "battle" | "stats";
+type Screen = "loading" | "realm" | "thinking" | "campaign" | "act" | "quest" | "battle" | "stats";
 
 const API_BASE = Capacitor.isNativePlatform() ? "https://torreon.fly.dev" : "";
 
@@ -77,12 +77,14 @@ function LoadingGate({ onStart }: { onStart: () => void }) {
 function RealmMenu({
   snapshot,
   onCampaign,
+  onCodex,
   onBattle,
   onStats,
   onReset,
 }: {
   snapshot: RealmSnapshot;
   onCampaign: () => void;
+  onCodex: () => void;
   onBattle: () => void;
   onStats: () => void;
   onReset: () => void;
@@ -101,7 +103,7 @@ function RealmMenu({
         <strong>{quest ? "CAMPAÑA ACTIVA" : "CAMPAÑAS"}</strong>
         <span>{quest ? quest.title : "Crear quest"}</span>
       </button>
-      <button className="realm-hotspot codex-hotspot" onClick={onCampaign}>
+      <button className="realm-hotspot codex-hotspot" onClick={onCodex}>
         <strong>CÓDICE</strong>
         <span>Dungeon Master</span>
       </button>
@@ -402,27 +404,533 @@ function CharacterSheet({ snapshot, onBack }: { snapshot: RealmSnapshot; onBack:
   );
 }
 
+/** mm:ss. El servidor manda el tiempo; esto sólo lo dibuja. */
+function formatClock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function formatMinutes(minutes: number): string {
+  if (minutes <= 0) return "sin estimar";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+}
+
+/** Repinta cada segundo para que el reloj no parezca congelado entre lecturas. */
+function useHeartbeat(active: boolean): void {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!active) return undefined;
+    const id = window.setInterval(() => setTick((value) => value + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [active]);
+}
+
+/**
+ * EL RELOJ ES PARTE DEL ENEMIGO.
+ *
+ * React NUNCA es la autoridad del tiempo: `remainingMs` lo calculó el Core.
+ * Aquí sólo se descuenta lo que pasó desde que llegó esa lectura, para que la
+ * cuenta atrás se vea viva entre una consulta y la siguiente.
+ */
+function BattleTimer({ clock, status, receivedAt }: { clock: BattleClock; status: BattleStatus; receivedAt: number }) {
+  const running = status === "active" && !clock.suspended;
+  useHeartbeat(running);
+  const remaining = Math.max(0, clock.remainingMs - (running ? Date.now() - receivedAt : 0));
+  const totalMs = clock.durationMinutes * 60_000;
+  const spent = totalMs > 0 ? Math.min(100, ((totalMs - remaining) / totalMs) * 100) : 100;
+  const danger = running && remaining <= 5 * 60_000;
+  return (
+    <section className={`battle-timer glass-panel ${danger ? "danger" : ""} ${clock.suspended ? "suspended" : ""}`} aria-live="off">
+      <div>
+        <span>{clock.suspended ? "PRESIÓN SUSPENDIDA" : status === "lost" ? (clock.expired ? "PLAZO VENCIDO" : "BATALLA PERDIDA") : status === "won" ? "MARGEN RESTANTE" : "TIEMPO RESTANTE"}</span>
+        <strong>{formatClock(remaining)}</strong>
+      </div>
+      <div className="timer-track"><span style={{ width: `${spent}%` }} /></div>
+      <small>
+        {clock.suspended
+          ? "Un bloqueo externo real detuvo el reloj. No hay acción del Marqués."
+          : `La Horda golpea al 25%, 50%, 75% y 100% de los ${clock.durationMinutes} min pactados.`}
+      </small>
+    </section>
+  );
+}
+
+function ProgressTrack({ percent, label }: { percent: number; label: string }) {
+  return (
+    <div className="rune-track" role="img" aria-label={label}>
+      <span style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} />
+    </div>
+  );
+}
+
+/**
+ * Barra superior común a Campaña, Acto y Orden.
+ *
+ * Cubre la franja de recursos del mockup con las cifras que el reino sí puede
+ * defender: XP, Aura y Tesoro real. Ni monedas ni gemas inventadas.
+ */
+function RealmTopBar({ snapshot, onOpenStats }: { snapshot: RealmSnapshot; onOpenStats: () => void }) {
+  const stats = statsOf(snapshot);
+  return (
+    <>
+      <button className="map-player" type="button" onClick={onOpenStats}>
+        <strong>{stats.displayName.toUpperCase()}</strong>
+        <span>{stats.hp}/{stats.maxHp} HP</span>
+      </button>
+      <section className="map-resources" aria-label="Recursos del reino">
+        <span><b>{stats.xp}</b>XP</span>
+        <span><b>{stats.aura}</b>AURA</span>
+        <span><b>{stats.mastery.length}</b>MAESTRÍAS</span>
+        <span className="treasure"><b>{formatTreasure(stats.treasure.amount, stats.treasure.currency)}</b>TESORO REAL</span>
+      </section>
+    </>
+  );
+}
+
+/**
+ * MAPA DE CAMPAÑA.
+ *
+ * La campaña es el objetivo significativo; sus nodos son los Actos. El mockup
+ * queda debajo como escenario y encima sólo se calca lo que este slice sostiene
+ * de verdad: progreso derivado, actos reales y la vuelta al reino. Tesorería y
+ * Cuartel todavía no existen, así que tampoco se dibujan botones que mientan.
+ */
+function CampaignMap({
+  snapshot,
+  campaign,
+  onBack,
+  onOpenAct,
+  onOpenStats,
+}: {
+  snapshot: RealmSnapshot;
+  campaign: CampaignView;
+  onBack: () => void;
+  onOpenAct: (actId: string) => void;
+  onOpenStats: () => void;
+}) {
+  const quest = snapshot.currentQuest;
+  const activeAct = campaign.acts.find((act) => act.id === snapshot.hierarchy.currentActId) ?? campaign.acts.find((act) => !act.locked);
+  return (
+    <main className="scene map-scene">
+      <img className="map-art" src="/assets/art/campaign-map.png" alt="" aria-hidden="true" />
+      <RealmTopBar snapshot={snapshot} onOpenStats={onOpenStats} />
+
+      <header className="map-title">
+        <p className="eyebrow">CAMPAÑA ACTIVA</p>
+        <h1>{campaign.title}</h1>
+        {campaign.summary ? <p>{campaign.summary}</p> : null}
+      </header>
+
+      <section className="map-progress">
+        <p className="eyebrow">PROGRESO DE CAMPAÑA</p>
+        <ProgressTrack percent={campaign.percent} label={`${campaign.completedQuests} de ${campaign.totalQuests} quests completadas`} />
+        <strong>{campaign.completedQuests} / {campaign.totalQuests} completadas</strong>
+      </section>
+
+      <aside className="map-boss">
+        <p className="eyebrow">JEFE FINAL</p>
+        <h2>{campaign.bossTitle ?? "Sin jefe declarado"}</h2>
+        <p>{campaign.bossDescription ?? "El jefe es la última Battle de la campaña; el Códice todavía no le puso nombre."}</p>
+      </aside>
+
+      <nav className="map-nodes" aria-label="Actos de la campaña">
+        {campaign.acts.map((act) => (
+          <button
+            key={act.id}
+            className={`map-node ${act.status} ${act.locked ? "locked" : ""} ${act.id === activeAct?.id ? "current" : ""}`}
+            type="button"
+            disabled={act.locked}
+            onClick={() => onOpenAct(act.id)}
+          >
+            <strong>{act.position}. {act.title}</strong>
+            <small>{act.subtitle ?? `${act.totalQuests} ${act.totalQuests === 1 ? "battle" : "battles"} · ${formatMinutes(act.estimatedActiveMinutes)}`}</small>
+            <em>{act.locked ? "🔒 BLOQUEADO" : act.status === "completed" ? "✓ COMPLETADO" : `${act.completedQuests}/${act.totalQuests} · ACTIVO`}</em>
+          </button>
+        ))}
+        {campaign.acts.length === 0 ? <p className="map-empty">Esta campaña todavía no tiene actos. Pídeselos al Códice.</p> : null}
+      </nav>
+
+      <section className="map-details">
+        <p className="eyebrow">DETALLES DE CAMPAÑA</p>
+        <ul>
+          <li><i>✦</i><span>Objetivo final:</span> <b>{campaign.objective ?? "Sin objetivo declarado"}</b></li>
+          <li><i>✦</i><span>Actos:</span> <b>{campaign.completedActs} / {campaign.totalActs}</b></li>
+          <li><i>✦</i><span>Trabajo activo estimado:</span> <b>{formatMinutes(campaign.estimatedActiveMinutes)}</b></li>
+          <li><i>✦</i><span>Recompensa:</span> <b>XP, Aura y maestría por cada quest validada</b></li>
+        </ul>
+      </section>
+
+      <section className="map-summary">
+        <p className="eyebrow">RESUMEN ACTUAL</p>
+        <ul>
+          <li><i>✦</i><span>Acto activo:</span> <b>{activeAct ? `${activeAct.position}. ${activeAct.title}` : "Ninguno"}</b></li>
+          <li><i>✦</i><span>Quest activa:</span> <b>{quest ? quest.title : "Ninguna"}</b></li>
+          <li><i>✦</i><span>Impacto validado:</span> <b>{snapshot.battle?.progress ?? 0} / 100</b></li>
+        </ul>
+      </section>
+
+      <nav className="map-nav" aria-label="Navegación de campaña">
+        <button className="map-nav-button" type="button" onClick={onBack}>VOLVER AL REINO</button>
+        <button className="map-nav-button active" type="button" disabled>MAPA DE CAMPAÑA</button>
+        <p className="map-nav-note">Misiones, Tesorería y Cuartel llegarán cuando el reino los sostenga de verdad.</p>
+      </nav>
+    </main>
+  );
+}
+
+/**
+ * ACTO.
+ *
+ * Fase jugable de una jornada: de 2 a 8 Battles. Aquí el jugador elige la
+ * siguiente Quest y prepara la expedición; el reloj todavía NO corre.
+ */
+function ActBook({
+  snapshot,
+  campaign,
+  act,
+  onBack,
+  onOpenQuest,
+  onOpenStats,
+}: {
+  snapshot: RealmSnapshot;
+  campaign: CampaignView | null;
+  act: ActView;
+  onBack: () => void;
+  onOpenQuest: (questId: string) => void;
+  onOpenStats: () => void;
+}) {
+  const next = act.quests.find((node) => !["completed", "abandoned"].includes(node.status) && !node.locked) ?? act.quests[0] ?? null;
+  return (
+    <main className="scene act-scene">
+      <img className="map-art" src="/assets/art/act-book.png" alt="" aria-hidden="true" />
+      <RealmTopBar snapshot={snapshot} onOpenStats={onOpenStats} />
+
+      <header className="map-title">
+        <p className="eyebrow">CAMPAÑA ACTIVA</p>
+        <h1>{campaign?.title ?? "Sin campaña"}</h1>
+      </header>
+
+      <aside className="act-side">
+        <p className="eyebrow">PROGRESO DE CAMPAÑA</p>
+        <strong className="act-count">{campaign ? campaign.completedQuests : act.completedQuests} / {campaign ? campaign.totalQuests : act.totalQuests}</strong>
+        <span className="act-count-label">completadas</span>
+        <ProgressTrack percent={campaign?.percent ?? act.percent} label="Progreso de campaña" />
+        <dl>
+          <div><dt>Trabajo activo del acto</dt><dd>{formatMinutes(act.estimatedActiveMinutes)}</dd></div>
+          <div><dt>Battles del acto</dt><dd>{act.completedQuests} / {act.totalQuests}</dd></div>
+          <div><dt>Escenario</dt><dd>{act.scenario ?? "El del reino"}</dd></div>
+        </dl>
+        {snapshot.rewardPreview ? (
+          <div className="act-reward">
+            <p className="eyebrow">RECOMPENSA DE LA QUEST ACTUAL</p>
+            <span>+{snapshot.rewardPreview.xp} XP · +{snapshot.rewardPreview.aura} Aura{snapshot.rewardPreview.masteryDomain ? ` · ${snapshot.rewardPreview.masteryDomain}` : ""}</span>
+          </div>
+        ) : null}
+      </aside>
+
+      <header className="act-title">
+        <h1>{act.subtitle ? `${act.title}: ${act.subtitle}` : act.title}</h1>
+      </header>
+
+      <nav className="act-nodes" aria-label="Quests del acto">
+        {act.quests.map((node) => (
+          <button
+            key={node.id}
+            className={`act-node ${node.status} ${node.locked ? "locked" : ""} ${node.isBoss ? "boss" : ""}`}
+            type="button"
+            disabled={node.locked}
+            onClick={() => onOpenQuest(node.id)}
+          >
+            <b>{node.status === "completed" ? "✓" : node.locked ? "🔒" : node.position}</b>
+            <strong>{node.title}</strong>
+            <small>{node.percent}/100 · {node.durationMinutes} min</small>
+          </button>
+        ))}
+        {act.quests.length === 0 ? <p className="map-empty">Este acto todavía no tiene quests. Pídeselas al Códice.</p> : null}
+      </nav>
+
+      <aside className="act-quest">
+        <p className="eyebrow">QUEST ACTUAL</p>
+        {next ? (
+          <>
+            <h2>{next.position}. {next.title}</h2>
+            <p>{next.outcome}</p>
+            <dl>
+              <div><dt>Progreso</dt><dd>{next.percent} / 100</dd></div>
+              <div><dt>Duración pactada</dt><dd>{next.durationMinutes} min</dd></div>
+              <div><dt>Estado</dt><dd>{next.battleStatus === "lost" ? "Battle perdida" : next.status}</dd></div>
+            </dl>
+          </>
+        ) : (
+          <p>Este acto no tiene ninguna quest pendiente.</p>
+        )}
+      </aside>
+
+      <section className="act-codex">
+        <p className="eyebrow">CÓDICE</p>
+        <p>{snapshot.currentQuest?.rationale ?? "El Códice abrirá la siguiente orden cuando el acto lo pida."}</p>
+      </section>
+
+      <div className="act-actions">
+        <button className="back-button" type="button" onClick={onBack}>← VOLVER</button>
+        <button className="expedition-button" type="button" disabled={!next} onClick={() => next && onOpenQuest(next.id)}>
+          ⚔ PREPARAR EXPEDICIÓN
+        </button>
+        <p className="map-nav-note">La expedición no arranca el reloj: eso ocurre al iniciar la Battle.</p>
+      </div>
+    </main>
+  );
+}
+
+/** Lo que la orden de misión necesita, venga del snapshot o del detalle HTTP. */
+interface QuestOrderView {
+  id: string;
+  title: string;
+  campaignTitle: string;
+  outcome: string;
+  rationale: string;
+  status: Quest["status"];
+  durationMinutes: number;
+  wellbeingConstraints: string[];
+  steps: Array<{ id: string; title: string; evidence: string; evidenceKind?: string; weight: number; impactAwarded: number; status: string }>;
+}
+
+function attackTier(weight: number): string {
+  if (weight < 10) return "MENOR";
+  if (weight < 20) return "NORMAL";
+  if (weight < 35) return "MAYOR";
+  return "CRÍTICO";
+}
+
+/**
+ * ORDEN DE MISIÓN.
+ *
+ * Todo lo que el jugador necesita ANTES de que el reloj empiece a correr: qué
+ * cuenta como victoria, qué prueba hay que entregar, cuánto tiempo se pacta y
+ * qué se arriesga. Las recompensas son las que el Core concede de verdad —XP,
+ * Aura y maestría—; aquí no hay monedas ni gemas inventadas.
+ */
+function QuestOrder({
+  snapshot,
+  questId,
+  busy,
+  receivedAt,
+  onBack,
+  onAccept,
+  onStart,
+  onEnterBattle,
+  onOpenStats,
+}: {
+  snapshot: RealmSnapshot;
+  questId: string | null;
+  busy: boolean;
+  receivedAt: number;
+  onBack: () => void;
+  onAccept: (questId: string) => void;
+  onStart: (questId: string) => void;
+  onEnterBattle: () => void;
+  onOpenStats: () => void;
+}) {
+  const current = snapshot.currentQuest;
+  const isCurrent = Boolean(questId) && current?.id === questId;
+  const [fetched, setFetched] = useState<QuestOrderView | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!questId || isCurrent) {
+      setFetched(null);
+      return undefined;
+    }
+    let cancelled = false;
+    api<{ quest: QuestOrderView }>(`/api/quests/${questId}`)
+      .then((body) => {
+        if (!cancelled) setFetched(body.quest);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setFailure(error instanceof Error ? error.message : "No fue posible leer la orden.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [questId, isCurrent]);
+
+  const quest: QuestOrderView | null = isCurrent && current ? current : fetched;
+  const battle = isCurrent ? snapshot.battle : null;
+
+  if (!quest) {
+    return (
+      <main className="scene order-scene">
+        <img className="map-art" src="/assets/art/quest-order.png" alt="" aria-hidden="true" />
+        <RealmTopBar snapshot={snapshot} onOpenStats={onOpenStats} />
+        <article className="order-sheet">
+          <p className="eyebrow">ORDEN DE MISIÓN</p>
+          <h1>Sin orden abierta</h1>
+          <p className="order-lead">{failure ?? "El Códice todavía no ha redactado esta misión."}</p>
+        </article>
+        <div className="order-actions">
+          <button className="back-button" type="button" onClick={onBack}>← ATRÁS</button>
+        </div>
+      </main>
+    );
+  }
+
+  const totalAttack = quest.steps.reduce((sum, step) => sum + step.weight, 0);
+  const validated = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
+  const evidences = Array.from(new Set(quest.steps.map((step) => step.evidence))).slice(0, 6);
+  const reward = isCurrent ? snapshot.rewardPreview : null;
+  const campaign = snapshot.hierarchy?.campaigns.find((candidate) => candidate.id === snapshot.hierarchy.currentCampaignId) ?? null;
+
+  return (
+    <main className="scene order-scene">
+      <img className="map-art" src="/assets/art/quest-order.png" alt="" aria-hidden="true" />
+      <RealmTopBar snapshot={snapshot} onOpenStats={onOpenStats} />
+
+      <header className="map-title">
+        <p className="eyebrow">CAMPAÑA ACTIVA</p>
+        <h1>{campaign?.title ?? quest.campaignTitle}</h1>
+      </header>
+
+      <aside className="order-side">
+        <p className="eyebrow">PROGRESO DE CAMPAÑA</p>
+        <strong className="act-count">{campaign ? `${campaign.completedQuests} / ${campaign.totalQuests}` : `${validated} / 100`}</strong>
+        <span className="act-count-label">{campaign ? "completadas" : "impacto validado"}</span>
+        <ProgressTrack percent={campaign ? campaign.percent : validated} label="Progreso" />
+        <div className="order-care-block">
+          <p className="eyebrow">CONSEJO DE CÓDICE</p>
+          {quest.wellbeingConstraints.length > 0 ? (
+            <ul className="order-care">
+              {quest.wellbeingConstraints.map((care) => <li key={care}>✦ {care}</li>)}
+            </ul>
+          ) : (
+            <p className="order-note">No intentes hacerlo perfecto. Prioriza lo que mueve la aguja.</p>
+          )}
+        </div>
+      </aside>
+
+      <article className="order-sheet">
+        <p className="eyebrow">ORDEN DE MISIÓN</p>
+        <h1>{quest.title}</h1>
+        <p className="order-lead">{quest.outcome}</p>
+
+        <div className="order-grid">
+          <section>
+            <p className="eyebrow">OBJETIVO REAL</p>
+            <p>{quest.outcome}</p>
+          </section>
+          <section>
+            <p className="eyebrow">CONDICIÓN DE VICTORIA</p>
+            <p><b>100 puntos</b> de impacto validado en {quest.steps.length} {quest.steps.length === 1 ? "paso" : "pasos"}. Sólo la evidencia comprobada causa daño.</p>
+          </section>
+          <section>
+            <p className="eyebrow">EVIDENCIA REQUERIDA</p>
+            <ul className="order-evidence">
+              {evidences.map((evidence) => <li key={evidence}>✦ {evidence}</li>)}
+            </ul>
+          </section>
+          <section>
+            <p className="eyebrow">DURACIÓN PACTADA</p>
+            <p><b>{quest.durationMinutes} min</b> de trabajo activo.</p>
+            <p className="order-risk">Si termina el tiempo con la Horda viva, pierdes la Battle.</p>
+          </section>
+        </div>
+
+        <section className="order-attack">
+          <p className="eyebrow">VALOR DEL ATAQUE · {totalAttack} PUNTOS</p>
+          <ul>
+            {quest.steps.map((step) => (
+              <li key={step.id} className={step.status === "completed" ? "done" : ""}>
+                <span>{step.title}</span>
+                <b>{step.impactAwarded}/{step.weight}</b>
+                <em>{attackTier(step.weight)}</em>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </article>
+
+      <aside className="order-rewards">
+        <p className="eyebrow">RECOMPENSAS ESTIMADAS</p>
+        {reward ? (
+          <ul>
+            <li><b>+{reward.xp}</b><span>XP</span></li>
+            <li><b>+{reward.aura}</b><span>AURA</span></li>
+            {reward.masteryDomain ? <li><b>+1</b><span>{reward.masteryDomain.toUpperCase()}</span></li> : null}
+          </ul>
+        ) : (
+          <p className="order-note">El Códice calculará la recompensa cuando esta orden sea la activa.</p>
+        )}
+        <small>El Tesoro no cambia por completar quests: sólo lo mueve un hecho financiero real.</small>
+      </aside>
+
+      <aside className="order-state">
+        <p className="eyebrow">ESTADO DE LA BATALLA</p>
+        {battle?.clock ? (
+          <>
+            <strong>{formatClock(Math.max(0, battle.clock.remainingMs - (battle.status === "active" && !battle.clock.suspended ? Date.now() - receivedAt : 0)))}</strong>
+            <p>Intento {battle.attempt} · {battle.status === "lost" ? "Battle perdida" : battle.status === "won" ? "Battle ganada" : battle.clock.suspended ? "Presión suspendida" : "Reloj corriendo"}</p>
+          </>
+        ) : (
+          <>
+            <strong>{quest.durationMinutes}:00</strong>
+            <p>El reloj no ha empezado. Arranca al iniciar la expedición, no al aceptar el contrato.</p>
+          </>
+        )}
+      </aside>
+
+      <aside className="order-codex">
+        <p className="eyebrow">CÓDICE DICE</p>
+        <p>{quest.rationale}</p>
+      </aside>
+
+      <div className="order-actions">
+        <button className="back-button" type="button" onClick={onBack}>← ATRÁS</button>
+        {!isCurrent ? (
+          <button className="expedition-button" type="button" disabled>ESTA QUEST ESPERA SU TURNO</button>
+        ) : quest.status === "draft" ? (
+          <button className="expedition-button" type="button" disabled={busy} onClick={() => onAccept(quest.id)}>✍ ACEPTAR CONTRATO</button>
+        ) : quest.status === "accepted" ? (
+          <button className="expedition-button" type="button" disabled={busy} onClick={() => onStart(quest.id)}>⚔ INICIAR EXPEDICIÓN · {quest.durationMinutes} MIN</button>
+        ) : quest.status === "completed" ? (
+          <button className="expedition-button" type="button" onClick={onEnterBattle}>🏆 VER RESULTADO</button>
+        ) : (
+          <button className="expedition-button" type="button" onClick={onEnterBattle}>⚔ VOLVER A LA BATALLA · {validated}/100</button>
+        )}
+      </div>
+    </main>
+  );
+}
+
 function Battle({
   snapshot,
   busy,
   impact,
   incomingDamage,
+  receivedAt,
   onBack,
   onOpenStats,
+  onOpenOrder,
   onAccept,
   onAcceptAmendment,
   onStart,
+  onRetry,
   onDeliverEvidence,
 }: {
   snapshot: RealmSnapshot;
   busy: boolean;
   impact: number | null;
   incomingDamage: number | null;
+  /** Momento local de la última lectura: ancla la cuenta atrás sin inventar tiempo. */
+  receivedAt: number;
   onBack: () => void;
   onOpenStats: () => void;
+  onOpenOrder: () => void;
   onAccept: () => void;
   onAcceptAmendment: (amendmentId: string) => void;
   onStart: () => void;
+  onRetry: () => void;
   onDeliverEvidence: (stepId: string, note: string, link: string, files: PendingFile[]) => void;
 }) {
   const quest = snapshot.currentQuest;
@@ -484,6 +992,24 @@ function Battle({
         <div className="health-track"><span style={{ width: `${health}%` }} /></div>
       </section>
 
+      {battle?.clock ? <BattleTimer clock={battle.clock} status={battle.status} receivedAt={receivedAt} /> : null}
+
+      {/*
+        Tira de estado calcada sobre el HUD pintado del arte de batalla: donde
+        el escenario dibuja un reloj y un «modo enfoque» que no existen, el
+        renderer pone el estado real del frente.
+      */}
+      {battle ? (
+        <section className="battle-hud glass-panel" aria-label="Estado del frente">
+          <div>
+            <span>ESTADO</span>
+            <strong>{battle.status === "lost" ? "PERDIDA" : battle.status === "won" ? "GANADA" : battle.clock?.suspended ? "SUSPENDIDA" : battle.clock ? "EN CURSO" : "SIN INICIAR"}</strong>
+          </div>
+          <div><span>INTENTO</span><strong>{battle.attempt}</strong></div>
+          <div className="hud-step"><span>PASO ACTUAL</span><strong>{currentStep?.title ?? "—"}</strong></div>
+        </section>
+      ) : null}
+
       <button className="player-health glass-panel" type="button" onClick={onOpenStats} aria-label="Abrir hoja de personaje">
         <div><span>MARQUÉS</span><strong>{playerHealth} / 100 HP</strong></div>
         <div className="player-health-track"><span style={{ width: `${playerHealth}%` }} /></div>
@@ -501,6 +1027,31 @@ function Battle({
       </section>
 
       {/*
+        DERROTA: el plazo terminó con la Horda viva. No se borró nada —evidencia,
+        impacto, XP, Aura, Tesoro e historial siguen en pie—; sólo esta Battle
+        se perdió, y el jugador decide si vuelve al frente o al reino.
+      */}
+      {battle?.status === "lost" ? (
+        <div className="battle-defeat" role="alertdialog" aria-label="Battle perdida">
+          <article>
+            <p className="eyebrow">DERROTA</p>
+            {/* El plazo vencido y el KO son derrotas distintas: se nombran distinto. */}
+            <h2>{battle.clock?.expired ? "El tiempo pactado terminó" : "El Marqués cayó en el frente"}</h2>
+            <p>
+              Progreso validado: <b>{battle.progress}/100</b>.{" "}
+              {battle.clock?.expired
+                ? "La evidencia entregada sigue contando; lo que se agotó fue el plazo."
+                : "La evidencia entregada sigue contando; lo que se agotó fue el HP del Marqués."}
+            </p>
+            <div className="defeat-actions">
+              <button className="gold-button" type="button" disabled={busy} onClick={onRetry}>REPLANIFICAR</button>
+              <button className="back-button" type="button" onClick={onBack}>VOLVER AL REINO</button>
+            </div>
+          </article>
+        </div>
+      ) : null}
+
+      {/*
         LA BATALLA ES LA QUEST: aceptar, iniciar, entregar evidencia y ver la
         victoria ocurren en este mismo panel. Aceptar un contrato transforma la
         pantalla; nunca saca al jugador del campo para configurarlo aparte.
@@ -513,14 +1064,21 @@ function Battle({
         <p>{quest.rationale}</p>
 
         {["draft", "accepted"].includes(quest.status) ? (
-          <div className="contract-stats">
-            <span><b>{quest.durationMinutes} min</b><small>DURACIÓN PACTADA</small></span>
-            <span><b>{quest.steps.length} pasos</b><small>OBJETIVO</small></span>
-            <span><b>{totalAttack}</b><small>ATAQUE TOTAL</small></span>
-          </div>
+          <>
+            <div className="contract-stats">
+              <span><b>{quest.durationMinutes} min</b><small>DURACIÓN PACTADA</small></span>
+              <span><b>{quest.steps.length} pasos</b><small>OBJETIVO</small></span>
+              <span><b>{totalAttack}</b><small>ATAQUE TOTAL</small></span>
+            </div>
+            {/* El reloj todavía no corre: arranca al iniciar, no al aceptar. */}
+            <p className="contract-risk">RIESGO · Si terminan los {quest.durationMinutes} min con la Horda viva, pierdes la Battle.</p>
+          </>
         ) : null}
 
         {quest.status === "completed" && rewardMessage ? <p className="contract-reward">{rewardMessage}</p> : null}
+        {quest.status === "completed" && battle?.clock ? (
+          <p className="contract-reward">Tiempo restante: {formatClock(battle.clock.remainingMs)} · HP restante: {playerHealth}/100</p>
+        ) : null}
 
         {quest.status === "active" ? (
           <button className="orders-button" type="button" onClick={() => setOrdersOpen((open) => !open)}>
@@ -532,7 +1090,7 @@ function Battle({
         <div className="contract-actions">
           {quest.status === "draft" ? <button className="gold-button" disabled={busy} onClick={onAccept}>ACEPTAR CONTRATO</button> : null}
           {quest.status === "accepted" ? <button className="gold-button" disabled={busy} onClick={onStart}>INICIAR BATALLA</button> : null}
-          {quest.status === "active" && currentStep ? (
+          {quest.status === "active" && currentStep && battle?.status !== "lost" ? (
             <button className="gold-button" type="button" onClick={focusCurrentStep}>
               {currentStep.evidenceKind === "photo" ? "📷 TOMAR EVIDENCIA" : "⚔️ ENTREGAR EVIDENCIA"}
             </button>
@@ -541,6 +1099,7 @@ function Battle({
           {quest.status === "completed" ? <button className="gold-button" onClick={onBack}>VOLVER AL REINO</button> : null}
         </div>
         {quest.status === "active" && currentStep ? <small className="contract-step">PASO ACTUAL · {currentStep.title}</small> : null}
+        <button className="orders-button" type="button" onClick={onOpenOrder}>VER ORDEN DE MISIÓN</button>
       </aside>
 
       <section className={`steps-panel glass-panel ${ordersOpen ? "open" : "closed"}`}>
@@ -604,7 +1163,7 @@ function Battle({
                         ))}
                       </ul>
                     ) : null}
-                    {quest.status === "active" && !["completed", "blocked", "superseded"].includes(step.status) ? (
+                    {quest.status === "active" && battle?.status !== "lost" && !["completed", "blocked", "superseded"].includes(step.status) ? (
                       <form
                         onSubmit={(event) => {
                           event.preventDefault();
@@ -706,8 +1265,17 @@ function Battle({
 
 function App() {
   const requestedScreen = new URLSearchParams(window.location.search).get("screen");
-  const initialScreen: Screen = requestedScreen === "battle" ? "battle" : requestedScreen === "bastion" || requestedScreen === "realm" ? "realm" : "loading";
+  const initialScreen: Screen =
+    requestedScreen === "battle"
+      ? "battle"
+      : requestedScreen === "campaign" || requestedScreen === "act" || requestedScreen === "quest"
+        ? (requestedScreen as Screen)
+        : requestedScreen === "bastion" || requestedScreen === "realm"
+          ? "realm"
+          : "loading";
   const [screen, setScreen] = useState<Screen>(initialScreen);
+  const [openActId, setOpenActId] = useState<string | null>(null);
+  const [openQuestId, setOpenQuestId] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<RealmSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -717,6 +1285,8 @@ function App() {
   const [pendingIntent, setPendingIntent] = useState("");
   const [verdict, setVerdict] = useState<string | null>(null);
   const [notice, setNotice] = useState<RealmNotice | null>(null);
+  // Ancla local de la última lectura: el reloj se interpola, nunca se inventa.
+  const [receivedAt, setReceivedAt] = useState(() => Date.now());
   const lastProgress = useRef(0);
   const lastPlayerHealth = useRef<number | null>(null);
   const seenEventIds = useRef(new Set<string>());
@@ -747,6 +1317,7 @@ function App() {
       lastProgress.current = next.battle?.progress ?? 0;
       lastPlayerHealth.current = next.battle?.playerHealth ?? null;
       setSnapshot(next);
+      setReceivedAt(Date.now());
       setError(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No fue posible alcanzar el servidor.");
@@ -785,13 +1356,38 @@ function App() {
   if (!snapshot) return <main className="loading"><Codex speaking /><p>El Códice despierta…</p>{error ? <strong>{error}</strong> : null}</main>;
 
   const quest = snapshot.currentQuest;
+  const hierarchy = snapshot.hierarchy;
+  const campaigns = hierarchy?.campaigns ?? [];
+  const currentCampaign = campaigns.find((candidate) => candidate.id === hierarchy?.currentCampaignId) ?? campaigns[0] ?? null;
+  const allActs = campaigns.flatMap((candidate) => candidate.acts);
+  const openAct = allActs.find((candidate) => candidate.id === openActId) ?? null;
+  const campaignOfOpenAct = campaigns.find((candidate) => candidate.acts.some((candidate2) => candidate2.id === openAct?.id)) ?? currentCampaign;
+
+  const openOrder = (questId: string) => {
+    setOpenQuestId(questId);
+    setScreen("quest");
+  };
+  // Una microquest no pasa por Campaña ni Acto: no se le fabrica ceremonia.
+  const openCampaignOrOrder = () => {
+    if (currentCampaign) {
+      setScreen("campaign");
+      return;
+    }
+    if (quest) {
+      openOrder(quest.id);
+      return;
+    }
+    setComposerOpen(true);
+  };
+
   return (
     <>
       {screen === "realm" ? (
         <>
         <RealmMenu
           snapshot={snapshot}
-          onCampaign={() => setComposerOpen(true)}
+          onCampaign={openCampaignOrOrder}
+          onCodex={() => setComposerOpen(true)}
           onBattle={() => setScreen("battle")}
           onStats={() => setScreen("stats")}
           onReset={() => void act(() => api("/api/reset", { method: "POST" }))}
@@ -814,6 +1410,43 @@ function App() {
         </>
       ) : screen === "stats" ? (
         <CharacterSheet snapshot={snapshot} onBack={() => setScreen(quest ? "battle" : "realm")} />
+      ) : screen === "campaign" && currentCampaign ? (
+        <CampaignMap
+          snapshot={snapshot}
+          campaign={currentCampaign}
+          onBack={() => setScreen("realm")}
+          onOpenAct={(actId) => {
+            setOpenActId(actId);
+            setScreen("act");
+          }}
+          onOpenStats={() => setScreen("stats")}
+        />
+      ) : screen === "act" && openAct ? (
+        <ActBook
+          snapshot={snapshot}
+          campaign={campaignOfOpenAct}
+          act={openAct}
+          onBack={() => setScreen(currentCampaign ? "campaign" : "realm")}
+          onOpenQuest={openOrder}
+          onOpenStats={() => setScreen("stats")}
+        />
+      ) : screen === "quest" ? (
+        <QuestOrder
+          snapshot={snapshot}
+          questId={openQuestId ?? quest?.id ?? null}
+          busy={busy}
+          receivedAt={receivedAt}
+          onBack={() => setScreen(openAct ? "act" : currentCampaign ? "campaign" : "realm")}
+          onAccept={(questId) => void act(() => api(`/api/quests/${questId}/accept`, { method: "POST", body: JSON.stringify({ userAccepted: true }) }))}
+          onStart={(questId) =>
+            void act(() => api(`/api/quests/${questId}/start`, { method: "POST" })).then(() => {
+              setNotice(null);
+              setScreen("battle");
+            })
+          }
+          onEnterBattle={() => setScreen("battle")}
+          onOpenStats={() => setScreen("stats")}
+        />
       ) : (
         // Aceptar el contrato NO cambia de pantalla: la batalla es el centro
         // operativo de la quest y cambia de estado sin mover al jugador.
@@ -822,11 +1455,14 @@ function App() {
           busy={busy}
           impact={impact}
           incomingDamage={incomingDamage}
-          onBack={() => setScreen("realm")}
+          receivedAt={receivedAt}
+          onBack={() => setScreen(currentCampaign ? "campaign" : "realm")}
           onOpenStats={() => setScreen("stats")}
+          onOpenOrder={() => quest && openOrder(quest.id)}
           onAccept={() => quest && void act(() => api(`/api/quests/${quest.id}/accept`, { method: "POST", body: JSON.stringify({ userAccepted: true }) }))}
           onAcceptAmendment={(amendmentId) => quest && void act(() => api(`/api/quests/${quest.id}/amendments/${amendmentId}/accept`, { method: "POST", body: JSON.stringify({ userAccepted: true }) }))}
           onStart={() => quest && void act(() => api(`/api/quests/${quest.id}/start`, { method: "POST" })).then(() => setNotice(null))}
+          onRetry={() => quest && void act(() => api(`/api/quests/${quest.id}/battle/retry`, { method: "POST" }))}
           onDeliverEvidence={(stepId, note, link, files) => {
             if (!quest) return;
             void act(async () => {
