@@ -60,6 +60,7 @@ export const CODICE_INSTRUCTIONS = [
   "7. epic narra el paso como escena de fantasía medieval; real dice literalmente qué hacer en la vida real. Nunca uses la épica para esconder la instrucción real.",
   "8. No inventes hechos del jugador: ni vacantes, ni saldos, ni documentos, ni contactos. Si falta un dato, conviértelo en un paso que lo consiga.",
   "9. Respeta el bienestar: alcance pequeño, duración realista, sin culpabilizar.",
+  "10. masteryDomain nombra el dominio real que la quest entrena (autocuidado, finanzas, oficio, hogar, vínculos…). Es la maestría que el jugador acumula al ganar; no inventes un dominio que la tarea no entrene.",
 ].join("\n");
 
 const PLAN_SCHEMA = {
@@ -72,6 +73,7 @@ const PLAN_SCHEMA = {
     durationMinutes: { type: "integer", minimum: 5, maximum: 240 },
     wellbeingConstraints: { type: "array", items: { type: "string" }, maxItems: 5 },
     allowedApps: { type: "array", items: { type: "string" }, maxItems: 8 },
+    masteryDomain: { type: "string", description: "Dominio real que esta quest entrena, en una o dos palabras (autocuidado, finanzas, oficio, hogar, vínculos…)." },
     steps: {
       type: "array",
       minItems: 3,
@@ -93,7 +95,7 @@ const PLAN_SCHEMA = {
       },
     },
   },
-  required: ["campaignTitle", "title", "outcome", "rationale", "durationMinutes", "wellbeingConstraints", "allowedApps", "steps"],
+  required: ["campaignTitle", "title", "outcome", "rationale", "durationMinutes", "wellbeingConstraints", "allowedApps", "masteryDomain", "steps"],
   additionalProperties: false,
 } as const;
 
@@ -127,6 +129,7 @@ interface RawPlan {
   durationMinutes: number;
   wellbeingConstraints: string[];
   allowedApps: string[];
+  masteryDomain?: string;
   steps: RawStep[];
 }
 
@@ -171,6 +174,8 @@ export function planFromRaw(raw: RawPlan, intent: string): QuestPlanInput {
     durationMinutes: Math.min(240, Math.max(5, Math.round(raw.durationMinutes))),
     wellbeingConstraints: (raw.wellbeingConstraints ?? []).slice(0, 5),
     allowedApps: (raw.allowedApps ?? []).slice(0, 8),
+    // El resto de la recompensa la deriva el servidor del propio contrato.
+    rewardProfile: raw.masteryDomain?.trim() ? { masteryDomain: raw.masteryDomain.trim().slice(0, 40).toLowerCase() } : undefined,
     steps: raw.steps.map((step, index) => ({
       title: step.title.trim().slice(0, 120),
       description: `Épica: ${step.epic.trim()} Real: ${step.real.trim()}`.slice(0, 500),
@@ -261,6 +266,7 @@ function resumeQuest(intent: string): QuestPlanInput {
     durationMinutes: count > 5 ? 90 : 60,
     wellbeingConstraints: ["Priorizar vacantes compatibles", "No enviar candidaturas genéricas", "Registrar evidencia de cada envío"],
     allowedApps: ["Gmail", "LinkedIn", "Google Drive", "Navegador", "Portal de empleo"],
+    rewardProfile: { masteryDomain: "empleo" },
     steps: [
       {
         title: "Leer el pergamino del perfil",

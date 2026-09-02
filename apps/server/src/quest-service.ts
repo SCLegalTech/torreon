@@ -69,11 +69,11 @@ export function battleFor(quest: Quest | null, gameEvents: GameEvent[] = []): Ba
  * comprometió a respetar, porque Aura es calidad de vida y no productividad.
  * Sin dominio declarado no hay maestría: no se inventa una especialidad.
  */
-export function defaultRewardProfile(quest: Quest): RewardProfile {
-  if (quest.rewardProfile) return quest.rewardProfile;
+export function defaultRewardProfile(quest: Quest): Required<Pick<RewardProfile, "xpMax" | "auraMax">> & RewardProfile {
   return {
-    xpMax: Math.min(60, Math.max(5, Math.round(quest.durationMinutes / 2))),
-    auraMax: Math.min(5, 1 + quest.wellbeingConstraints.length),
+    xpMax: quest.rewardProfile?.xpMax ?? Math.min(60, Math.max(5, Math.round(quest.durationMinutes / 2))),
+    auraMax: quest.rewardProfile?.auraMax ?? Math.min(5, 1 + quest.wellbeingConstraints.length),
+    masteryDomain: quest.rewardProfile?.masteryDomain,
   };
 }
 

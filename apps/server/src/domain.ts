@@ -63,8 +63,9 @@ export interface QuestAmendment {
  * resultado validado, nunca por tiempo ni por clics.
  */
 export interface RewardProfile {
-  xpMax: number;
-  auraMax: number;
+  /** Si el contrato no los declara, se derivan de la duración y los cuidados pactados. */
+  xpMax?: number;
+  auraMax?: number;
   /** Dominio de maestría que esta quest entrena. Sin dominio no hay maestría. */
   masteryDomain?: string;
 }
