@@ -5,8 +5,10 @@ const storageKey = "torreon.realm.v1";
 const makeId = () => crypto.randomUUID();
 
 function freshSnapshot(): RealmSnapshot {
+  const realmId = makeId();
   return {
     realm: {
+      realmId,
       player: { displayName: "Marqués Phi", title: "Guardián de la Marca" },
       financial: {
         currency: "COP",
@@ -23,6 +25,7 @@ function freshSnapshot(): RealmSnapshot {
     },
     currentQuest: null,
     battle: null,
+    consistency: { status: "warning", instance: "torreon-offline", realmId, currentQuestId: null },
     projectedMargin: 200000,
   };
 }
@@ -75,6 +78,7 @@ function withBattle(snapshot: RealmSnapshot): RealmSnapshot {
   return {
     ...snapshot,
     battle: {
+      questId: quest.id,
       enemyHealth: Math.max(0, 100 - progress),
       progress,
       completedSteps: completed.length,

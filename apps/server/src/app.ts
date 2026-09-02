@@ -21,7 +21,15 @@ export function createHttpApp(service: QuestService) {
 
   app.get("/health", async (_req, res) => {
     const snapshot = await service.snapshot();
-    res.json({ status: "ok", server: "torreon", version: "0.1.0", codice: service.codiceName, updatedAt: snapshot.realm.updatedAt });
+    res.json({
+      status: "ok",
+      server: "torreon",
+      version: "0.1.0",
+      codice: service.codiceName,
+      instance: snapshot.consistency.instance,
+      realmId: snapshot.consistency.realmId,
+      updatedAt: snapshot.realm.updatedAt,
+    });
   });
 
   app.get("/api/state", async (_req, res, next) => {

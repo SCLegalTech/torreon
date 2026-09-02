@@ -156,6 +156,44 @@ describe("QuestService", () => {
     expect(artifact.storedPath).toBeTruthy();
   });
 
+  it("convierte una foto móvil en Artifact, evidencia e impacto", async () => {
+    const draft = await service.createDraft({
+      campaignTitle: "La Cámara del Testigo",
+      title: "La Prueba de Luz",
+      intent: "Fotografiar el estado real de un espacio.",
+      outcome: "Existe una fotografía verificable del espacio.",
+      rationale: "La cámara prueba un hecho físico.",
+      durationMinutes: 10,
+      wellbeingConstraints: [],
+      allowedApps: ["Cámara"],
+      steps: [{
+        title: "Capturar el recinto",
+        actor: "user",
+        evidence: "Foto actual del espacio",
+        evidenceKind: "photo",
+        verificationHint: "La imagen muestra el espacio actual.",
+        weight: 100,
+      }],
+    });
+    await service.accept(draft.id, true);
+    const active = await service.start(draft.id);
+    const step = active.steps[0];
+    const photo = Buffer.from("evidencia-fotografica-real");
+    const artifact = await service.attachArtifact(active.id, step.id, {
+      kind: "file",
+      dataBase64: photo.toString("base64"),
+      filename: "camara.jpg",
+      mimeType: "image/jpeg",
+    });
+
+    expect(artifact.verification.verified).toBe(true);
+    const result = await service.verifyStep(active.id, step.id, { artifactIds: [artifact.id], note: "Foto tomada desde Torreon." });
+    expect(result.judgement.verdict).toBe("accepted");
+    expect(result.battle.progress).toBe(100);
+    expect(result.artifacts[0].id).toBe(artifact.id);
+    expect((await service.snapshot()).realm.evidence[0].artifactIds).toContain(artifact.id);
+  });
+
   it("no concede impacto completo a una declaracion sin artefacto", async () => {
     const draft = await service.createDraft(demoQuest);
     await service.accept(draft.id, true);

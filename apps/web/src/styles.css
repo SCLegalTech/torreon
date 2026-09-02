@@ -364,3 +364,153 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
   .codex-submit { min-height: 34px; font-size: .54rem; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
+
+/* Battle Realm v2 — calca funcional sobre la dirección visual aprobada. */
+.battle-scene {
+  position: relative;
+  display: block;
+  min-height: 100dvh;
+  padding: 0;
+  overflow: hidden;
+  background: #050608;
+  isolation: isolate;
+}
+.battle-art {
+  position: absolute;
+  z-index: -3;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+}
+.battle-scene::after {
+  content: "";
+  position: absolute;
+  z-index: -2;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(0,0,0,.12), transparent 40% 70%, rgba(0,0,0,.16));
+}
+.battle-header {
+  position: absolute;
+  z-index: 5;
+  top: max(1.1%, env(safe-area-inset-top));
+  left: max(1%, env(safe-area-inset-left));
+  display: grid;
+  grid-template-columns: 38px 1fr auto;
+  width: min(48%, 720px);
+  min-height: 9.5%;
+  padding: .35rem .5rem;
+  border-color: #88602a;
+  background: rgba(5,8,11,.91);
+}
+.battle-header .back { width: 30px; height: 34px; }
+.battle-header h1 { overflow: hidden; font-size: clamp(.68rem,1.4vw,1rem); text-overflow: ellipsis; white-space: nowrap; }
+.battle-header .eyebrow { color: #cfa95e; font-size: clamp(.42rem,.75vw,.58rem); }
+.enemy-health {
+  position: absolute;
+  z-index: 5;
+  top: max(10%, calc(env(safe-area-inset-top) + 52px));
+  right: max(1.4%, env(safe-area-inset-right));
+  width: min(37%, 620px);
+  margin: 0;
+  padding: .48rem .7rem;
+  border-color: #68406e;
+  background: rgba(7,7,11,.92);
+}
+.enemy-health > div:first-child span { color: #dd73f0; }
+.battlefield { position: absolute; z-index: 1; inset: 0; height: auto; margin: 0; overflow: visible; border: 0; background: none; box-shadow: none; }
+.battlefield::before, .battle-line { display: none; }
+.battle-pulse { position: absolute; width: 5px; height: 5px; border-radius: 50%; opacity: .8; }
+.battle-pulse.ally { left: 34%; top: 54%; box-shadow: 0 0 20px 7px #ffb032; animation: projectile 2.8s linear infinite; }
+.battle-pulse.enemy { right: 34%; top: 46%; box-shadow: 0 0 22px 8px #9f3aff; animation: projectile-back 3.4s linear infinite; }
+.damage-number { right: 19%; top: 28%; }
+.quest-contract {
+  position: absolute;
+  z-index: 6;
+  bottom: 16.5%;
+  left: 38%;
+  width: 25%;
+  max-height: 20%;
+  margin: 0;
+  padding: .48rem .65rem;
+  overflow: auto;
+  border: 1px solid #8b672e;
+  color: #cfc1aa;
+  background: rgba(5,7,9,.94);
+  box-shadow: inset 0 0 0 2px #17130d, 0 6px 24px #000b;
+  text-align: center;
+}
+.quest-contract h2 { margin: .12rem 0 .2rem; color: #f0d99e; font-size: clamp(.58rem,1vw,.82rem); }
+.quest-contract p:not(.eyebrow) { display: -webkit-box; margin: 0; overflow: hidden; font-size: clamp(.42rem,.65vw,.54rem); -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.quest-contract .eyebrow { font-size: .48rem; }
+.quest-contract.active > p:not(.eyebrow) { display: none; }
+.quest-contract.active { max-height: 25%; }
+.quest-contract.active h2 {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: clamp(.5rem,.78vw,.65rem);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.quest-contract.draft, .quest-contract.accepted {
+  bottom: 24%;
+  left: 31%;
+  width: 38%;
+  max-height: 38%;
+  padding: .75rem 1rem;
+}
+.quest-contract.draft p:not(.eyebrow), .quest-contract.accepted p:not(.eyebrow) { -webkit-line-clamp: 3; }
+.quest-contract.draft .contract-actions .gold-button, .quest-contract.accepted .contract-actions .gold-button { min-height: 34px; }
+.orders-button { width: 100%; margin-top: .35rem; padding: .3rem; border: 1px solid #8c6425; color: #f2c45f; background: #2b130a; font: 900 .48rem ui-monospace, monospace; letter-spacing: .06em; }
+.steps-panel {
+  position: absolute;
+  z-index: 20;
+  top: 11%;
+  right: max(1%, env(safe-area-inset-right));
+  bottom: 11%;
+  width: min(37%, 570px);
+  min-height: 0;
+  margin: 0;
+  border-color: #76551f;
+  background: rgba(5,7,9,.97);
+  box-shadow: -12px 0 35px #000c;
+  transition: transform .3s ease, opacity .3s ease;
+}
+.steps-panel.closed { transform: translateX(112%); opacity: 0; pointer-events: none; }
+.steps-panel.open { transform: translateX(0); opacity: 1; }
+.steps-heading { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: .55rem; }
+.steps-heading button { border: 0; color: #d6b474; background: none; font-size: 1rem; }
+.steps-list { height: calc(100% - 38px); overflow-y: auto; }
+.evidence-camera span { border-style: solid; border-color: #54e4b3; color: #b2ffe3; background: rgba(8,71,53,.65); }
+.realm-notice {
+  position: fixed;
+  z-index: 100;
+  top: max(14px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
+  width: min(360px, 42vw);
+  padding: .75rem .85rem;
+  border: 1px solid #9d7331;
+  color: #d8c6a5;
+  background: rgba(5,8,10,.97);
+  box-shadow: inset 0 0 0 2px #1e170d, 0 10px 32px #000d;
+  animation: notice-in .35s ease-out;
+}
+.realm-notice.started { border-color: #c17b2a; }
+.realm-notice.completed { border-color: #51a775; }
+.realm-notice strong { display: block; padding-right: 1rem; color: #f1cf7b; font-size: .62rem; letter-spacing: .06em; }
+.realm-notice p { margin: .35rem 0 .55rem; font-size: .58rem; line-height: 1.35; }
+.notice-dismiss { position: absolute; top: .2rem; right: .35rem; border: 0; color: #9e927e; background: none; font-size: 1rem; }
+.notice-open { width: 100%; padding: .35rem; border: 1px solid #98702d; color: #f3d48d; background: #34180b; font: 900 .52rem ui-monospace, monospace; }
+.realm-debug { position: fixed; z-index: 90; right: 6px; bottom: 3px; padding: 2px 5px; color: #6c8279; background: #020403cc; font: .38rem ui-monospace, monospace; opacity: .78; }
+@keyframes projectile { from { transform: translate(0,0); opacity: 0; } 18% { opacity: 1; } to { transform: translate(34vw,-8vh); opacity: 0; } }
+@keyframes projectile-back { from { transform: translate(0,0); opacity: 0; } 18% { opacity: 1; } to { transform: translate(-31vw,8vh); opacity: 0; } }
+@keyframes notice-in { from { transform: translateY(-15px); opacity: 0; } }
+
+@media (orientation: portrait) {
+  .battle-header { width: 72%; }
+  .enemy-health { top: 12%; width: 58%; }
+  .quest-contract { right: 5%; bottom: 12%; left: 5%; width: auto; }
+  .steps-panel { top: 17%; right: 3%; bottom: 8%; width: 94%; }
+}

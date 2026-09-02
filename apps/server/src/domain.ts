@@ -3,7 +3,7 @@ export type StepStatus = "pending" | "in_progress" | "completed";
 export type StepActor = "user" | "codex" | "shared";
 export type EvidenceSource = "user_declaration" | "file" | "mcp" | "integration" | "api";
 export type EvidenceVerdict = "rejected" | "partial" | "accepted";
-export type EvidenceKind = "file" | "link" | "screenshot" | "number" | "text" | "declaration";
+export type EvidenceKind = "file" | "link" | "screenshot" | "photo" | "number" | "text" | "declaration";
 export type ArtifactKind = "file" | "link" | "text";
 
 export interface QuestStepInput {

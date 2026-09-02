@@ -1,30 +1,42 @@
 import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
-import { mobileApi } from "./mobile-store";
 import { Sprite } from "./Sprite";
 import type { Quest, RealmSnapshot } from "./types";
 import "./styles.css";
 
 type Screen = "loading" | "realm" | "thinking" | "battle";
 
+const API_BASE = Capacitor.isNativePlatform() ? "https://torreon.fly.dev" : "";
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const request = async (base = "") => {
-    const response = await fetch(`${base}${path}`, {
-      ...init,
-      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-    });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error ?? "La operación no pudo completarse.");
-    return body as T;
-  };
-  if (!Capacitor.isNativePlatform()) return request();
-  try {
-    return await request("http://127.0.0.1:3000");
-  } catch (error) {
-    if (error instanceof TypeError) return mobileApi<T>(path, init);
-    throw error;
-  }
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error ?? "La operación no pudo completarse.");
+  return body as T;
+}
+
+type RealmNotice = { eventId: string; questId: string; kind: "draft" | "started" | "completed"; title: string; message: string };
+
+function noticeFor(event: RealmSnapshot["realm"]["events"][number]): RealmNotice | null {
+  if (event.type === "quest_created") return { eventId: event.id, questId: event.questId, kind: "draft", title: "📜 UN NUEVO PACTO AGUARDA TU SELLO", message: event.message };
+  if (event.type === "quest_started") return { eventId: event.id, questId: event.questId, kind: "started", title: "⚔️ NUEVA ORDEN DEL CÓDICE", message: event.message };
+  if (event.type === "quest_completed") return { eventId: event.id, questId: event.questId, kind: "completed", title: "🏆 VICTORIA", message: event.message };
+  return null;
+}
+
+function RealmNoticeToast({ notice, onOpen, onDismiss }: { notice: RealmNotice; onOpen: () => void; onDismiss: () => void }) {
+  return (
+    <aside className={`realm-notice ${notice.kind}`} role="status">
+      <button className="notice-dismiss" type="button" onClick={onDismiss} aria-label="Cerrar aviso">×</button>
+      <strong>{notice.title}</strong>
+      <p>{notice.message}</p>
+      <button className="notice-open" type="button" onClick={onOpen}>VER QUEST</button>
+    </aside>
+  );
 }
 
 function Codex({ speaking = false }: { speaking?: boolean }) {
@@ -393,11 +405,13 @@ function Battle({
   const [evidenceNote, setEvidenceNote] = useState("");
   const [evidenceLink, setEvidenceLink] = useState("");
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const [ordersOpen, setOrdersOpen] = useState(quest?.status !== "active");
   if (!quest) return null;
   const battle = snapshot.battle;
   const health = battle?.enemyHealth ?? 100;
   return (
     <main className={`scene battle-scene ${impact ? "impact" : ""}`}>
+      <img className="battle-art" src="/assets/art/battle-realm.png" alt="El ejército de la Marca combate a la Horda" />
       <header className="battle-header glass-panel">
         <button className="back" onClick={onBack}>‹</button>
         <div><p className="eyebrow">{quest.campaignTitle}</p><h1>{quest.title}</h1></div>
@@ -410,19 +424,21 @@ function Battle({
       </section>
 
       <section className="battlefield" aria-label="Campo de batalla">
-        <div className="battle-line" />
-        <div className="codex-position"><Sprite actor="codex" motion={battle?.isKo ? "victory" : "idle"} label="CÓDICE" /></div>
-        <div className="marquis-token"><Sprite actor="marquis" motion={battle?.isKo ? "victory" : impact ? "attack" : "idle"} label="MARQUÉS" /></div>
-        <div className="wolf-token"><Sprite actor="wolf" motion={battle?.isKo ? "victory" : "idle"} label="LOBO" /></div>
-        <div className="horde-token"><Sprite actor="horde" motion={impact ? "hurt" : "idle"} label="HORDA" /></div>
+        <span className="battle-pulse ally" aria-hidden="true" />
+        <span className="battle-pulse enemy" aria-hidden="true" />
         {impact ? <div className="damage-number">−{impact}</div> : null}
         {battle?.isKo ? <div className="ko">KO</div> : null}
       </section>
 
-      <aside className="quest-contract parchment">
+      <aside className={`quest-contract parchment ${quest.status}`}>
         <p className="eyebrow">CONTRATO DE MISIÓN · {quest.durationMinutes} MIN</p>
         <h2>{quest.outcome}</h2>
         <p>{quest.rationale}</p>
+        {quest.status === "active" ? (
+          <button className="orders-button" type="button" onClick={() => setOrdersOpen((open) => !open)}>
+            {ordersOpen ? "CERRAR ÓRDENES" : `ABRIR ÓRDENES · ${battle?.completedSteps ?? 0}/${quest.steps.length}`}
+          </button>
+        ) : null}
         <div className="contract-actions">
           {quest.status === "draft" ? <button className="gold-button" disabled={busy} onClick={onAccept}>ACEPTAR CONTRATO</button> : null}
           {quest.status === "accepted" ? <button className="gold-button" disabled={busy} onClick={onStart}>INICIAR BATALLA</button> : null}
@@ -430,8 +446,12 @@ function Battle({
         </div>
       </aside>
 
-      <section className="steps-panel glass-panel">
-        <div className="steps-heading"><span>PASOS DE LA QUEST</span><strong>{battle?.completedSteps ?? 0}/{quest.steps.length}</strong></div>
+      <section className={`steps-panel glass-panel ${ordersOpen ? "open" : "closed"}`}>
+        <div className="steps-heading">
+          <span>ÓRDENES DEL CÓDICE</span>
+          <strong>{battle?.completedSteps ?? 0}/{quest.steps.length}</strong>
+          <button type="button" onClick={() => setOrdersOpen(false)} aria-label="Cerrar órdenes">×</button>
+        </div>
         <div className="steps-list">
           {quest.steps.map((step, index) => {
             const isOpen = openStepId === step.id;
@@ -512,6 +532,24 @@ function Battle({
                             ))}
                           </ul>
                         ) : null}
+                        {step.evidenceKind === "photo" ? (
+                          <label className="evidence-file evidence-camera">
+                            <input
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              onChange={(event) => {
+                                const photo = event.currentTarget.files?.[0];
+                                event.currentTarget.value = "";
+                                if (!photo) return;
+                                void toPendingFile(photo)
+                                  .then((ready) => setPendingFiles((current) => [...current, ready]))
+                                  .catch(() => undefined);
+                              }}
+                            />
+                            <span>📷 TOMAR EVIDENCIA</span>
+                          </label>
+                        ) : null}
                         <label className="evidence-file">
                           <input
                             type="file"
@@ -526,7 +564,7 @@ function Battle({
                                 .catch(() => undefined);
                             }}
                           />
-                          <span>ADJUNTAR PRUEBA</span>
+                          <span>{step.evidenceKind === "photo" ? "ELEGIR FOTO EXISTENTE" : "ADJUNTAR PRUEBA"}</span>
                         </label>
                         <input
                           className="evidence-link"
@@ -565,7 +603,10 @@ function App() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [pendingIntent, setPendingIntent] = useState("");
   const [verdict, setVerdict] = useState<string | null>(null);
+  const [notice, setNotice] = useState<RealmNotice | null>(null);
   const lastProgress = useRef(0);
+  const seenEventIds = useRef(new Set<string>());
+  const eventsHydrated = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -574,6 +615,15 @@ function App() {
         const delta = next.battle.progress - lastProgress.current;
         setImpact(delta);
         window.setTimeout(() => setImpact(null), 900);
+      }
+      if (!eventsHydrated.current) {
+        next.realm.events.forEach((event) => seenEventIds.current.add(event.id));
+        eventsHydrated.current = true;
+      } else {
+        const unseen = next.realm.events.filter((event) => !seenEventIds.current.has(event.id));
+        unseen.forEach((event) => seenEventIds.current.add(event.id));
+        const narrative = unseen.map(noticeFor).find((candidate): candidate is RealmNotice => candidate !== null);
+        if (narrative) setNotice(narrative);
       }
       lastProgress.current = next.battle?.progress ?? 0;
       setSnapshot(next);
@@ -606,6 +656,7 @@ function App() {
     return (
       <>
         <LoadingGate onStart={() => setScreen("realm")} />
+        {notice ? <RealmNoticeToast notice={notice} onOpen={() => { setScreen("battle"); setNotice(null); }} onDismiss={() => setNotice(null)} /> : null}
         {error ? <div className="error-toast" role="alert">{error}</div> : null}
       </>
     );
@@ -632,6 +683,7 @@ function App() {
               setScreen("thinking");
               void act(() => api("/api/quests/from-intent", { method: "POST", body: JSON.stringify({ intent }) })).then(() => {
                 setComposerOpen(false);
+                setNotice(null);
                 window.setTimeout(() => setScreen("battle"), 520);
               });
             }}
@@ -643,7 +695,7 @@ function App() {
           snapshot={snapshot}
           busy={busy}
           onBack={() => setScreen("realm")}
-          onStart={() => void act(() => api(`/api/quests/${quest.id}/start`, { method: "POST" }))}
+          onStart={() => void act(() => api(`/api/quests/${quest.id}/start`, { method: "POST" })).then(() => setNotice(null))}
         />
       ) : (
         <Battle
@@ -652,7 +704,7 @@ function App() {
           impact={impact}
           onBack={() => setScreen("realm")}
           onAccept={() => quest && void act(() => api(`/api/quests/${quest.id}/accept`, { method: "POST", body: JSON.stringify({ userAccepted: true }) }))}
-          onStart={() => quest && void act(() => api(`/api/quests/${quest.id}/start`, { method: "POST" }))}
+          onStart={() => quest && void act(() => api(`/api/quests/${quest.id}/start`, { method: "POST" })).then(() => setNotice(null))}
           onDeliverEvidence={(stepId, note, link, files) => {
             if (!quest) return;
             void act(async () => {
@@ -687,6 +739,8 @@ function App() {
         />
       )}
       {verdict ? <div className="verdict-toast" role="status">{verdict}</div> : null}
+      {snapshot ? <small className="realm-debug">{snapshot.consistency.instance} · {snapshot.consistency.realmId.slice(0, 8)}</small> : null}
+      {notice ? <RealmNoticeToast notice={notice} onOpen={() => { setScreen("battle"); setNotice(null); }} onDismiss={() => setNotice(null)} /> : null}
       {error ? <div className="error-toast" role="alert">{error}</div> : null}
     </>
   );

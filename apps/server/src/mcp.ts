@@ -9,7 +9,7 @@ const stepShape = {
   actor: z.enum(["user", "codex", "shared"]).describe("Quién ejecuta principalmente el paso."),
   evidence: z.string().min(1).max(300).describe("Evidencia que demuestra que el paso ocurrió."),
   evidenceKind: z
-    .enum(["file", "link", "screenshot", "number", "text", "declaration"])
+    .enum(["file", "link", "screenshot", "photo", "number", "text", "declaration"])
     .optional()
     .describe("Qué clase de prueba espera el paso. Prefiere artefactos verificables sobre declaraciones."),
   verificationHint: z

@@ -10,12 +10,14 @@ import { JsonRealmStore } from "./store.js";
 describe("HTTP app", () => {
   let directory: string;
   let app: ReturnType<typeof createHttpApp>;
+  let service: QuestService;
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-http-"));
     const store = new JsonRealmStore(join(directory, "state.json"));
     await store.init();
-    app = createHttpApp(new QuestService(store));
+    service = new QuestService(store, undefined, directory, "torreon-test-authoritative");
+    app = createHttpApp(service);
   });
 
   afterEach(async () => {
@@ -57,5 +59,28 @@ describe("HTTP app", () => {
   it("expone salud y rechaza MCP por GET", async () => {
     await request(app).get("/health").expect(200).expect(({ body }) => expect(body.server).toBe("torreon"));
     await request(app).get("/mcp").expect(405);
+  });
+
+  it("comparte una sola quest entre el adaptador externo y la App API", async () => {
+    const externalDraft = await service.createDraft({
+      campaignTitle: "La Marca unificada",
+      title: "El Pacto de las Dos Voces",
+      intent: "Probar que ChatGPT y la app ven el mismo reino.",
+      outcome: "La misma quest aparece en ambas superficies.",
+      rationale: "Ambos adaptadores reutilizan QuestService.",
+      durationMinutes: 15,
+      wellbeingConstraints: [],
+      allowedApps: [],
+      steps: [{ title: "Cruzar el puente", actor: "shared", evidence: "Realm ID idéntico", evidenceKind: "text", weight: 100 }],
+    });
+
+    const appRead = await request(app).get("/api/state").expect(200);
+    expect(appRead.body.currentQuest.id).toBe(externalDraft.id);
+    expect(appRead.body.consistency.instance).toBe("torreon-test-authoritative");
+
+    await request(app).post(`/api/quests/${externalDraft.id}/accept`).send({ userAccepted: true }).expect(200);
+    const externalRead = await service.snapshot();
+    expect(externalRead.currentQuest?.status).toBe("accepted");
+    expect(externalRead.consistency.realmId).toBe(appRead.body.consistency.realmId);
   });
 });

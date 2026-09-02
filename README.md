@@ -66,7 +66,7 @@ La opción **Cargar quest demostrativa** permite recorrer el contrato sin conect
 
 ## Android
 
-La aplicación usa Capacitor 7, orientación horizontal y una única interfaz React para web y Android. Durante el MVP, `adb reverse tcp:3000 tcp:3000` conecta la APK al servidor MCP local; si el servidor no está disponible, la misión demostrativa puede guardarse en el teléfono.
+La aplicación usa Capacitor 7, orientación horizontal y una única interfaz React para web y Android. En gameplay normal la APK utiliza `https://torreon.fly.dev`, el mismo Realm persistente que consulta ChatGPT mediante MCP. No crea un segundo reino silencioso cuando pierde conexión: informa el fallo y conserva la verdad autoritativa.
 
 Requisitos de compilación: JDK 21, Android SDK Platform 35, Build Tools 35 y Platform Tools. Con esas herramientas disponibles en `JAVA_HOME` y `ANDROID_HOME`:
 

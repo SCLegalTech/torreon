@@ -33,12 +33,12 @@ try {
   await shot("03-quest-composer.png");
 
   await page.getByRole("button", { name: "ABRIR CÓDICE" }).click();
-  await page.getByRole("button", { name: "ACEPTAR CONTRATO" }).waitFor();
+  await page.getByRole("button", { name: "ACEPTAR CONTRATO" }).waitFor({ timeout: 90_000 });
   await shot("04-quest-draft.png");
 
   await page.getByRole("button", { name: "ACEPTAR CONTRATO" }).click();
-  await page.getByRole("button", { name: "INICIAR BATALLA" }).waitFor();
-  await page.getByRole("button", { name: "INICIAR BATALLA" }).click();
+  await page.getByRole("button", { name: "INICIAR EXPEDICIÓN" }).waitFor();
+  await page.getByRole("button", { name: "INICIAR EXPEDICIÓN" }).click();
   await page.getByText("EN BATALLA").waitFor();
   await shot("05-battle-active.png");
 
@@ -56,9 +56,21 @@ try {
     await page.waitForTimeout(350);
   }
 
-  await page.getByText("VICTORIA").waitFor();
+  await page.getByText("VICTORIA", { exact: true }).waitFor();
   await page.waitForTimeout(900);
   await shot("06-victory-ko.png");
+
+  // E2E foreground: otra superficie cambia el mismo Realm y la app abierta
+  // reacciona por eventId, sin refresh manual.
+  await page.request.post(`${baseUrl}/api/reset`);
+  await page.goto(`${baseUrl}/?screen=realm`, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "CAMPAÑAS Crear quest" }).waitFor();
+  await page.waitForTimeout(1_800);
+  const externalDraft = await (await page.request.post(`${baseUrl}/api/demo/quest`)).json();
+  await page.request.post(`${baseUrl}/api/quests/${externalDraft.quest.id}/accept`, { data: { userAccepted: true } });
+  await page.request.post(`${baseUrl}/api/quests/${externalDraft.quest.id}/start`);
+  await page.getByText("⚔️ NUEVA ORDEN DEL CÓDICE", { exact: true }).waitFor({ timeout: 10_000 });
+  await shot("07-realtime-external.png");
   process.stdout.write(`Capturas creadas en ${output}\n`);
 } finally {
   await browser.close();

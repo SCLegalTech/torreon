@@ -6,7 +6,7 @@ export interface QuestStep {
   description?: string;
   actor: "user" | "codex" | "shared";
   evidence: string;
-  evidenceKind?: "file" | "link" | "screenshot" | "number" | "text" | "declaration";
+  evidenceKind?: "file" | "link" | "screenshot" | "photo" | "number" | "text" | "declaration";
   verificationHint?: string;
   evidenceNote?: string;
   evidenceIds: string[];
@@ -32,6 +32,7 @@ export interface Quest {
 
 export interface RealmSnapshot {
   realm: {
+    realmId: string;
     player: { displayName: string; title: string };
     financial: {
       currency: "COP";
@@ -40,7 +41,13 @@ export interface RealmSnapshot {
       committedExpenses: number;
       reserveTarget: number;
     };
-    events: Array<{ id: string; message: string; createdAt: string }>;
+    events: Array<{
+      id: string;
+      type: "quest_created" | "quest_revised" | "quest_accepted" | "quest_started" | "evidence_attached" | "step_completed" | "quest_completed" | "quest_abandoned";
+      questId: string;
+      message: string;
+      createdAt: string;
+    }>;
     evidence: Array<{ id: string; stepId: string; verdict: "rejected" | "partial" | "accepted"; impactAwarded: number; reasoning: string; artifactIds?: string[] }>;
     artifacts: Array<{
       id: string;
@@ -54,11 +61,18 @@ export interface RealmSnapshot {
   };
   currentQuest: Quest | null;
   battle: null | {
+    questId: string;
     enemyHealth: number;
     progress: number;
     completedSteps: number;
     totalSteps: number;
     isKo: boolean;
+  };
+  consistency: {
+    status: "ok" | "warning" | "desynced";
+    instance: string;
+    realmId: string;
+    currentQuestId: string | null;
   };
   projectedMargin: number;
 }

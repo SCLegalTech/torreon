@@ -48,7 +48,7 @@ export function battleFor(quest: Quest | null): BattleState | null {
 }
 
 /** Pasos cuya condición pactada exige una prueba, no un relato. */
-const ARTIFACT_KINDS = new Set(["file", "link", "screenshot"]);
+const ARTIFACT_KINDS = new Set(["file", "link", "screenshot", "photo"]);
 
 /**
  * El servidor —no el modelo— decide si un veredicto es admisible.
