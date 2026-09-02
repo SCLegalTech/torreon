@@ -1,5 +1,5 @@
-export type QuestStatus = "draft" | "accepted" | "active" | "completed" | "abandoned";
-export type StepStatus = "pending" | "in_progress" | "completed";
+export type QuestStatus = "draft" | "accepted" | "active" | "waiting_external" | "completed" | "abandoned";
+export type StepStatus = "pending" | "in_progress" | "blocked" | "superseded" | "completed";
 export type StepActor = "user" | "codex" | "shared";
 export type EvidenceSource = "user_declaration" | "file" | "mcp" | "integration" | "api";
 export type EvidenceVerdict = "rejected" | "partial" | "accepted";
@@ -26,6 +26,33 @@ export interface QuestStep extends QuestStepInput {
   artifactIds: string[];
   evidenceNote?: string;
   completedAt?: string;
+  supersededAt?: string;
+  supersededReason?: string;
+  blockedBy?: string;
+  blockedReason?: string;
+  blockedSince?: string;
+  playerActionAvailable?: boolean;
+  followUpAfter?: string;
+}
+
+export type QuestAmendmentChange =
+  | { type: "ADD_STEP"; step: QuestStepInput }
+  | { type: "MODIFY_STEP"; stepId: string; patch: Partial<QuestStepInput> }
+  | { type: "SUPERSEDE_STEP"; stepId: string; reason: string }
+  | { type: "MARK_EXTERNAL_BLOCKER"; stepId: string; blockedBy: string; blockedReason: string; playerActionAvailable: boolean; followUpAfter?: string }
+  | { type: "UNBLOCK_STEP"; stepId: string; reason: string };
+
+export interface QuestAmendment {
+  id: string;
+  status: "proposed" | "accepted" | "rejected";
+  reason: string;
+  proposedBy: string;
+  previousVersion: number;
+  newVersion: number;
+  changes: QuestAmendmentChange[];
+  createdAt: string;
+  acceptedAt?: string;
+  rejectedAt?: string;
 }
 
 export interface QuestPlanInput {
@@ -50,6 +77,8 @@ export interface Quest extends Omit<QuestPlanInput, "steps"> {
   startedAt?: string;
   completedAt?: string;
   abandonedAt?: string;
+  version: number;
+  amendments: QuestAmendment[];
 }
 
 export interface FinancialState {
@@ -67,6 +96,11 @@ export interface RealmEvent {
     | "quest_revised"
     | "quest_accepted"
     | "quest_started"
+    | "quest_amendment_proposed"
+    | "quest_amended"
+    | "quest_waiting_external"
+    | "quest_unblocked"
+    | "horde_attack"
     | "evidence_attached"
     | "step_completed"
     | "quest_completed"
@@ -98,6 +132,8 @@ export interface EvidenceArtifact {
   id: string;
   questId: string;
   stepId: string;
+  /** Todos los pasos que reutilizan estos mismos bytes/hecho observable. */
+  stepIds: string[];
   kind: ArtifactKind;
   label: string;
   mimeType?: string;
@@ -120,22 +156,24 @@ export interface EvidenceArtifact {
 
 export interface LifeEvent {
   id: string;
-  type: "evidence_submitted";
+  type: "evidence_submitted" | "unexpected_requirement";
   questId: string;
-  stepId: string;
-  evidenceId: string;
-  verdict: EvidenceVerdict;
-  impactAwarded: number;
+  stepId?: string;
+  evidenceId?: string;
+  verdict?: EvidenceVerdict;
+  impactAwarded?: number;
+  reason?: string;
   createdAt: string;
 }
 
 export interface GameEvent {
   id: string;
-  type: "quest_attack";
+  type: "quest_attack" | "horde_attack";
   sourceLifeEventId: string;
   questId: string;
-  stepId: string;
+  stepId?: string;
   damage: number;
+  reason?: string;
   message: string;
   createdAt: string;
 }
@@ -160,12 +198,17 @@ export interface RealmState {
 
 export interface BattleState {
   questId: string;
+  player: { id: "marques-phi"; health: number; maxHealth: 100 };
+  enemy: { id: "horda"; health: number; maxHealth: 100 };
+  playerHealth: number;
+  playerMaxHealth: 100;
   enemyMaxHealth: 100;
   enemyHealth: number;
   progress: number;
   completedSteps: number;
   totalSteps: number;
   isKo: boolean;
+  isPlayerKo: boolean;
 }
 
 
@@ -209,6 +252,12 @@ export interface RealmConsistency {
 
 export interface QuestStepDetail extends CurrentStepSummary {
   description?: string;
+  blockedBy?: string;
+  blockedReason?: string;
+  blockedSince?: string;
+  playerActionAvailable?: boolean;
+  followUpAfter?: string;
+  supersededReason?: string;
   artifacts: EvidenceArtifact[];
   verdicts: EvidenceRecord[];
 }
@@ -229,6 +278,8 @@ export interface QuestDetail {
   startedAt?: string;
   completedAt?: string;
   abandonedAt?: string;
+  version: number;
+  amendments: QuestAmendment[];
   progress: QuestProgress;
   currentStep: CurrentStepSummary | null;
   steps: QuestStepDetail[];

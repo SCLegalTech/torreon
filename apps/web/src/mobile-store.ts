@@ -64,6 +64,8 @@ function demoQuest(): Quest {
     wellbeingConstraints: ["Preferencia remota o híbrida", "Horario compatible"],
     allowedApps: ["Gmail", "Drive", "LinkedIn", "Navegador"],
     status: "draft",
+    version: 1,
+    amendments: [],
     steps: steps.map(([title, description, actor, evidence, weight]) => ({
       id: makeId(), title, description, actor, evidence, weight, status: "pending", impactAwarded: 0, evidenceIds: [], artifactIds: [],
     })),
@@ -79,11 +81,17 @@ function withBattle(snapshot: RealmSnapshot): RealmSnapshot {
     ...snapshot,
     battle: {
       questId: quest.id,
+      player: { id: "marques-phi", health: 100, maxHealth: 100 },
+      enemy: { id: "horda", health: Math.max(0, 100 - progress), maxHealth: 100 },
+      playerHealth: 100,
+      playerMaxHealth: 100,
+      enemyMaxHealth: 100,
       enemyHealth: Math.max(0, 100 - progress),
       progress,
       completedSteps: completed.length,
       totalSteps: quest.steps.length,
       isKo: progress === 100,
+      isPlayerKo: false,
     },
   };
 }
@@ -141,6 +149,7 @@ export async function mobileApi<T>(path: string, init?: RequestInit): Promise<T>
     const artifact = {
       id: makeId(),
       stepId: artifacts[2],
+      stepIds: [artifacts[2]],
       kind: body.kind ?? "text",
       label: body.label ?? body.url ?? "Texto declarado",
       verification: {

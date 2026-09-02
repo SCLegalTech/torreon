@@ -252,4 +252,83 @@ describe("QuestService", () => {
       expect(Math.min(...weights)).toBeGreaterThanOrEqual(1);
     }
   });
+
+  it("adapta una quest activa sin borrar los 52 puntos ni la historia", async () => {
+    const draft = await service.createDraft({
+      campaignTitle: "SECOP",
+      title: "La Ofrenda de las Siete Pruebas",
+      intent: "Cargar evidencias mensuales.",
+      outcome: "Evidencias disponibles cargadas y meses futuros preparados.",
+      rationale: "El contrato inicial era una hipótesis del flujo.",
+      durationMinutes: 90,
+      wellbeingConstraints: [],
+      allowedApps: ["SECOP"],
+      steps: [
+        { title: "Reunir", actor: "user", evidence: "Archivos", evidenceKind: "declaration", weight: 9 },
+        { title: "Ingresar", actor: "user", evidence: "Módulo", evidenceKind: "declaration", weight: 13 },
+        { title: "Anexar", actor: "user", evidence: "Carga", evidenceKind: "declaration", weight: 35 },
+        { title: "Enviar", actor: "user", evidence: "Publicación", evidenceKind: "declaration", weight: 43 },
+      ],
+    });
+    await service.accept(draft.id, true);
+    const active = await service.start(draft.id);
+    await service.submitEvidence(active.id, active.steps[0].id, { summary: "Archivos reunidos", source: "api", verdict: "accepted", reasoning: "Comprobado", impactAwarded: 9 });
+    await service.submitEvidence(active.id, active.steps[1].id, { summary: "Módulo abierto", source: "api", verdict: "accepted", reasoning: "Comprobado", impactAwarded: 13 });
+    await service.submitEvidence(active.id, active.steps[2].id, { summary: "Meses disponibles cargados", source: "api", verdict: "partial", reasoning: "Julio y agosto esperan firma", impactAwarded: 30 });
+    const before = await service.snapshot();
+    expect(before.battle?.progress).toBe(52);
+    const historicalEvents = before.realm.gameEvents.map((event) => event.id);
+
+    const amendment = await service.proposeAmendment(active.id, {
+      proposedBy: "codice",
+      reason: "SECOP demostró que anexar ya deja publicado el archivo y la firma restante depende del supervisor.",
+      changes: [
+        { type: "SUPERSEDE_STEP", stepId: active.steps[3].id, reason: "No existe un envío independiente después de anexar." },
+        { type: "MODIFY_STEP", stepId: active.steps[2].id, patch: { title: "Recuperar y cargar julio/agosto", weight: 78 } },
+        { type: "MARK_EXTERNAL_BLOCKER", stepId: active.steps[2].id, blockedBy: "Supervisor del contrato", blockedReason: "Falta firma en CISEC", playerActionAvailable: false },
+      ],
+    });
+    expect((await service.snapshot()).battle?.progress).toBe(52);
+    const accepted = await service.acceptAmendment(active.id, amendment.id, true);
+    expect(accepted.quest.version).toBe(2);
+    expect(accepted.quest.status).toBe("waiting_external");
+    expect(accepted.battle.progress).toBe(52);
+    expect(accepted.quest.steps[3].status).toBe("superseded");
+    expect(accepted.quest.steps[2].status).toBe("blocked");
+    const after = await service.snapshot();
+    expect(after.currentStep).toBeNull();
+    expect(historicalEvents.every((id) => after.realm.gameEvents.some((event) => event.id === id))).toBe(true);
+    await expect(service.recordUnexpectedRequirement(active.id, { reason: "El supervisor todavía no firma los informes.", damage: 7 })).rejects.toThrow("espera externa");
+  });
+
+  it("reutiliza un Artifact en dos pasos con veredictos independientes", async () => {
+    const draft = await service.createDraft(demoQuest);
+    await service.accept(draft.id, true);
+    const active = await service.start(draft.id);
+    const artifact = await service.attachArtifact(active.id, active.steps[0].id, { kind: "text", text: "Una prueba observable reutilizable", label: "captura-A" });
+    await service.verifyStep(active.id, active.steps[0].id, { artifactIds: [artifact.id], note: "Demuestra los criterios." });
+    await service.reuseArtifact(active.id, artifact.id, active.steps[1].id);
+    await service.verifyStep(active.id, active.steps[1].id, { artifactIds: [artifact.id], note: "La misma captura demuestra las puertas." });
+    const snapshot = await service.snapshot();
+    expect(snapshot.realm.artifacts).toHaveLength(1);
+    expect(snapshot.realm.artifacts[0].stepIds).toEqual(expect.arrayContaining([active.steps[0].id, active.steps[1].id]));
+    expect(snapshot.realm.evidence.filter((record) => record.artifactIds.includes(artifact.id))).toHaveLength(2);
+  });
+
+  it("deriva HP bilateral y sólo deja contraatacar por una complicación real explícita", async () => {
+    const draft = await service.createDraft(demoQuest);
+    await service.accept(draft.id, true);
+    const active = await service.start(draft.id);
+    const attack = await service.recordUnexpectedRequirement(active.id, {
+      stepId: active.steps[0].id,
+      reason: "La entidad exigió un certificado adicional no contemplado.",
+      damage: 7,
+    });
+    expect(attack.battle.playerHealth).toBe(93);
+    expect(attack.battle.enemyHealth).toBe(100);
+    const snapshot = await service.snapshot();
+    expect(snapshot.realm.lifeEvents[0].type).toBe("unexpected_requirement");
+    expect(snapshot.realm.gameEvents[0].type).toBe("horde_attack");
+    expect(snapshot.battle?.player.health).toBe(93);
+  });
 });

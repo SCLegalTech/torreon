@@ -66,7 +66,9 @@ La opción **Cargar quest demostrativa** permite recorrer el contrato sin conect
 
 ## Android
 
-La aplicación usa Capacitor 7, orientación horizontal y una única interfaz React para web y Android. En gameplay normal la APK utiliza `https://torreon.fly.dev`, el mismo Realm persistente que consulta ChatGPT mediante MCP. No crea un segundo reino silencioso cuando pierde conexión: informa el fallo y conserva la verdad autoritativa.
+La aplicación usa Capacitor 7, orientación horizontal y una única interfaz React para web y Android. Mientras Torreon está visible, Android mantiene la pantalla encendida para que la batalla pueda acompañar una sesión de trabajo. En gameplay normal la APK utiliza `https://torreon.fly.dev`, el mismo Realm persistente que consulta ChatGPT mediante MCP. No crea un segundo reino silencioso cuando pierde conexión: informa el fallo y conserva la verdad autoritativa.
+
+El dominio del juego es independiente del renderer: quests, amendments, evidencia, eventos y salud bilateral viven en el Core/servidor. React es el cliente visual transitorio del MVP; Unity podrá consumir esos mismos DTO y eventos sin reescribir las reglas ni migrar la verdad de la campaña.
 
 Requisitos de compilación: JDK 21, Android SDK Platform 35, Build Tools 35 y Platform Tools. Con esas herramientas disponibles en `JAVA_HOME` y `ANDROID_HOME`:
 

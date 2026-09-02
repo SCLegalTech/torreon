@@ -94,6 +94,26 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
+  app.post("/api/quests/:questId/amendments", async (req, res, next) => {
+    try {
+      res.status(201).json({ amendment: await service.proposeAmendment(req.params.questId, {
+        reason: String(req.body?.reason ?? ""),
+        proposedBy: String(req.body?.proposedBy ?? "codice"),
+        changes: Array.isArray(req.body?.changes) ? req.body.changes : [],
+      }) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/quests/:questId/amendments/:amendmentId/accept", async (req, res, next) => {
+    try {
+      res.json(await service.acceptAmendment(req.params.questId, req.params.amendmentId, req.body?.userAccepted === true));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/quests/:questId/steps/:stepId/complete", async (req, res, next) => {
     try {
       res.json(await service.completeStep(req.params.questId, req.params.stepId, String(req.body?.evidenceNote ?? "")));
@@ -129,6 +149,26 @@ export function createHttpApp(service: QuestService) {
         mimeType: req.body?.mimeType ? String(req.body.mimeType) : undefined,
       });
       res.status(201).json({ artifact });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/quests/:questId/steps/:stepId/artifacts/:artifactId/reuse", async (req, res, next) => {
+    try {
+      res.json({ artifact: await service.reuseArtifact(req.params.questId, req.params.artifactId, req.params.stepId) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/quests/:questId/horde-attacks/unexpected-requirement", async (req, res, next) => {
+    try {
+      res.status(201).json(await service.recordUnexpectedRequirement(req.params.questId, {
+        stepId: req.body?.stepId ? String(req.body.stepId) : undefined,
+        reason: String(req.body?.reason ?? ""),
+        damage: Number(req.body?.damage ?? 0),
+      }));
     } catch (error) {
       next(error);
     }

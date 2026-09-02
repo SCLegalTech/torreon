@@ -6,7 +6,10 @@ import type {
   EvidenceArtifact,
   EvidenceSource,
   EvidenceVerdict,
+  GameEvent,
   Quest,
+  QuestAmendment,
+  QuestAmendmentChange,
   QuestDetail,
   QuestPlanInput,
   QuestStep,
@@ -32,18 +35,28 @@ function addEvent(state: RealmState, event: Omit<RealmEvent, "id" | "createdAt">
   state.events = state.events.slice(0, 100);
 }
 
-export function battleFor(quest: Quest | null): BattleState | null {
+export function battleFor(quest: Quest | null, gameEvents: GameEvent[] = []): BattleState | null {
   if (!quest) return null;
   const damage = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
+  const playerDamage = gameEvents
+    .filter((event) => event.questId === quest.id && event.type === "horde_attack")
+    .reduce((sum, event) => sum + event.damage, 0);
+  const playerHealth = Math.max(0, 100 - playerDamage);
+  const enemyHealth = Math.max(0, 100 - damage);
   const completedSteps = quest.steps.filter((step) => step.status === "completed").length;
   return {
     questId: quest.id,
+    player: { id: "marques-phi", health: playerHealth, maxHealth: 100 },
+    enemy: { id: "horda", health: enemyHealth, maxHealth: 100 },
+    playerHealth,
+    playerMaxHealth: 100,
     enemyMaxHealth: 100,
-    enemyHealth: Math.max(0, 100 - damage),
+    enemyHealth,
     progress: Math.min(100, damage),
     completedSteps,
     totalSteps: quest.steps.length,
     isKo: damage === 100,
+    isPlayerKo: playerHealth === 0,
   };
 }
 
@@ -80,10 +93,75 @@ function currentQuest(state: RealmState): Quest | null {
   return (
     state.quests.find((quest) => quest.status === "active") ??
     state.quests.find((quest) => quest.status === "accepted") ??
+    state.quests.find((quest) => quest.status === "waiting_external") ??
     state.quests.find((quest) => quest.status === "draft") ??
     state.quests[0] ??
     null
   );
+}
+
+function requireStep(quest: Quest, stepId: string): QuestStep {
+  const step = quest.steps.find((candidate) => candidate.id === stepId);
+  if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
+  return step;
+}
+
+function applyAmendmentChanges(quest: Quest, changes: QuestAmendmentChange[], timestamp: string): void {
+  for (const change of changes) {
+    if (change.type === "ADD_STEP") {
+      quest.steps.push({
+        ...change.step,
+        id: randomUUID(),
+        status: "pending",
+        impactAwarded: 0,
+        evidenceIds: [],
+        artifactIds: [],
+      });
+      continue;
+    }
+
+    const step = requireStep(quest, change.stepId);
+    if (change.type === "MODIFY_STEP") {
+      if (["completed", "superseded"].includes(step.status)) throw new Error(`No se puede modificar el paso histórico «${step.title}».`);
+      if (change.patch.weight !== undefined && change.patch.weight < step.impactAwarded) {
+        throw new Error(`El nuevo peso de «${step.title}» no puede ser menor que su impacto ya concedido (${step.impactAwarded}).`);
+      }
+      Object.assign(step, change.patch);
+    } else if (change.type === "SUPERSEDE_STEP") {
+      if (step.status === "completed") throw new Error(`El paso completado «${step.title}» ya es historia validada y no puede sustituirse.`);
+      step.status = "superseded";
+      step.supersededAt = timestamp;
+      step.supersededReason = change.reason.trim();
+      // El impacto no adjudicado vuelve al contrato; el impacto histórico queda intacto.
+      step.weight = step.impactAwarded;
+    } else if (change.type === "MARK_EXTERNAL_BLOCKER") {
+      if (["completed", "superseded"].includes(step.status)) throw new Error(`El paso «${step.title}» ya no puede bloquearse.`);
+      step.status = "blocked";
+      step.blockedBy = change.blockedBy.trim();
+      step.blockedReason = change.blockedReason.trim();
+      step.blockedSince = timestamp;
+      step.playerActionAvailable = change.playerActionAvailable;
+      step.followUpAfter = change.followUpAfter;
+    } else if (change.type === "UNBLOCK_STEP") {
+      if (step.status !== "blocked") throw new Error(`El paso «${step.title}» no está bloqueado.`);
+      step.status = step.impactAwarded > 0 ? "in_progress" : "pending";
+      delete step.blockedBy;
+      delete step.blockedReason;
+      delete step.blockedSince;
+      delete step.playerActionAvailable;
+      delete step.followUpAfter;
+    }
+  }
+
+  const total = quest.steps.reduce((sum, step) => sum + step.weight, 0);
+  if (total !== 100) throw new Error(`Tras el amendment, el impacto total debe seguir siendo 100; actualmente suma ${total}. Redistribuye sólo el impacto restante.`);
+}
+
+function reconcileExternalWaiting(quest: Quest): "waiting" | "active" {
+  const unfinished = quest.steps.filter((step) => step.impactAwarded < step.weight && step.status !== "superseded");
+  const noPlayerAction = unfinished.length > 0 && unfinished.every((step) => step.status === "blocked" && step.playerActionAvailable === false);
+  quest.status = noPlayerAction ? "waiting_external" : "active";
+  return noPlayerAction ? "waiting" : "active";
 }
 
 export interface CodiceVerdictResult {
@@ -118,7 +196,7 @@ export class QuestService {
       currentQuest: quest,
       progress: progressFor(quest),
       currentStep: currentStepFor(quest),
-      battle: battleFor(quest),
+      battle: battleFor(quest, realm.gameEvents),
       consistency: consistencyFor(realm, this.instance, quest),
       projectedMargin: availableBalance + expectedIncome - committedExpenses - reserveTarget,
     };
@@ -136,7 +214,7 @@ export class QuestService {
   async createDraft(plan: QuestPlanInput): Promise<Quest> {
     validatePlan(plan);
     const { result } = await this.store.mutate((state) => {
-      const conflicting = state.quests.find((quest) => ["accepted", "active"].includes(quest.status));
+      const conflicting = state.quests.find((quest) => ["accepted", "active", "waiting_external"].includes(quest.status));
       if (conflicting) throw new Error(`Ya existe una quest ${conflicting.status}: ${conflicting.title}`);
       const timestamp = now();
       const quest: Quest = {
@@ -153,6 +231,8 @@ export class QuestService {
         })),
         createdAt: timestamp,
         updatedAt: timestamp,
+        version: 1,
+        amendments: [],
       };
       state.quests.unshift(quest);
       addEvent(state, { type: "quest_created", questId: quest.id, message: `El Códice redactó «${quest.title}».` });
@@ -238,6 +318,8 @@ export class QuestService {
       const step = quest.steps.find((candidate) => candidate.id === stepId);
       if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
       if (step.status === "completed") throw new Error("Este paso ya recibió todo su impacto.");
+      if (step.status === "blocked") throw new Error("Este frente está bloqueado; no hay evidencia que entregar hasta resolver la dependencia.");
+      if (step.status === "superseded") throw new Error("Este paso fue sustituido por un amendment y ya no exige acción.");
       if (!input.summary.trim()) throw new Error("Describe brevemente la evidencia aportada.");
       if (!input.reasoning.trim()) throw new Error("Códice debe explicar el veredicto.");
       const remaining = step.weight - step.impactAwarded;
@@ -256,7 +338,7 @@ export class QuestService {
 
       const timestamp = now();
       const evidenceId = randomUUID();
-      const artifactIds = (input.artifactIds ?? []).filter((id) => state.artifacts.some((artifact) => artifact.id === id));
+      const artifactIds = (input.artifactIds ?? []).filter((id) => state.artifacts.some((artifact) => artifact.id === id && artifact.questId === questId && artifact.stepIds.includes(stepId)));
       state.evidence.unshift({ id: evidenceId, questId, stepId, summary: input.summary.trim(), source: input.source, verdict: input.verdict, reasoning: input.reasoning.trim(), impactAwarded: input.impactAwarded, artifactIds, createdAt: timestamp });
       state.evidence = state.evidence.slice(0, 200);
 
@@ -282,7 +364,7 @@ export class QuestService {
         questId,
         message: input.impactAwarded > 0 ? `${step.title}: impacto validado de ${input.impactAwarded} puntos.` : `${step.title}: evidencia rechazada; sin impacto.`,
       });
-      const battle = battleFor(quest)!;
+      const battle = battleFor(quest, state.gameEvents)!;
       if (battle.isKo) {
         quest.status = "completed";
         quest.completedAt = now();
@@ -374,7 +456,7 @@ export class QuestService {
     if (step.status === "completed") throw new Error("Este paso ya recibió todo su impacto.");
 
     const wanted = input.artifactIds?.length ? new Set(input.artifactIds) : new Set(step.artifactIds);
-    const artifacts = state.artifacts.filter((artifact) => artifact.stepId === stepId && wanted.has(artifact.id));
+    const artifacts = state.artifacts.filter((artifact) => artifact.questId === questId && artifact.stepIds.includes(stepId) && wanted.has(artifact.id));
     const note = (input.note ?? "").trim();
     if (!note && artifacts.length === 0) {
       throw new Error("Entrega un artefacto o describe la evidencia antes de pedir el veredicto.");
@@ -415,10 +497,125 @@ export class QuestService {
     return { quest: result.quest, battle: result.battle };
   }
 
+  async proposeAmendment(
+    questId: string,
+    input: { reason: string; proposedBy: string; changes: QuestAmendmentChange[] },
+  ): Promise<QuestAmendment> {
+    if (input.reason.trim().length < 10) throw new Error("Explica qué cambió en la realidad antes de proponer el amendment.");
+    if (input.changes.length === 0) throw new Error("El amendment debe proponer al menos un cambio.");
+
+    const { result } = await this.store.mutate((state) => {
+      const quest = requireQuest(state, questId);
+      if (!["active", "waiting_external"].includes(quest.status)) throw new Error("Sólo una quest iniciada puede recibir un amendment.");
+      if (quest.amendments.some((candidate) => candidate.status === "proposed")) throw new Error("Ya existe un amendment esperando decisión del jugador.");
+
+      // Validar sobre una copia garantiza que la propuesta aceptada será aplicable,
+      // sin tocar todavía el contrato ni el impacto histórico.
+      const preview = structuredClone(quest);
+      applyAmendmentChanges(preview, input.changes, now());
+
+      const amendment: QuestAmendment = {
+        id: randomUUID(),
+        status: "proposed",
+        reason: input.reason.trim(),
+        proposedBy: input.proposedBy.trim() || "codice",
+        previousVersion: quest.version,
+        newVersion: quest.version + 1,
+        changes: input.changes,
+        createdAt: now(),
+      };
+      quest.amendments.unshift(amendment);
+      quest.updatedAt = amendment.createdAt;
+      addEvent(state, { type: "quest_amendment_proposed", questId, message: `Códice propone adaptar «${quest.title}»: ${amendment.reason}` });
+      return amendment;
+    });
+    return result;
+  }
+
+  async acceptAmendment(questId: string, amendmentId: string, userAccepted: boolean): Promise<{ quest: Quest; amendment: QuestAmendment; battle: BattleState }> {
+    if (!userAccepted) throw new Error("Los cambios materiales requieren aceptación explícita del jugador.");
+    const { result } = await this.store.mutate((state) => {
+      const quest = requireQuest(state, questId);
+      const amendment = quest.amendments.find((candidate) => candidate.id === amendmentId);
+      if (!amendment) throw new Error(`Amendment no encontrado: ${amendmentId}`);
+      if (amendment.status !== "proposed") throw new Error("Este amendment ya fue resuelto.");
+
+      const historicalImpact = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
+      const previousStatus = quest.status;
+      const timestamp = now();
+      applyAmendmentChanges(quest, amendment.changes, timestamp);
+      const preservedImpact = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
+      if (preservedImpact !== historicalImpact) throw new Error("El amendment intentó alterar impacto histórico.");
+
+      amendment.status = "accepted";
+      amendment.acceptedAt = timestamp;
+      quest.version = amendment.newVersion;
+      quest.updatedAt = timestamp;
+      const next = reconcileExternalWaiting(quest);
+      addEvent(state, { type: "quest_amended", questId, message: `El campo de batalla cambió: «${quest.title}» ahora está en v${quest.version}.` });
+      if (next === "waiting") {
+        addEvent(state, { type: "quest_waiting_external", questId, message: `«${quest.title}» espera una condición externa. No hay acción requerida del Marqués.` });
+      } else if (previousStatus === "waiting_external") {
+        addEvent(state, { type: "quest_unblocked", questId, message: `El sello externo cedió: «${quest.title}» vuelve a estar activa.` });
+      }
+      return { quest, amendment, battle: battleFor(quest, state.gameEvents)! };
+    });
+    return result;
+  }
+
+  async reuseArtifact(questId: string, artifactId: string, targetStepId: string): Promise<EvidenceArtifact> {
+    const { result } = await this.store.mutate((state) => {
+      const quest = requireQuest(state, questId);
+      const step = requireStep(quest, targetStepId);
+      const artifact = state.artifacts.find((candidate) => candidate.id === artifactId && candidate.questId === questId);
+      if (!artifact) throw new Error(`Artefacto no encontrado en esta quest: ${artifactId}`);
+      if (!artifact.stepIds.includes(targetStepId)) artifact.stepIds.push(targetStepId);
+      if (!step.artifactIds.includes(artifactId)) step.artifactIds.push(artifactId);
+      quest.updatedAt = now();
+      addEvent(state, { type: "evidence_attached", questId, message: `${artifact.label} también queda disponible para «${step.title}», sin duplicar bytes.` });
+      return artifact;
+    });
+    return result;
+  }
+
+  async recordUnexpectedRequirement(
+    questId: string,
+    input: { reason: string; damage: number; stepId?: string },
+  ): Promise<{ battle: BattleState; lifeEventId: string; gameEventId: string }> {
+    if (input.reason.trim().length < 10) throw new Error("Describe el requisito inesperado que representa este ataque.");
+    if (!Number.isInteger(input.damage) || input.damage < 1 || input.damage > 50) throw new Error("El daño debe ser un entero entre 1 y 50.");
+    const { result } = await this.store.mutate((state) => {
+      const quest = requireQuest(state, questId);
+      if (quest.status !== "active") throw new Error("La Horda sólo puede atacar un frente activo con presión real; una espera externa no recibe daño automático.");
+      if (input.stepId) requireStep(quest, input.stepId);
+      const timestamp = now();
+      const lifeEventId = randomUUID();
+      state.lifeEvents.unshift({ id: lifeEventId, type: "unexpected_requirement", questId, stepId: input.stepId, reason: input.reason.trim(), createdAt: timestamp });
+      const gameEventId = randomUUID();
+      state.gameEvents.unshift({
+        id: gameEventId,
+        type: "horde_attack",
+        sourceLifeEventId: lifeEventId,
+        questId,
+        stepId: input.stepId,
+        damage: input.damage,
+        reason: input.reason.trim(),
+        message: `La Horda contraataca: ${input.reason.trim()} (-${input.damage} HP).`,
+        createdAt: timestamp,
+      });
+      state.lifeEvents = state.lifeEvents.slice(0, 200);
+      state.gameEvents = state.gameEvents.slice(0, 200);
+      const battle = battleFor(quest, state.gameEvents)!;
+      addEvent(state, { type: "horde_attack", questId, message: `${state.gameEvents[0].message} El Marqués conserva ${battle.playerHealth} HP.` });
+      return { battle, lifeEventId, gameEventId };
+    });
+    return result;
+  }
+
   async abandon(questId: string, reason: string): Promise<Quest> {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
-      if (!["draft", "accepted", "active"].includes(quest.status)) {
+      if (!["draft", "accepted", "active", "waiting_external"].includes(quest.status)) {
         throw new Error("Esta quest ya no puede abandonarse.");
       }
       quest.status = "abandoned";

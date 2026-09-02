@@ -83,4 +83,50 @@ describe("HTTP app", () => {
     expect(externalRead.currentQuest?.status).toBe("accepted");
     expect(externalRead.consistency.realmId).toBe(appRead.body.consistency.realmId);
   });
+
+  it("adapta por HTTP una quest activa sólo tras aceptación y conserva el progreso", async () => {
+    const draft = await service.createDraft({
+      campaignTitle: "El pliego cambiante",
+      title: "La licitación de la Marca",
+      intent: "Presentar una propuesta sujeta a requisitos externos.",
+      outcome: "Entregar una propuesta válida.",
+      rationale: "La realidad puede cambiar después de iniciar.",
+      durationMinutes: 30,
+      wellbeingConstraints: [],
+      allowedApps: [],
+      steps: [
+        { title: "Leer el pliego", actor: "user", evidence: "Notas verificadas", weight: 20 },
+        { title: "Entregar la propuesta", actor: "user", evidence: "Constancia de entrega", weight: 80 },
+      ],
+    });
+    await service.accept(draft.id, true);
+    await service.start(draft.id);
+    await service.completeStep(draft.id, draft.steps[0].id, "Pliego revisado");
+
+    const proposal = await request(app)
+      .post(`/api/quests/${draft.id}/amendments`)
+      .send({
+        reason: "La entidad publicó una adenda que exige esperar una respuesta externa.",
+        proposedBy: "codice",
+        changes: [
+          {
+            type: "MARK_EXTERNAL_BLOCKER",
+            stepId: draft.steps[1].id,
+            blockedBy: "Entidad contratante",
+            blockedReason: "Debe publicar el anexo antes de poder continuar.",
+            playerActionAvailable: false,
+          },
+        ],
+      })
+      .expect(201);
+
+    expect((await service.snapshot()).currentQuest?.status).toBe("active");
+    const accepted = await request(app)
+      .post(`/api/quests/${draft.id}/amendments/${proposal.body.amendment.id}/accept`)
+      .send({ userAccepted: true })
+      .expect(200);
+    expect(accepted.body.quest.status).toBe("waiting_external");
+    expect(accepted.body.battle.progress).toBe(20);
+    expect(accepted.body.battle.enemyHealth).toBe(80);
+  });
 });

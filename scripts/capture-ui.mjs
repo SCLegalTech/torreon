@@ -42,6 +42,19 @@ try {
   await page.getByText("EN BATALLA").waitFor();
   await shot("05-battle-active.png");
 
+  await page.getByRole("button", { name: /ABRIR ÓRDENES/ }).click();
+  const fightingState = await (await page.request.get(`${baseUrl}/api/state`)).json();
+  await page.request.post(`${baseUrl}/api/quests/${fightingState.currentQuest.id}/horde-attacks/unexpected-requirement`, {
+    data: {
+      stepId: fightingState.currentQuest.steps[0].id,
+      reason: "La entidad exigió un certificado adicional no contemplado.",
+      damage: 7,
+    },
+  });
+  await page.getByText("−7 HP", { exact: true }).waitFor({ timeout: 10_000 });
+  await shot("05b-horde-attack-orders-open.png");
+  await page.getByRole("button", { name: "CERRAR ÓRDENES", exact: true }).click();
+
   const state = await (await page.request.get(`${baseUrl}/api/state`)).json();
   for (const step of state.currentQuest.steps) {
     await page.request.post(`${baseUrl}/api/quests/${state.currentQuest.id}/steps/${step.id}/evidence`, {

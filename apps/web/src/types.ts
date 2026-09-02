@@ -1,4 +1,4 @@
-export type QuestStatus = "draft" | "accepted" | "active" | "completed" | "abandoned";
+export type QuestStatus = "draft" | "accepted" | "active" | "waiting_external" | "completed" | "abandoned";
 
 export interface QuestStep {
   id: string;
@@ -13,7 +13,25 @@ export interface QuestStep {
   artifactIds: string[];
   impactAwarded: number;
   weight: number;
-  status: "pending" | "in_progress" | "completed";
+  status: "pending" | "in_progress" | "blocked" | "superseded" | "completed";
+  blockedBy?: string;
+  blockedReason?: string;
+  blockedSince?: string;
+  playerActionAvailable?: boolean;
+  followUpAfter?: string;
+  supersededReason?: string;
+}
+
+export interface QuestAmendment {
+  id: string;
+  status: "proposed" | "accepted" | "rejected";
+  reason: string;
+  proposedBy: string;
+  previousVersion: number;
+  newVersion: number;
+  changes: Array<{ type: string; stepId?: string; reason?: string }>;
+  createdAt: string;
+  acceptedAt?: string;
 }
 
 export interface Quest {
@@ -28,6 +46,8 @@ export interface Quest {
   allowedApps: string[];
   status: QuestStatus;
   steps: QuestStep[];
+  version: number;
+  amendments: QuestAmendment[];
 }
 
 export interface RealmSnapshot {
@@ -43,7 +63,7 @@ export interface RealmSnapshot {
     };
     events: Array<{
       id: string;
-      type: "quest_created" | "quest_revised" | "quest_accepted" | "quest_started" | "evidence_attached" | "step_completed" | "quest_completed" | "quest_abandoned";
+      type: "quest_created" | "quest_revised" | "quest_accepted" | "quest_started" | "quest_amendment_proposed" | "quest_amended" | "quest_waiting_external" | "quest_unblocked" | "horde_attack" | "evidence_attached" | "step_completed" | "quest_completed" | "quest_abandoned";
       questId: string;
       message: string;
       createdAt: string;
@@ -52,21 +72,28 @@ export interface RealmSnapshot {
     artifacts: Array<{
       id: string;
       stepId: string;
+      stepIds: string[];
       kind: "file" | "link" | "text";
       label: string;
       verification: { verified: boolean; detail: string };
     }>;
     lifeEvents: Array<{ id: string; evidenceId: string; impactAwarded: number }>;
-    gameEvents: Array<{ id: string; sourceLifeEventId: string; damage: number; message: string }>;
+    gameEvents: Array<{ id: string; type: "quest_attack" | "horde_attack"; questId: string; sourceLifeEventId: string; damage: number; message: string; reason?: string; createdAt: string }>;
   };
   currentQuest: Quest | null;
   battle: null | {
     questId: string;
+    player: { id: "marques-phi"; health: number; maxHealth: 100 };
+    enemy: { id: "horda"; health: number; maxHealth: 100 };
+    playerHealth: number;
+    playerMaxHealth: 100;
     enemyHealth: number;
+    enemyMaxHealth: 100;
     progress: number;
     completedSteps: number;
     totalSteps: number;
     isKo: boolean;
+    isPlayerKo: boolean;
   };
   consistency: {
     status: "ok" | "warning" | "desynced";

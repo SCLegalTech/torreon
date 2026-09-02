@@ -19,12 +19,17 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-type RealmNotice = { eventId: string; questId: string; kind: "draft" | "started" | "completed"; title: string; message: string };
+type RealmNotice = { eventId: string; questId: string; kind: "draft" | "started" | "completed" | "amended" | "blocked" | "danger"; title: string; message: string };
 
 function noticeFor(event: RealmSnapshot["realm"]["events"][number]): RealmNotice | null {
   if (event.type === "quest_created") return { eventId: event.id, questId: event.questId, kind: "draft", title: "📜 UN NUEVO PACTO AGUARDA TU SELLO", message: event.message };
   if (event.type === "quest_started") return { eventId: event.id, questId: event.questId, kind: "started", title: "⚔️ NUEVA ORDEN DEL CÓDICE", message: event.message };
   if (event.type === "quest_completed") return { eventId: event.id, questId: event.questId, kind: "completed", title: "🏆 VICTORIA", message: event.message };
+  if (event.type === "quest_amendment_proposed") return { eventId: event.id, questId: event.questId, kind: "amended", title: "⚔️ EL CAMPO DE BATALLA PUEDE CAMBIAR", message: event.message };
+  if (event.type === "quest_amended") return { eventId: event.id, questId: event.questId, kind: "amended", title: "🗺️ PLAN ACTUALIZADO", message: event.message };
+  if (event.type === "quest_waiting_external") return { eventId: event.id, questId: event.questId, kind: "blocked", title: "🔒 FRENTE BLOQUEADO POR UN TERCERO", message: event.message };
+  if (event.type === "quest_unblocked") return { eventId: event.id, questId: event.questId, kind: "started", title: "🔓 EL FRENTE VUELVE A ABRIRSE", message: event.message };
+  if (event.type === "horde_attack") return { eventId: event.id, questId: event.questId, kind: "danger", title: "💥 LA HORDA CONTRAATACA", message: event.message };
   return null;
 }
 
@@ -225,7 +230,7 @@ function ThinkingScreen({ intent }: { intent: string }) {
 const verdictNames = { rejected: "RECHAZADA", partial: "PARCIAL", accepted: "ACEPTADA" } as const;
 
 function StatusBadge({ status }: { status: Quest["status"] }) {
-  const names = { draft: "BORRADOR", accepted: "ACEPTADA", active: "EN BATALLA", completed: "VICTORIA", abandoned: "RETIRADA" };
+  const names = { draft: "BORRADOR", accepted: "ACEPTADA", active: "EN BATALLA", waiting_external: "ESPERA EXTERNA", completed: "VICTORIA", abandoned: "RETIRADA" };
   return <span className={`status ${status}`}>{names[status]}</span>;
 }
 
@@ -387,16 +392,20 @@ function Battle({
   snapshot,
   busy,
   impact,
+  incomingDamage,
   onBack,
   onAccept,
+  onAcceptAmendment,
   onStart,
   onDeliverEvidence,
 }: {
   snapshot: RealmSnapshot;
   busy: boolean;
   impact: number | null;
+  incomingDamage: number | null;
   onBack: () => void;
   onAccept: () => void;
+  onAcceptAmendment: (amendmentId: string) => void;
   onStart: () => void;
   onDeliverEvidence: (stepId: string, note: string, link: string, files: PendingFile[]) => void;
 }) {
@@ -406,11 +415,17 @@ function Battle({
   const [evidenceLink, setEvidenceLink] = useState("");
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [ordersOpen, setOrdersOpen] = useState(quest?.status !== "active");
+  const proposedAmendmentId = quest?.amendments?.find((amendment) => amendment.status === "proposed")?.id;
+  useEffect(() => {
+    if (proposedAmendmentId) setOrdersOpen(true);
+  }, [proposedAmendmentId]);
   if (!quest) return null;
   const battle = snapshot.battle;
   const health = battle?.enemyHealth ?? 100;
+  const playerHealth = battle?.playerHealth ?? 100;
+  const pendingAmendment = quest.amendments?.find((amendment) => amendment.status === "proposed");
   return (
-    <main className={`scene battle-scene ${impact ? "impact" : ""}`}>
+    <main className={`scene battle-scene ${impact ? "impact" : ""} ${incomingDamage ? "player-hit" : ""}`}>
       <img className="battle-art" src="/assets/art/battle-realm.png" alt="El ejército de la Marca combate a la Horda" />
       <header className="battle-header glass-panel">
         <button className="back" onClick={onBack}>‹</button>
@@ -423,10 +438,18 @@ function Battle({
         <div className="health-track"><span style={{ width: `${health}%` }} /></div>
       </section>
 
+      <section className="player-health glass-panel">
+        <div><span>MARQUÉS</span><strong>{playerHealth} / 100 HP</strong></div>
+        <div className="player-health-track"><span style={{ width: `${playerHealth}%` }} /></div>
+      </section>
+
       <section className="battlefield" aria-label="Campo de batalla">
         <span className="battle-pulse ally" aria-hidden="true" />
         <span className="battle-pulse enemy" aria-hidden="true" />
-        {impact ? <div className="damage-number">−{impact}</div> : null}
+        <div className="combat-event-zone" aria-live="polite">
+          {impact ? <div className="damage-number enemy-damage">−{impact}</div> : null}
+          {incomingDamage ? <div className="damage-number player-damage">−{incomingDamage} HP</div> : null}
+        </div>
         {battle?.isKo ? <div className="ko">KO</div> : null}
       </section>
 
@@ -452,17 +475,24 @@ function Battle({
           <strong>{battle?.completedSteps ?? 0}/{quest.steps.length}</strong>
           <button type="button" onClick={() => setOrdersOpen(false)} aria-label="Cerrar órdenes">×</button>
         </div>
+        {pendingAmendment ? (
+          <article className="amendment-proposal">
+            <strong>⚔️ CÓDICE PROPONE PLAN v{pendingAmendment.newVersion}</strong>
+            <p>{pendingAmendment.reason}</p>
+            <button className="gold-button" type="button" disabled={busy} onClick={() => onAcceptAmendment(pendingAmendment.id)}>ACEPTAR CAMBIO</button>
+          </article>
+        ) : null}
         <div className="steps-list">
           {quest.steps.map((step, index) => {
             const isOpen = openStepId === step.id;
             const parts = stepParts(step.description);
-            const stepArtifacts = snapshot.realm.artifacts?.filter((artifact) => artifact.stepId === step.id) ?? [];
+            const stepArtifacts = snapshot.realm.artifacts?.filter((artifact) => artifact.stepIds.includes(step.id)) ?? [];
             const stepVerdicts = snapshot.realm.evidence.filter((record) => record.stepId === step.id);
             return (
               <article className={`step ${step.status} ${isOpen ? "open" : ""}`} key={step.id}>
                 <button className="step-summary" type="button" onClick={() => setOpenStepId(isOpen ? null : step.id)}>
                   <span className="step-number">{step.status === "completed" ? "✓" : index + 1}</span>
-                  <span><strong>{step.title}</strong><small>{step.actor.toUpperCase()} · {step.evidence}</small></span>
+                  <span><strong>{step.title}</strong><small>{step.status === "blocked" ? "BLOQUEO EXTERNO" : step.status === "superseded" ? "ORDEN SUSTITUIDA" : `${step.actor.toUpperCase()} · ${step.evidence}`}</small></span>
                   <b>{step.impactAwarded}/{step.weight}</b>
                 </button>
                 {isOpen ? (
@@ -472,6 +502,14 @@ function Battle({
                       <div><dt>Qué hacer</dt><dd>{parts.real || step.title}</dd></div>
                       <div><dt>Qué entregar</dt><dd>{step.evidence}</dd></div>
                     </dl>
+                    {step.status === "blocked" ? (
+                      <div className="external-blocker">
+                        <strong>🔒 {step.blockedBy ?? "Dependencia externa"}</strong>
+                        <p>{step.blockedReason ?? "Este frente espera una condición fuera del control del Marqués."}</p>
+                        {step.playerActionAvailable === false ? <small>NO HAY ACCIÓN REQUERIDA DEL MARQUÉS AHORA.</small> : null}
+                      </div>
+                    ) : null}
+                    {step.status === "superseded" ? <div className="superseded-note">Esta orden ya no representa la realidad: {step.supersededReason}</div> : null}
                     {stepArtifacts.length > 0 ? (
                       <ul className="artifact-list">
                         {stepArtifacts.map((artifact) => (
@@ -492,7 +530,7 @@ function Battle({
                         ))}
                       </ul>
                     ) : null}
-                    {quest.status === "active" && step.status !== "completed" ? (
+                    {quest.status === "active" && !["completed", "blocked", "superseded"].includes(step.status) ? (
                       <form
                         onSubmit={(event) => {
                           event.preventDefault();
@@ -600,11 +638,13 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [impact, setImpact] = useState<number | null>(null);
+  const [incomingDamage, setIncomingDamage] = useState<number | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [pendingIntent, setPendingIntent] = useState("");
   const [verdict, setVerdict] = useState<string | null>(null);
   const [notice, setNotice] = useState<RealmNotice | null>(null);
   const lastProgress = useRef(0);
+  const lastPlayerHealth = useRef<number | null>(null);
   const seenEventIds = useRef(new Set<string>());
   const eventsHydrated = useRef(false);
 
@@ -616,6 +656,11 @@ function App() {
         setImpact(delta);
         window.setTimeout(() => setImpact(null), 900);
       }
+      if (next.battle && lastPlayerHealth.current !== null && next.battle.playerHealth < lastPlayerHealth.current) {
+        const damage = lastPlayerHealth.current - next.battle.playerHealth;
+        setIncomingDamage(damage);
+        window.setTimeout(() => setIncomingDamage(null), 1_300);
+      }
       if (!eventsHydrated.current) {
         next.realm.events.forEach((event) => seenEventIds.current.add(event.id));
         eventsHydrated.current = true;
@@ -626,6 +671,7 @@ function App() {
         if (narrative) setNotice(narrative);
       }
       lastProgress.current = next.battle?.progress ?? 0;
+      lastPlayerHealth.current = next.battle?.playerHealth ?? null;
       setSnapshot(next);
       setError(null);
     } catch (caught) {
@@ -702,8 +748,10 @@ function App() {
           snapshot={snapshot}
           busy={busy}
           impact={impact}
+          incomingDamage={incomingDamage}
           onBack={() => setScreen("realm")}
           onAccept={() => quest && void act(() => api(`/api/quests/${quest.id}/accept`, { method: "POST", body: JSON.stringify({ userAccepted: true }) }))}
+          onAcceptAmendment={(amendmentId) => quest && void act(() => api(`/api/quests/${quest.id}/amendments/${amendmentId}/accept`, { method: "POST", body: JSON.stringify({ userAccepted: true }) }))}
           onStart={() => quest && void act(() => api(`/api/quests/${quest.id}/start`, { method: "POST" })).then(() => setNotice(null))}
           onDeliverEvidence={(stepId, note, link, files) => {
             if (!quest) return;

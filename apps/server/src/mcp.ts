@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { QuestPlanInput } from "./domain.js";
+import type { QuestAmendmentChange, QuestPlanInput } from "./domain.js";
 import { QuestService } from "./quest-service.js";
 
 const stepShape = {
@@ -32,6 +32,33 @@ const planShape = {
   steps: z.array(z.object(stepShape)).min(1).max(12),
 };
 
+const amendmentChangeSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("ADD_STEP"), step: z.object(stepShape) }),
+  z.object({
+    type: z.literal("MODIFY_STEP"),
+    stepId: z.string().uuid(),
+    patch: z.object({
+      title: stepShape.title.optional(),
+      description: stepShape.description,
+      actor: stepShape.actor.optional(),
+      evidence: stepShape.evidence.optional(),
+      evidenceKind: stepShape.evidenceKind,
+      verificationHint: stepShape.verificationHint,
+      weight: stepShape.weight.optional(),
+    }),
+  }),
+  z.object({ type: z.literal("SUPERSEDE_STEP"), stepId: z.string().uuid(), reason: z.string().min(5).max(1000) }),
+  z.object({
+    type: z.literal("MARK_EXTERNAL_BLOCKER"),
+    stepId: z.string().uuid(),
+    blockedBy: z.string().min(2).max(200),
+    blockedReason: z.string().min(5).max(1000),
+    playerActionAvailable: z.boolean(),
+    followUpAfter: z.string().max(100).optional(),
+  }),
+  z.object({ type: z.literal("UNBLOCK_STEP"), stepId: z.string().uuid(), reason: z.string().min(5).max(1000) }),
+]);
+
 function toolResult<T extends object>(message: string, data: T) {
   return {
     structuredContent: data,
@@ -44,7 +71,7 @@ export function createMcpServer(service: QuestService): McpServer {
     { name: "torreon", version: "0.1.0" },
     {
       instructions:
-        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito —de cualquier dominio— en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño. La mejor partida es la que el jugador juega sin tocar el teléfono: la evidencia debe entrar por la conversación, no por la pantalla del juego. Si el archivo, la imagen o los datos están cargados en TU conversación, ábrelos, examínalos y regístralos con attest_evidence_artifact declarando qué viste. Si el archivo está en el disco donde corre este MCP, usa attach_evidence_artifact y el servidor comprobará los hechos (existe, tamaño, tipo, hash, extracto). Solo después emite el veredicto con submit_quest_evidence citando los artifactIds; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante. Un artefacto que el servidor no pudo comprobar nunca justifica accepted por sí solo.",
+        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito —de cualquier dominio— en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño. La mejor partida es la que el jugador juega sin tocar el teléfono: la evidencia debe entrar por la conversación, no por la pantalla del juego. Si el archivo, la imagen o los datos están cargados en TU conversación, ábrelos, examínalos y regístralos con attest_evidence_artifact declarando qué viste. Si el archivo está en el disco donde corre este MCP, usa attach_evidence_artifact y el servidor comprobará los hechos (existe, tamaño, tipo, hash, extracto). Reutiliza un mismo artefacto entre pasos con reuse_evidence_artifact: no dupliques sus bytes ni su identidad, pero emite un veredicto independiente por paso. Solo después emite el veredicto con submit_quest_evidence citando los artifactIds; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante. Un artefacto que el servidor no pudo comprobar nunca justifica accepted por sí solo. Si la realidad refuta el plan activo, no borres ni reescribas la historia: propón un amendment y aplícalo sólo tras aceptación explícita. Un bloqueo externo sin acción disponible coloca la quest en waiting_external. La horda sólo contraataca mediante record_unexpected_requirement cuando aparece una complicación real y concreta; jamás por tiempo transcurrido, espera externa, silencio o inactividad.",
     },
   );
 
@@ -127,6 +154,49 @@ export function createMcpServer(service: QuestService): McpServer {
   );
 
   server.registerTool(
+    "propose_quest_amendment",
+    {
+      title: "Proponer una adaptación de la quest",
+      description:
+        "Propone cambios materiales a una quest iniciada cuando nueva información demuestra que el contrato ya no representa la realidad. No aplica nada todavía: conserva impacto, eventos y evidencia hasta que el jugador acepte.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        reason: z.string().min(10).max(2000).describe("Qué cambió en la realidad y por qué el contrato actual dejó de ser correcto."),
+        proposedBy: z.string().min(1).max(60).default("codice"),
+        changes: z.array(amendmentChangeSchema).min(1).max(20),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId, reason, proposedBy, changes }) => {
+      const amendment = await service.proposeAmendment(questId, { reason, proposedBy, changes: changes as QuestAmendmentChange[] });
+      return toolResult(`Amendment v${amendment.newVersion} propuesto. Nada cambia hasta que el jugador lo acepte explícitamente.`, { amendment });
+    },
+  );
+
+  server.registerTool(
+    "accept_quest_amendment",
+    {
+      title: "Aceptar una adaptación de la quest",
+      description: "Aplica un amendment material únicamente después de la aceptación inequívoca del jugador; preserva impacto y eventos históricos.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        amendmentId: z.string().uuid(),
+        userAccepted: z.boolean(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId, amendmentId, userAccepted }) => {
+      const result = await service.acceptAmendment(questId, amendmentId, userAccepted);
+      return toolResult(
+        result.quest.status === "waiting_external"
+          ? `Plan v${result.quest.version} aceptado. El frente espera una condición externa y no exige acción del jugador.`
+          : `Plan v${result.quest.version} aceptado. El impacto histórico permanece en ${result.battle.progress}.`,
+        result,
+      );
+    },
+  );
+
+  server.registerTool(
     "start_quest",
     {
       title: "Iniciar la batalla",
@@ -136,7 +206,8 @@ export function createMcpServer(service: QuestService): McpServer {
     },
     async ({ questId }) => {
       const quest = await service.start(questId);
-      return toolResult(`La batalla «${quest.title}» comenzó.`, { quest, battle: { enemyHealth: 100, progress: 0 } });
+      const battle = (await service.snapshot()).battle;
+      return toolResult(`La batalla «${quest.title}» comenzó.`, { quest, battle });
     },
   );
 
@@ -261,6 +332,24 @@ export function createMcpServer(service: QuestService): McpServer {
   );
 
   server.registerTool(
+    "reuse_evidence_artifact",
+    {
+      title: "Reutilizar una prueba en otro paso",
+      description: "Vincula un Artifact ya existente a otro paso de la misma quest sin volver a cargar ni duplicar sus bytes. Cada paso conserva después su propio veredicto y razonamiento.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        artifactId: z.string().uuid(),
+        targetStepId: z.string().uuid(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId, artifactId, targetStepId }) => {
+      const artifact = await service.reuseArtifact(questId, artifactId, targetStepId);
+      return toolResult(`${artifact.label} quedó ligado al nuevo paso sin duplicar bytes. Ya puede evaluarse allí con un veredicto independiente.`, { artifact });
+    },
+  );
+
+  server.registerTool(
     "attest_evidence_artifact",
     {
       title: "Atestiguar una prueba que tienes delante",
@@ -304,6 +393,26 @@ export function createMcpServer(service: QuestService): McpServer {
     async ({ questId, reason }) => {
       const quest = await service.abandon(questId, reason);
       return toolResult(`La quest «${quest.title}» fue abandonada.`, { quest });
+    },
+  );
+
+  server.registerTool(
+    "record_unexpected_requirement",
+    {
+      title: "Registrar un contraataque por complicación real",
+      description:
+        "Registra una exigencia nueva e imprevista del mundo real. Produce LifeEvent unexpected_requirement y GameEvent horde_attack; nunca debe usarse sólo porque pasó tiempo ni contra una quest waiting_external.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        stepId: z.string().uuid().optional(),
+        reason: z.string().min(10).max(1000),
+        damage: z.number().int().min(1).max(50).describe("Impacto proporcional de esta complicación real sobre el frente."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId, stepId, reason, damage }) => {
+      const result = await service.recordUnexpectedRequirement(questId, { stepId, reason, damage });
+      return toolResult(`La Horda contraatacó por una complicación real: -${damage} HP. El Marqués conserva ${result.battle.playerHealth} HP.`, result);
     },
   );
 

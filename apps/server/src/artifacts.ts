@@ -67,7 +67,7 @@ export async function ingestArtifact(
 ): Promise<EvidenceArtifact> {
   const id = randomUUID();
   const createdAt = new Date().toISOString();
-  const base = { id, questId, stepId, kind: input.kind, createdAt };
+  const base = { id, questId, stepId, stepIds: [stepId], kind: input.kind, createdAt };
 
   // Entrega desde el juego: los bytes vienen en el cuerpo, no en el disco.
   if (input.kind === "file" && input.dataBase64) {
@@ -215,6 +215,7 @@ export function witnessArtifact(input: WitnessInput, questId: string, stepId: st
     id: randomUUID(),
     questId,
     stepId,
+    stepIds: [stepId],
     kind: input.kind,
     label: input.label.trim() || "Artefacto atestiguado",
     url: input.url?.trim() || undefined,

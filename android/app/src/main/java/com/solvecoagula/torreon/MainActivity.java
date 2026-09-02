@@ -22,6 +22,9 @@ public class MainActivity extends BridgeActivity {
   }
 
   private void enterGameMode() {
+    // Torreon es un frente idle/realtime: mientras la Activity esté visible,
+    // Android no debe apagar la pantalla y ocultar los eventos de batalla.
+    getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

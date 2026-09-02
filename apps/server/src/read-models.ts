@@ -38,7 +38,7 @@ export function progressFor(quest: Quest | null): QuestProgress | null {
  */
 export function currentStepFor(quest: Quest | null): CurrentStepSummary | null {
   if (!quest || !["accepted", "active"].includes(quest.status)) return null;
-  const index = quest.steps.findIndex((step) => step.impactAwarded < step.weight);
+  const index = quest.steps.findIndex((step) => ["pending", "in_progress"].includes(step.status) && step.impactAwarded < step.weight);
   if (index === -1) return null;
   const step = quest.steps[index];
   return {
@@ -89,7 +89,7 @@ export function consistencyFor(state: RealmState, instance: string, currentQuest
     });
   }
 
-  const orphanArtifacts = state.artifacts.filter((artifact: EvidenceArtifact) => !stepIds.has(artifact.stepId));
+  const orphanArtifacts = state.artifacts.filter((artifact: EvidenceArtifact) => !artifact.stepIds.some((stepId) => stepIds.has(stepId)));
   if (orphanArtifacts.length > 0) {
     issues.push({
       code: "ORPHAN_ARTIFACT",
@@ -143,6 +143,8 @@ export function questDetailFor(state: RealmState, questId: string): QuestDetail 
     startedAt: quest.startedAt,
     completedAt: quest.completedAt,
     abandonedAt: quest.abandonedAt,
+    version: quest.version,
+    amendments: quest.amendments,
     progress: progressFor(quest)!,
     currentStep: currentStepFor(quest),
     steps: quest.steps.map((step, index) => ({
@@ -158,7 +160,13 @@ export function questDetailFor(state: RealmState, questId: string): QuestDetail 
       impactAwarded: step.impactAwarded,
       remainingImpact: step.weight - step.impactAwarded,
       status: step.status,
-      artifacts: state.artifacts.filter((artifact) => artifact.stepId === step.id),
+      blockedBy: step.blockedBy,
+      blockedReason: step.blockedReason,
+      blockedSince: step.blockedSince,
+      playerActionAvailable: step.playerActionAvailable,
+      followUpAfter: step.followUpAfter,
+      supersededReason: step.supersededReason,
+      artifacts: state.artifacts.filter((artifact) => artifact.stepIds.includes(step.id)),
       verdicts: state.evidence.filter((record) => record.stepId === step.id),
     })),
   };

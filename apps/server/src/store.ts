@@ -54,11 +54,16 @@ export class JsonRealmStore {
     state.lifeEvents ??= [];
     state.gameEvents ??= [];
     for (const quest of state.quests) {
+      quest.version ??= 1;
+      quest.amendments ??= [];
       for (const step of quest.steps) {
         step.impactAwarded ??= step.status === "completed" ? step.weight : 0;
         step.evidenceIds ??= [];
         step.artifactIds ??= [];
       }
+    }
+    for (const artifact of state.artifacts) {
+      artifact.stepIds ??= [artifact.stepId];
     }
     return state;
   }
