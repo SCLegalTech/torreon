@@ -1,4 +1,6 @@
 import type {
+  BattleState,
+  CharacterStats,
   CurrentStepSummary,
   EvidenceArtifact,
   EvidenceRecord,
@@ -53,6 +55,29 @@ export function currentStepFor(quest: Quest | null): CurrentStepSummary | null {
     impactAwarded: step.impactAwarded,
     remainingImpact: step.weight - step.impactAwarded,
     status: step.status,
+  };
+}
+
+/**
+ * Hoja de personaje.
+ *
+ * HP es estado de combate del frente abierto, no salud médica: sin batalla el
+ * Marqués está entero. XP y Aura son progresión concedida por resultados
+ * validados. El Tesoro es el dinero real del reino y no lo mueve ninguna quest
+ * por sí sola: completar una misión nunca fabrica monedas.
+ */
+export function statsFor(state: RealmState, battle: BattleState | null): CharacterStats {
+  return {
+    displayName: state.player.displayName,
+    title: state.player.title,
+    hp: battle?.playerHealth ?? 100,
+    maxHp: battle?.playerMaxHealth ?? 100,
+    xp: state.character.xp,
+    aura: state.character.aura,
+    mastery: Object.entries(state.character.mastery)
+      .map(([domain, points]) => ({ domain, points }))
+      .sort((a, b) => b.points - a.points),
+    treasure: { currency: state.financial.currency, amount: state.financial.availableBalance },
   };
 }
 

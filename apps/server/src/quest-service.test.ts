@@ -83,6 +83,34 @@ describe("QuestService", () => {
     expect(snapshot.realm.lifeEvents.some((event) => event.id === gameEvent.sourceLifeEventId)).toBe(true);
   });
 
+  it("concede XP y Aura una sola vez, y nunca inventa Tesoro", async () => {
+    const draft = await service.createDraft(demoQuest);
+    await service.accept(draft.id, true);
+    const active = await service.start(draft.id);
+
+    const before = await service.snapshot();
+    expect(before.stats.xp).toBe(0);
+    expect(before.stats.aura).toBe(0);
+
+    for (const step of active.steps) {
+      await service.completeStep(active.id, step.id, `Evidencia de ${step.title}`);
+    }
+
+    const won = await service.snapshot();
+    expect(won.currentQuest?.status).toBe("completed");
+    // 60 minutos pactados y dos cuidados declarados en el contrato.
+    expect(won.stats.xp).toBe(30);
+    expect(won.stats.aura).toBe(3);
+    expect(won.stats.treasure.amount).toBe(before.stats.treasure.amount);
+    expect(won.realm.events.filter((event) => event.type === "reward_granted")).toHaveLength(1);
+
+    // Recargar el reino no puede volver a pagar la misma victoria.
+    const reloaded = await service.snapshot();
+    expect(reloaded.stats.xp).toBe(30);
+    expect(reloaded.stats.aura).toBe(3);
+    expect(reloaded.realm.character.rewardedQuestIds).toEqual([active.id]);
+  });
+
   it("acepta quests de dominios no financieros con el mismo contrato", async () => {
     const householdQuest = {
       campaignTitle: "Hogar en orden",

@@ -24,6 +24,18 @@ function freshSnapshot(): RealmSnapshot {
       gameEvents: [],
     },
     currentQuest: null,
+    // Sin servidor no hay veredicto comprobado, así que tampoco hay XP ni Aura:
+    // el teléfono muestra la hoja de personaje, no la concede.
+    stats: {
+      displayName: "Marqués Phi",
+      title: "Guardián de la Marca",
+      hp: 100,
+      maxHp: 100,
+      xp: 0,
+      aura: 0,
+      mastery: [],
+      treasure: { currency: "COP", amount: 400000 },
+    },
     battle: null,
     consistency: { status: "warning", instance: "torreon-offline", realmId, currentQuestId: null },
     projectedMargin: 200000,
@@ -74,11 +86,13 @@ function demoQuest(): Quest {
 
 function withBattle(snapshot: RealmSnapshot): RealmSnapshot {
   const quest = snapshot.currentQuest;
-  if (!quest) return { ...snapshot, battle: null };
+  const stats = { ...snapshot.stats, treasure: { ...snapshot.stats.treasure, amount: snapshot.realm.financial.availableBalance } };
+  if (!quest) return { ...snapshot, stats: { ...stats, hp: stats.maxHp }, battle: null };
   const completed = quest.steps.filter((step) => step.status === "completed");
   const progress = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
   return {
     ...snapshot,
+    stats,
     battle: {
       questId: quest.id,
       player: { id: "marques-phi", health: 100, maxHealth: 100 },

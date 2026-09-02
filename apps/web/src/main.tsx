@@ -5,7 +5,7 @@ import { Sprite } from "./Sprite";
 import type { Quest, RealmSnapshot } from "./types";
 import "./styles.css";
 
-type Screen = "loading" | "realm" | "thinking" | "battle";
+type Screen = "loading" | "realm" | "thinking" | "battle" | "stats";
 
 const API_BASE = Capacitor.isNativePlatform() ? "https://torreon.fly.dev" : "";
 
@@ -78,17 +78,24 @@ function RealmMenu({
   snapshot,
   onCampaign,
   onBattle,
+  onStats,
   onReset,
 }: {
   snapshot: RealmSnapshot;
   onCampaign: () => void;
   onBattle: () => void;
+  onStats: () => void;
   onReset: () => void;
 }) {
   const quest = snapshot.currentQuest;
+  const [confirmingReset, setConfirmingReset] = useState(false);
   return (
     <main className="scene realm-scene">
       <img className="realm-mockup" src="/assets/art/realm-menu-mockup.png" alt="" aria-hidden="true" />
+      <button className="realm-hotspot character-hotspot" onClick={onStats}>
+        <strong>{snapshot.stats.displayName.toUpperCase()}</strong>
+        <span>{snapshot.stats.hp} HP · {snapshot.stats.xp} XP · {snapshot.stats.aura} Aura</span>
+      </button>
       <button className="realm-hotspot campaign-hotspot" onClick={onCampaign}>
         <strong>{quest ? "CAMPAÑA ACTIVA" : "CAMPAÑAS"}</strong>
         <span>{quest ? quest.title : "Crear quest"}</span>
@@ -103,7 +110,29 @@ function RealmMenu({
           <span>{snapshot.battle?.progress ?? 0}% avance</span>
         </button>
       ) : null}
-      <button className="realm-icon-button settings-hotspot" onClick={onReset} aria-label="Reiniciar">↻</button>
+      <button className="realm-icon-button settings-hotspot" onClick={() => setConfirmingReset(true)} aria-label="Reiniciar reino">↻</button>
+      {/* Reiniciar borra gameplay real: nunca puede dispararse de un solo toque. */}
+      {confirmingReset ? (
+        <div className="reset-confirm" role="dialog" aria-modal="true" aria-label="Confirmar reinicio del reino">
+          <article>
+            <strong>¿Reiniciar el reino?</strong>
+            <p>Esto eliminará las quests activas y el progreso actual. Esta acción no se puede deshacer.</p>
+            <div className="reset-actions">
+              <button className="back-button" type="button" onClick={() => setConfirmingReset(false)}>CANCELAR</button>
+              <button
+                className="destructive-button"
+                type="button"
+                onClick={() => {
+                  setConfirmingReset(false);
+                  onReset();
+                }}
+              >
+                REINICIAR REINO
+              </button>
+            </div>
+          </article>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -182,15 +211,18 @@ function Bastion({
 
 function QuestComposer({
   busy,
+  onClose,
   onSubmit,
 }: {
   busy: boolean;
+  onClose: () => void;
   onSubmit: (intent: string) => void;
 }) {
   const [intent, setIntent] = useState("");
   return (
     <main className="scene codex-scene" role="dialog" aria-modal="true" aria-label="Declarar quest">
       <img className="codex-book-bg" src="/assets/art/codex-book-mockup.png" alt="" aria-hidden="true" />
+      <button className="back-button composer-back" type="button" onClick={onClose}>← VOLVER</button>
       <form
         className="quest-composer"
         onSubmit={(event) => {
@@ -276,114 +308,75 @@ function formatBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/**
- * PREPARAR EXPEDICIÓN — trazada sobre el mockup de Diego.
- *
- * De la calca solo se implementa lo que tiene contraparte real en el dominio
- * de hoy: quest seleccionada, victoria, duración pactada, ataque total,
- * recomendación de Códice y consejo de bienestar.
- *
- * Queda como referencia, sin construir (no hay dato real detrás todavía):
- *   - nivel, EXP, oro, gemas y energía del jugador  -> progresión, tajada futura
- *   - modo enfoque y comportamiento del reino       -> fuera del Slice 1
- *   - notificaciones                                -> fuera del Slice 1
- *   - estimado de recursos y aura                   -> Slices 2 y 4
- */
-function Expedition({
-  snapshot,
-  busy,
-  onBack,
-  onStart,
-}: {
-  snapshot: RealmSnapshot;
-  busy: boolean;
-  onBack: () => void;
-  onStart: () => void;
-}) {
-  const quest = snapshot.currentQuest;
-  if (!quest) return null;
-  const totalAttack = quest.steps.reduce((sum, step) => sum + step.weight, 0);
+function formatTreasure(amount: number, currency: string): string {
+  return `${new Intl.NumberFormat("es-CO").format(amount)} ${currency}`;
+}
 
+/**
+ * HOJA DE PERSONAJE.
+ *
+ * Cuatro cifras que el reino ya sabe defender:
+ *   HP      — estado del frente abierto, no salud médica.
+ *   Aura    — calidad de vida ganada por resultados, no por actividad.
+ *   XP      — progresión concedida solo por evidencia validada.
+ *   Tesoro  — dinero real del reino; ninguna quest fabrica monedas.
+ *
+ * Queda como referencia, sin construir: nivel, gemas, energía y equipo.
+ */
+function CharacterSheet({ snapshot, onBack }: { snapshot: RealmSnapshot; onBack: () => void }) {
+  const stats = snapshot.stats;
   return (
-    <main className="scene expedition-scene">
-      <header className="expedition-top">
+    <main className="scene stats-scene">
+      <header className="stats-top">
+        <button className="back-button" type="button" onClick={onBack}>← VOLVER</button>
         <div className="player-card">
           <span className="player-crest">Φ</span>
           <div>
-            <strong>{snapshot.realm.player.displayName}</strong>
-            <small>{snapshot.realm.player.title}</small>
+            <strong>{stats.displayName}</strong>
+            <small>{stats.title}</small>
           </div>
-        </div>
-        <div className="campaign-banner">
-          <p className="eyebrow">CAMPAÑA ACTIVA</p>
-          <h2>{quest.campaignTitle}</h2>
-          <small>Quest: {quest.title}</small>
         </div>
       </header>
 
-      <section className="expedition-hero">
-        <h1>PREPARAR EXPEDICIÓN</h1>
-        <p>Sal del castillo. Tu reino luchará mientras trabajas en el mundo real.</p>
+      <section className="stats-portrait" aria-label="El Marqués">
+        <Sprite actor="marquis" motion="idle" label="MARQUÉS" />
       </section>
 
-      <section className="expedition-field" aria-label="El reino antes de la expedición">
-        <div className="field-line" />
-        <div className="field-marquis"><Sprite actor="marquis" motion="idle" label="MARQUÉS" /></div>
-        <div className="field-wolf"><Sprite actor="wolf" motion="idle" label="LOBO" /></div>
-        <div className="field-codex"><Sprite actor="codex" motion="idle" label="CÓDICE" /></div>
-        <div className="field-horde"><Sprite actor="horde" motion="idle" label="HORDA" /></div>
+      <section className="stats-grid" aria-label="Estadísticas del personaje">
+        <article className="config-card">
+          <p className="eyebrow">HP</p>
+          <strong>{stats.hp} / {stats.maxHp}</strong>
+          <small>Estado de combate del frente abierto</small>
+        </article>
+        <article className="config-card">
+          <p className="eyebrow">AURA</p>
+          <strong>{stats.aura}</strong>
+          <small>Calidad de vida ganada en el mundo real</small>
+        </article>
+        <article className="config-card">
+          <p className="eyebrow">XP</p>
+          <strong>{stats.xp}</strong>
+          <small>Solo la evidencia validada la concede</small>
+        </article>
+        <article className="config-card">
+          <p className="eyebrow">TESORO</p>
+          <strong>{formatTreasure(stats.treasure.amount, stats.treasure.currency)}</strong>
+          <small>Dinero real del reino, no moneda de juego</small>
+        </article>
       </section>
 
-      <section className="expedition-config">
-        <p className="eyebrow">CONFIGURACIÓN DE EXPEDICIÓN</p>
-        <div className="config-cards">
-          <article className="config-card">
-            <p className="eyebrow">DURACIÓN PACTADA</p>
-            <strong>{quest.durationMinutes} min</strong>
-            <small>Acordada en el contrato</small>
-          </article>
-          <article className="config-card">
-            <p className="eyebrow">OBJETIVO</p>
-            <strong>{quest.steps.length} pasos</strong>
-            <small>{quest.intent}</small>
-          </article>
-          <article className="config-card">
-            <p className="eyebrow">ATAQUE TOTAL</p>
-            <strong>{totalAttack}</strong>
-            <small>Solo la evidencia validada lo cobra</small>
-          </article>
-        </div>
+      <section className="stats-mastery">
+        <p className="eyebrow">MAESTRÍA</p>
+        {stats.mastery.length > 0 ? (
+          <ul>
+            {stats.mastery.map((entry) => (
+              <li key={entry.domain}><span>{entry.domain}</span><b>{entry.points}</b></li>
+            ))}
+          </ul>
+        ) : (
+          <p className="stats-empty">Todavía no hay dominio entrenado: la maestría llega con quests completadas.</p>
+        )}
       </section>
-
-      <aside className="expedition-brief parchment">
-        <p className="eyebrow">QUEST SELECCIONADA</p>
-        <h2>{quest.title}</h2>
-
-        <p className="eyebrow">VICTORIA</p>
-        <p className="brief-text">{quest.outcome}</p>
-
-        <p className="eyebrow">RECOMENDACIÓN DE CÓDICE</p>
-        <p className="brief-text">{quest.rationale}</p>
-
-        {quest.wellbeingConstraints.length > 0 ? (
-          <>
-            <p className="eyebrow">CONSEJO</p>
-            <ul className="brief-advice">
-              {quest.wellbeingConstraints.map((advice) => (
-                <li key={advice}>{advice}</li>
-              ))}
-            </ul>
-          </>
-        ) : null}
-      </aside>
-
-      <nav className="expedition-actions">
-        <button className="back-button" type="button" onClick={onBack}>← ATRÁS</button>
-        <button className="gold-button start-expedition" type="button" disabled={busy} onClick={onStart}>
-          <strong>INICIAR EXPEDICIÓN</strong>
-          <small>El reino entrará en batalla mientras trabajas.</small>
-        </button>
-      </nav>
     </main>
   );
 }
@@ -394,6 +387,7 @@ function Battle({
   impact,
   incomingDamage,
   onBack,
+  onOpenStats,
   onAccept,
   onAcceptAmendment,
   onStart,
@@ -404,6 +398,7 @@ function Battle({
   impact: number | null;
   incomingDamage: number | null;
   onBack: () => void;
+  onOpenStats: () => void;
   onAccept: () => void;
   onAcceptAmendment: (amendmentId: string) => void;
   onStart: () => void;
@@ -419,11 +414,41 @@ function Battle({
   useEffect(() => {
     if (proposedAmendmentId) setOrdersOpen(true);
   }, [proposedAmendmentId]);
-  if (!quest) return null;
+  // La pantalla no se desmonta al aceptar: al entrar en batalla, las órdenes se
+  // repliegan solas para devolver el campo al jugador.
+  const questStatus = quest?.status;
+  useEffect(() => {
+    if (questStatus === "active") setOrdersOpen(false);
+  }, [questStatus]);
+  // Ninguna vista sin salida: sin frente abierto la batalla explica y devuelve.
+  if (!quest) {
+    return (
+      <main className="scene battle-scene">
+        <img className="battle-art" src="/assets/art/battle-realm.png" alt="El reino sin frente abierto" />
+        <aside className="quest-contract parchment draft">
+          <p className="eyebrow">SIN FRENTE ABIERTO</p>
+          <h2>No hay ninguna quest en el reino</h2>
+          <p>Háblale a Códice para pactar un contrato antes de entrar en batalla.</p>
+          <div className="contract-actions">
+            <button className="gold-button" type="button" onClick={onBack}>VOLVER AL REINO</button>
+          </div>
+        </aside>
+      </main>
+    );
+  }
   const battle = snapshot.battle;
   const health = battle?.enemyHealth ?? 100;
   const playerHealth = battle?.playerHealth ?? 100;
   const pendingAmendment = quest.amendments?.find((amendment) => amendment.status === "proposed");
+  const totalAttack = quest.steps.reduce((sum, step) => sum + step.weight, 0);
+  // El paso accionable se deriva igual que en el Core: el primero que aún no cobró.
+  const currentStep = quest.steps.find((step) => ["pending", "in_progress"].includes(step.status) && step.impactAwarded < step.weight);
+  const rewardMessage = snapshot.realm.events.find((event) => event.type === "reward_granted" && event.questId === quest.id)?.message;
+  const focusCurrentStep = () => {
+    if (!currentStep) return;
+    setOpenStepId(currentStep.id);
+    setOrdersOpen(true);
+  };
   return (
     <main className={`scene battle-scene ${impact ? "impact" : ""} ${incomingDamage ? "player-hit" : ""}`}>
       <img className="battle-art" src="/assets/art/battle-realm.png" alt="El ejército de la Marca combate a la Horda" />
@@ -438,10 +463,11 @@ function Battle({
         <div className="health-track"><span style={{ width: `${health}%` }} /></div>
       </section>
 
-      <section className="player-health glass-panel">
+      <button className="player-health glass-panel" type="button" onClick={onOpenStats} aria-label="Abrir hoja de personaje">
         <div><span>MARQUÉS</span><strong>{playerHealth} / 100 HP</strong></div>
         <div className="player-health-track"><span style={{ width: `${playerHealth}%` }} /></div>
-      </section>
+        <small className="stats-hint">VER PERSONAJE ›</small>
+      </button>
 
       <section className="battlefield" aria-label="Campo de batalla">
         <span className="battle-pulse ally" aria-hidden="true" />
@@ -453,20 +479,47 @@ function Battle({
         {battle?.isKo ? <div className="ko">KO</div> : null}
       </section>
 
+      {/*
+        LA BATALLA ES LA QUEST: aceptar, iniciar, entregar evidencia y ver la
+        victoria ocurren en este mismo panel. Aceptar un contrato transforma la
+        pantalla; nunca saca al jugador del campo para configurarlo aparte.
+      */}
       <aside className={`quest-contract parchment ${quest.status}`}>
-        <p className="eyebrow">CONTRATO DE MISIÓN · {quest.durationMinutes} MIN</p>
+        <p className="eyebrow">
+          {quest.status === "completed" ? "🏆 VICTORIA" : quest.status === "draft" ? "CONTRATO PROPUESTO" : `CONTRATO DE MISIÓN · ${quest.durationMinutes} MIN`}
+        </p>
         <h2>{quest.outcome}</h2>
         <p>{quest.rationale}</p>
+
+        {["draft", "accepted"].includes(quest.status) ? (
+          <div className="contract-stats">
+            <span><b>{quest.durationMinutes} min</b><small>DURACIÓN PACTADA</small></span>
+            <span><b>{quest.steps.length} pasos</b><small>OBJETIVO</small></span>
+            <span><b>{totalAttack}</b><small>ATAQUE TOTAL</small></span>
+          </div>
+        ) : null}
+
+        {quest.status === "completed" && rewardMessage ? <p className="contract-reward">{rewardMessage}</p> : null}
+
         {quest.status === "active" ? (
           <button className="orders-button" type="button" onClick={() => setOrdersOpen((open) => !open)}>
             {ordersOpen ? "CERRAR ÓRDENES" : `ABRIR ÓRDENES · ${battle?.completedSteps ?? 0}/${quest.steps.length}`}
           </button>
         ) : null}
+
+        {/* Un solo CTA principal, y dice exactamente qué toca ahora. */}
         <div className="contract-actions">
           {quest.status === "draft" ? <button className="gold-button" disabled={busy} onClick={onAccept}>ACEPTAR CONTRATO</button> : null}
           {quest.status === "accepted" ? <button className="gold-button" disabled={busy} onClick={onStart}>INICIAR BATALLA</button> : null}
-          {quest.status === "completed" ? <button className="gold-button" onClick={onBack}>VOLVER AL BASTIÓN</button> : null}
+          {quest.status === "active" && currentStep ? (
+            <button className="gold-button" type="button" onClick={focusCurrentStep}>
+              {currentStep.evidenceKind === "photo" ? "📷 TOMAR EVIDENCIA" : "⚔️ ENTREGAR EVIDENCIA"}
+            </button>
+          ) : null}
+          {quest.status === "waiting_external" ? <button className="gold-button" type="button" disabled>SIN ACCIÓN REQUERIDA</button> : null}
+          {quest.status === "completed" ? <button className="gold-button" onClick={onBack}>VOLVER AL REINO</button> : null}
         </div>
+        {quest.status === "active" && currentStep ? <small className="contract-step">PASO ACTUAL · {currentStep.title}</small> : null}
       </aside>
 
       <section className={`steps-panel glass-panel ${ordersOpen ? "open" : "closed"}`}>
@@ -719,11 +772,13 @@ function App() {
           snapshot={snapshot}
           onCampaign={() => setComposerOpen(true)}
           onBattle={() => setScreen("battle")}
+          onStats={() => setScreen("stats")}
           onReset={() => void act(() => api("/api/reset", { method: "POST" }))}
         />
         {composerOpen ? (
           <QuestComposer
             busy={busy}
+            onClose={() => setComposerOpen(false)}
             onSubmit={(intent) => {
               setPendingIntent(intent);
               setScreen("thinking");
@@ -736,20 +791,18 @@ function App() {
           />
         ) : null}
         </>
-      ) : quest && quest.status === "accepted" ? (
-        <Expedition
-          snapshot={snapshot}
-          busy={busy}
-          onBack={() => setScreen("realm")}
-          onStart={() => void act(() => api(`/api/quests/${quest.id}/start`, { method: "POST" })).then(() => setNotice(null))}
-        />
+      ) : screen === "stats" ? (
+        <CharacterSheet snapshot={snapshot} onBack={() => setScreen(quest ? "battle" : "realm")} />
       ) : (
+        // Aceptar el contrato NO cambia de pantalla: la batalla es el centro
+        // operativo de la quest y cambia de estado sin mover al jugador.
         <Battle
           snapshot={snapshot}
           busy={busy}
           impact={impact}
           incomingDamage={incomingDamage}
           onBack={() => setScreen("realm")}
+          onOpenStats={() => setScreen("stats")}
           onAccept={() => quest && void act(() => api(`/api/quests/${quest.id}/accept`, { method: "POST", body: JSON.stringify({ userAccepted: true }) }))}
           onAcceptAmendment={(amendmentId) => quest && void act(() => api(`/api/quests/${quest.id}/amendments/${amendmentId}/accept`, { method: "POST", body: JSON.stringify({ userAccepted: true }) }))}
           onStart={() => quest && void act(() => api(`/api/quests/${quest.id}/start`, { method: "POST" })).then(() => setNotice(null))}

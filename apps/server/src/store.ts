@@ -13,6 +13,12 @@ export function createInitialState(): RealmState {
       displayName: "Marqués Phi",
       title: "Guardián de la Marca",
     },
+    character: {
+      xp: 0,
+      aura: 0,
+      mastery: {},
+      rewardedQuestIds: [],
+    },
     financial: {
       currency: "COP",
       availableBalance: 400_000,
@@ -53,6 +59,10 @@ export class JsonRealmStore {
     state.artifacts ??= [];
     state.lifeEvents ??= [];
     state.gameEvents ??= [];
+    // Reinos anteriores a la hoja de personaje empiezan en cero, no en inventado.
+    state.character ??= { xp: 0, aura: 0, mastery: {}, rewardedQuestIds: [] };
+    state.character.mastery ??= {};
+    state.character.rewardedQuestIds ??= [];
     for (const quest of state.quests) {
       quest.version ??= 1;
       quest.amendments ??= [];

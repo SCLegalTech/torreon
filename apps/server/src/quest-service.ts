@@ -16,8 +16,9 @@ import type {
   RealmEvent,
   RealmSnapshot,
   RealmState,
+  RewardProfile,
 } from "./domain.js";
-import { consistencyFor, currentStepFor, progressFor, questDetailFor } from "./read-models.js";
+import { consistencyFor, currentStepFor, progressFor, questDetailFor, statsFor } from "./read-models.js";
 import { JsonRealmStore } from "./store.js";
 
 export { questFromIntent } from "./codice.js";
@@ -58,6 +59,52 @@ export function battleFor(quest: Quest | null, gameEvents: GameEvent[] = []): Ba
     isKo: damage === 100,
     isPlayerKo: playerHealth === 0,
   };
+}
+
+/**
+ * Recompensa por defecto de un contrato que no declaró la suya.
+ *
+ * XP mide la gesta pactada —la mitad de los minutos acordados—, no el tiempo
+ * que el jugador pasó en la app. Aura crece con los cuidados que el contrato se
+ * comprometió a respetar, porque Aura es calidad de vida y no productividad.
+ * Sin dominio declarado no hay maestría: no se inventa una especialidad.
+ */
+export function defaultRewardProfile(quest: Quest): RewardProfile {
+  if (quest.rewardProfile) return quest.rewardProfile;
+  return {
+    xpMax: Math.min(60, Math.max(5, Math.round(quest.durationMinutes / 2))),
+    auraMax: Math.min(5, 1 + quest.wellbeingConstraints.length),
+  };
+}
+
+export interface RewardGrant {
+  xp: number;
+  aura: number;
+  masteryDomain?: string;
+  masteryPoints: number;
+}
+
+/**
+ * Concede la recompensa de una quest completada UNA sola vez.
+ *
+ * Recargar, reabrir o volver a leer el reino no puede sumar XP ni Aura otra
+ * vez: la lista de quests ya recompensadas vive en el estado, no en la sesión.
+ */
+export function grantQuestRewards(state: RealmState, quest: Quest): RewardGrant | null {
+  if (quest.status !== "completed") return null;
+  if (state.character.rewardedQuestIds.includes(quest.id)) return null;
+
+  const profile = defaultRewardProfile(quest);
+  const xp = Math.max(0, Math.round(profile.xpMax));
+  const aura = Math.max(0, Math.round(profile.auraMax));
+  const domain = profile.masteryDomain?.trim();
+
+  state.character.xp += xp;
+  state.character.aura += aura;
+  if (domain) state.character.mastery[domain] = (state.character.mastery[domain] ?? 0) + 1;
+  state.character.rewardedQuestIds.push(quest.id);
+
+  return { xp, aura, masteryDomain: domain, masteryPoints: domain ? 1 : 0 };
 }
 
 /** Pasos cuya condición pactada exige una prueba, no un relato. */
@@ -191,12 +238,14 @@ export class QuestService {
     const realm = await this.store.read();
     const quest = currentQuest(realm);
     const { availableBalance, expectedIncome, committedExpenses, reserveTarget } = realm.financial;
+    const battle = battleFor(quest, realm.gameEvents);
     return {
       realm,
       currentQuest: quest,
       progress: progressFor(quest),
       currentStep: currentStepFor(quest),
-      battle: battleFor(quest, realm.gameEvents),
+      battle,
+      stats: statsFor(realm, battle),
       consistency: consistencyFor(realm, this.instance, quest),
       projectedMargin: availableBalance + expectedIncome - committedExpenses - reserveTarget,
     };
@@ -370,6 +419,15 @@ export class QuestService {
         quest.completedAt = now();
         quest.updatedAt = quest.completedAt;
         addEvent(state, { type: "quest_completed", questId, message: `KO: «${quest.title}» fue completada.` });
+        const reward = grantQuestRewards(state, quest);
+        if (reward) {
+          const mastery = reward.masteryDomain ? ` +${reward.masteryPoints} ${reward.masteryDomain}` : "";
+          addEvent(state, {
+            type: "reward_granted",
+            questId,
+            message: `El resultado validado concede +${reward.xp} XP +${reward.aura} Aura${mastery}.`,
+          });
+        }
       }
       return { quest, battle, evidenceId, lifeEventId, gameEventId };
     });

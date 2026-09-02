@@ -34,6 +34,23 @@ export interface QuestAmendment {
   acceptedAt?: string;
 }
 
+export interface RewardProfile {
+  xpMax: number;
+  auraMax: number;
+  masteryDomain?: string;
+}
+
+export interface CharacterStats {
+  displayName: string;
+  title: string;
+  hp: number;
+  maxHp: number;
+  xp: number;
+  aura: number;
+  mastery: Array<{ domain: string; points: number }>;
+  treasure: { currency: "COP"; amount: number };
+}
+
 export interface Quest {
   id: string;
   campaignTitle: string;
@@ -48,6 +65,7 @@ export interface Quest {
   steps: QuestStep[];
   version: number;
   amendments: QuestAmendment[];
+  rewardProfile?: RewardProfile;
 }
 
 export interface RealmSnapshot {
@@ -63,7 +81,7 @@ export interface RealmSnapshot {
     };
     events: Array<{
       id: string;
-      type: "quest_created" | "quest_revised" | "quest_accepted" | "quest_started" | "quest_amendment_proposed" | "quest_amended" | "quest_waiting_external" | "quest_unblocked" | "horde_attack" | "evidence_attached" | "step_completed" | "quest_completed" | "quest_abandoned";
+      type: "quest_created" | "quest_revised" | "quest_accepted" | "quest_started" | "quest_amendment_proposed" | "quest_amended" | "quest_waiting_external" | "quest_unblocked" | "horde_attack" | "evidence_attached" | "step_completed" | "quest_completed" | "reward_granted" | "quest_abandoned";
       questId: string;
       message: string;
       createdAt: string;
@@ -81,6 +99,7 @@ export interface RealmSnapshot {
     gameEvents: Array<{ id: string; type: "quest_attack" | "horde_attack"; questId: string; sourceLifeEventId: string; damage: number; message: string; reason?: string; createdAt: string }>;
   };
   currentQuest: Quest | null;
+  stats: CharacterStats;
   battle: null | {
     questId: string;
     player: { id: "marques-phi"; health: number; maxHealth: 100 };

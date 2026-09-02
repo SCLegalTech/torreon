@@ -36,9 +36,13 @@ try {
   await page.getByRole("button", { name: "ACEPTAR CONTRATO" }).waitFor({ timeout: 90_000 });
   await shot("04-quest-draft.png");
 
+  // Aceptar el contrato transforma la batalla; no abre otra pantalla.
   await page.getByRole("button", { name: "ACEPTAR CONTRATO" }).click();
-  await page.getByRole("button", { name: "INICIAR EXPEDICIÓN" }).waitFor();
-  await page.getByRole("button", { name: "INICIAR EXPEDICIÓN" }).click();
+  await page.getByRole("button", { name: "INICIAR BATALLA" }).waitFor();
+  await page.getByText("ACEPTADA", { exact: true }).waitFor();
+  await shot("04b-contract-accepted.png");
+
+  await page.getByRole("button", { name: "INICIAR BATALLA" }).click();
   await page.getByText("EN BATALLA").waitFor();
   await shot("05-battle-active.png");
 
@@ -72,6 +76,12 @@ try {
   await page.getByText("VICTORIA", { exact: true }).waitFor();
   await page.waitForTimeout(900);
   await shot("06-victory-ko.png");
+
+  // La hoja de personaje se abre desde el retrato, sin salir del flujo.
+  await page.getByRole("button", { name: "Abrir hoja de personaje" }).click();
+  await page.getByText("MAESTRÍA", { exact: true }).waitFor();
+  await shot("06b-character-stats.png");
+  await page.getByRole("button", { name: "← VOLVER" }).click();
 
   // E2E foreground: otra superficie cambia el mismo Realm y la app abierta
   // reacciona por eventId, sin refresh manual.

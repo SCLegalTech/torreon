@@ -55,6 +55,42 @@ export interface QuestAmendment {
   rejectedAt?: string;
 }
 
+/**
+ * Lo que el personaje se lleva de una quest cumplida.
+ *
+ * Aquí no hay moneda ficticia: el Tesoro sólo cambia cuando cambia el dinero
+ * real del reino. XP y Aura sí son progresión del personaje, y se conceden por
+ * resultado validado, nunca por tiempo ni por clics.
+ */
+export interface RewardProfile {
+  xpMax: number;
+  auraMax: number;
+  /** Dominio de maestría que esta quest entrena. Sin dominio no hay maestría. */
+  masteryDomain?: string;
+}
+
+export interface CharacterState {
+  xp: number;
+  /** Calidad de vida, identidad y bienestar: no es puntuación de actividad. */
+  aura: number;
+  mastery: Record<string, number>;
+  /** Quests cuya recompensa ya se concedió. Hace la recompensa idempotente. */
+  rewardedQuestIds: string[];
+}
+
+/** Vista de personaje lista para cualquier renderer (React hoy, Unity después). */
+export interface CharacterStats {
+  displayName: string;
+  title: string;
+  hp: number;
+  maxHp: number;
+  xp: number;
+  aura: number;
+  mastery: Array<{ domain: string; points: number }>;
+  /** Dinero real del reino. Nunca se inventa por completar quests. */
+  treasure: { currency: "COP"; amount: number };
+}
+
 export interface QuestPlanInput {
   campaignTitle: string;
   title: string;
@@ -64,6 +100,7 @@ export interface QuestPlanInput {
   durationMinutes: number;
   wellbeingConstraints: string[];
   allowedApps: string[];
+  rewardProfile?: RewardProfile;
   steps: QuestStepInput[];
 }
 
@@ -104,6 +141,7 @@ export interface RealmEvent {
     | "evidence_attached"
     | "step_completed"
     | "quest_completed"
+    | "reward_granted"
     | "quest_abandoned";
   questId: string;
   message: string;
@@ -186,6 +224,7 @@ export interface RealmState {
     displayName: string;
     title: string;
   };
+  character: CharacterState;
   financial: FinancialState;
   quests: Quest[];
   events: RealmEvent[];
@@ -293,6 +332,8 @@ export interface RealmSnapshot {
   /** Paso accionable derivado en la lectura; nunca un puntero guardado. */
   currentStep: CurrentStepSummary | null;
   battle: BattleState | null;
+  /** Hoja de personaje derivada: HP de combate, XP, Aura, maestría y Tesoro. */
+  stats: CharacterStats;
   consistency: RealmConsistency;
   projectedMargin: number;
 }
