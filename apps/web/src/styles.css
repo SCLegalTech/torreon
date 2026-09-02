@@ -962,8 +962,10 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
    ===================================================================== */
 .party-hud {
   position: absolute;
-  z-index: 6;
-  bottom: 15.5%;
+  z-index: 7;
+  /* Sobre la franja de botones pintados: el grupo real ocupa el sitio del HUD
+     decorativo, y así nunca queda debajo del contrato ni de las órdenes. */
+  bottom: 1.6%;
   left: 1%;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
