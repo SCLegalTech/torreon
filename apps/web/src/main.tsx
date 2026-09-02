@@ -2,7 +2,7 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 import { Sprite } from "./Sprite";
-import type { Quest, RealmSnapshot } from "./types";
+import type { CharacterStats, Quest, RealmSnapshot } from "./types";
 import "./styles.css";
 
 type Screen = "loading" | "realm" | "thinking" | "battle" | "stats";
@@ -88,13 +88,14 @@ function RealmMenu({
   onReset: () => void;
 }) {
   const quest = snapshot.currentQuest;
+  const stats = statsOf(snapshot);
   const [confirmingReset, setConfirmingReset] = useState(false);
   return (
     <main className="scene realm-scene">
       <img className="realm-mockup" src="/assets/art/realm-menu-mockup.png" alt="" aria-hidden="true" />
       <button className="realm-hotspot character-hotspot" onClick={onStats}>
-        <strong>{snapshot.stats.displayName.toUpperCase()}</strong>
-        <span>{snapshot.stats.hp} HP · {snapshot.stats.xp} XP · {snapshot.stats.aura} Aura</span>
+        <strong>{stats.displayName.toUpperCase()}</strong>
+        <span>{stats.hp} HP · {stats.xp} XP · {stats.aura} Aura</span>
       </button>
       <button className="realm-hotspot campaign-hotspot" onClick={onCampaign}>
         <strong>{quest ? "CAMPAÑA ACTIVA" : "CAMPAÑAS"}</strong>
@@ -313,6 +314,26 @@ function formatTreasure(amount: number, currency: string): string {
 }
 
 /**
+ * Una APK nueva puede hablar con un servidor viejo que todavía no envía la hoja
+ * de personaje. En ese caso se arma con lo que el reino sí sabe, para que el
+ * teléfono nunca se quede en blanco por un campo que falta.
+ */
+function statsOf(snapshot: RealmSnapshot): CharacterStats {
+  return (
+    snapshot.stats ?? {
+      displayName: snapshot.realm.player.displayName,
+      title: snapshot.realm.player.title,
+      hp: snapshot.battle?.playerHealth ?? 100,
+      maxHp: 100,
+      xp: 0,
+      aura: 0,
+      mastery: [],
+      treasure: { currency: snapshot.realm.financial.currency, amount: snapshot.realm.financial.availableBalance },
+    }
+  );
+}
+
+/**
  * HOJA DE PERSONAJE.
  *
  * Cuatro cifras que el reino ya sabe defender:
@@ -324,7 +345,7 @@ function formatTreasure(amount: number, currency: string): string {
  * Queda como referencia, sin construir: nivel, gemas, energía y equipo.
  */
 function CharacterSheet({ snapshot, onBack }: { snapshot: RealmSnapshot; onBack: () => void }) {
-  const stats = snapshot.stats;
+  const stats = statsOf(snapshot);
   return (
     <main className="scene stats-scene">
       <header className="stats-top">
