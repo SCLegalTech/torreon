@@ -1,14 +1,19 @@
 import type { PartyMemberId, PartyState } from "./domain.js";
+import { HERO_CLASS, HERO_DISPLAY_NAME } from "./progression.js";
 
 /**
- * ROKO PROTEGE. MARQUÉS ATACA. CORDERA SOSTIENE.
+ * ROKU PROTEGE. MARQUÉS ATACA. CORDERA SOSTIENE.
  *
  * El grupo se guarda en la Battle y sobrevive a los replanes: replanificar
  * repacta el tiempo, no borra las cicatrices.
+ *
+ * NOMBRE VISIBLE ≠ ID INTERNO. El personaje se llama Roku; su id sigue siendo
+ * `roko` porque lo referencian eventos ya persistidos. Nunca se rompe historia
+ * por renombrar una pantalla: el nombre se resuelve aquí, en la lectura.
  */
 
 export const PARTY_MAX_HEALTH = 100;
-/** Roko no es tanque puro: mitiga, no absorbe indefinidamente. */
+/** Roku no es tanque puro: mitiga, no absorbe indefinidamente. */
 export const ROKO_MAX_SHIELD = 20;
 /** Cada resultado validado devuelve algo de escudo y algo de vida. */
 export const SHIELD_PER_VALIDATED_IMPACT = 5;
@@ -17,9 +22,9 @@ export const HEAL_PER_VALIDATED_IMPACT = 5;
 export const PARTY_ORDER: PartyMemberId[] = ["roko", "marques", "cordera"];
 
 const PROFILE: Record<PartyMemberId, { name: string; role: string; maxShield?: number }> = {
-  roko: { name: "Roko", role: "Bruiser / Guardia", maxShield: ROKO_MAX_SHIELD },
-  marques: { name: "Marqués", role: "Arquero / DPS", maxShield: undefined },
-  cordera: { name: "Cordera", role: "Sanadora / Apoyo", maxShield: undefined },
+  roko: { name: HERO_DISPLAY_NAME.roko, role: HERO_CLASS.roko, maxShield: ROKO_MAX_SHIELD },
+  marques: { name: HERO_DISPLAY_NAME.marques, role: HERO_CLASS.marques, maxShield: undefined },
+  cordera: { name: HERO_DISPLAY_NAME.cordera, role: HERO_CLASS.cordera, maxShield: undefined },
 };
 
 export function freshParty(): PartyState {
@@ -85,4 +90,18 @@ export function refreshShield(party: PartyState, amount: number): number {
   const before = roko.shield;
   roko.shield = Math.min(roko.maxShield, roko.shield + amount);
   return roko.shield - before;
+}
+
+/**
+ * Refresca el nombre y el rol visibles de una formación ya guardada.
+ *
+ * Una Battle persistida antes de la corrección canónica lleva «Roko» dentro del
+ * registro. Esto NO reescribe historia: el id, el HP, el escudo y las cicatrices
+ * se conservan intactos; sólo el nombre que se muestra pasa a ser el correcto.
+ */
+export function refreshPartyDisplay(party: PartyState): void {
+  for (const id of PARTY_ORDER) {
+    party[id].name = PROFILE[id].name;
+    party[id].role = PROFILE[id].role;
+  }
 }

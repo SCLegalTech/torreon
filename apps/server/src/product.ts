@@ -59,6 +59,9 @@ export function freshUsage(nowMs = Date.now()): UsageCounters {
     codiceReasoningCalls: 0,
     visionValidations: 0,
     agentOrchestrations: 0,
+    companionExecutions: 0,
+    companionSuccessfulExecutions: 0,
+    companionValidatedAssists: 0,
   };
 }
 

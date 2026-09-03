@@ -425,6 +425,68 @@ export function createHttpApp(service: QuestService) {
   });
 
   // -------------------------------------------------------------------------
+  // BARRACAS Y MEMORIA DE BATALLA
+  //
+  // Sistemas del MUNDO. No cuelgan de Batallas Libres y no son inventario.
+  // -------------------------------------------------------------------------
+  app.get("/api/barracks", async (_req, res, next) => {
+    try {
+      res.json({ barracks: await service.barracks() });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Disponible no es desplegado: esto declara acceso, nunca participación.
+  app.post("/api/barracks/:heroId/availability", async (req, res, next) => {
+    try {
+      res.json({ barracks: await service.setHeroAvailability(req.params.heroId as never, req.body?.availability) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/battle-memory", async (_req, res, next) => {
+    try {
+      res.json({ memory: await service.battleMemory() });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Sugerencia de planificación. NUNCA repacta un contrato ya aceptado.
+  app.post("/api/battle-memory/hint", async (req, res, next) => {
+    try {
+      res.json({ hint: await service.planningHint(String(req.body?.intent ?? "")) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/quests/:questId/after-action", async (req, res, next) => {
+    try {
+      res.json({ report: await service.afterActionReport(req.params.questId) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Anular no es borrar: la auditoría conserva el hecho marcado como inválido.
+  app.post("/api/events/:eventId/invalidate", async (req, res, next) => {
+    try {
+      res.json(
+        await service.invalidateEvent({
+          eventId: req.params.eventId,
+          reason: String(req.body?.reason ?? ""),
+          invalidatedBy: req.body?.invalidatedBy ? String(req.body.invalidatedBy) : undefined,
+        }),
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // -------------------------------------------------------------------------
   // CENTRO DE NOTIFICACIONES. Push es entrega; el registro es la verdad.
   // -------------------------------------------------------------------------
   app.get("/api/notifications", async (req, res, next) => {

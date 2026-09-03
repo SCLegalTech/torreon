@@ -2,10 +2,10 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 import { Sprite } from "./Sprite";
-import type { ActView, AgentSlot, BattleClock, BattleStatus, CampaignView, CharacterStats, EnemyCombatant, EntityType, InventoryItemId, InventoryState, NotificationView, ObligationView, PartyMemberId, PartyState, Quest, QuestNode, RealmSnapshot, TreasuryView } from "./types";
+import type { ActView, AfterActionReport, AgentSlot, BarracksView, BattleClock, BattleStatus, CampaignView, CharacterStats, EnemyCombatant, EntityType, HeroProfileView, InventoryItemId, InventoryState, NotificationView, ObligationView, PartyMemberId, PartyState, Quest, QuestNode, RealmSnapshot, TreasuryView, WorldSystemView } from "./types";
 import "./styles.css";
 
-type Screen = "loading" | "realm" | "thinking" | "campaign" | "act" | "quest" | "battle" | "stats" | "notifications" | "treasury";
+type Screen = "loading" | "realm" | "thinking" | "campaign" | "act" | "quest" | "battle" | "stats" | "notifications" | "treasury" | "barracks";
 
 const API_BASE = Capacitor.isNativePlatform() ? "https://torreon.fly.dev" : "";
 
@@ -30,7 +30,7 @@ type RealmNotice = {
   eventId: string;
   entityType: EntityType;
   entityId: string;
-  kind: "draft" | "started" | "completed" | "amended" | "blocked" | "danger" | "campaign";
+  kind: "draft" | "started" | "completed" | "amended" | "blocked" | "danger" | "campaign" | "levelup";
   title: string;
   message: string;
   cta: string;
@@ -53,6 +53,8 @@ function noticeFor(event: RealmSnapshot["realm"]["events"][number]): RealmNotice
   if (event.type === "quest_waiting_external") return { ...base, kind: "blocked", title: "🔒 FRENTE BLOQUEADO POR UN TERCERO", cta: "VER QUEST" };
   if (event.type === "quest_unblocked") return { ...base, kind: "started", title: "🔓 EL FRENTE VUELVE A ABRIRSE", cta: "VER BATALLA" };
   if (event.type === "horde_attack") return { ...base, kind: "danger", title: "💥 LA HORDA CONTRAATACA", cta: "VER BATALLA" };
+  // El nivel es gameplay: se celebra, pero no abre ninguna puerta nueva.
+  if (event.type === "hero_level_up") return { ...base, kind: "levelup", title: "✨ UN HÉROE HA SUBIDO DE NIVEL", cta: "VER BARRACAS" };
   return null;
 }
 
@@ -65,6 +67,24 @@ function RealmNoticeToast({ notice, onOpen, onDismiss }: { notice: RealmNotice; 
       <button className="notice-open" type="button" onClick={onOpen}>{notice.cta}</button>
     </aside>
   );
+}
+
+/**
+ * POSITION IS PRESENTATION, NOT PERMISSION.
+ *
+ * El nodo trae `locked` del Core, y el Core sólo lo pone `true` cuando existe
+ * una dependencia declarada todavía abierta. La pantalla NUNCA vuelve a
+ * deducir un bloqueo por posición, por `currentQuestId` legado, por el último
+ * borrador ni por la última notificación.
+ */
+function questNodeOf(snapshot: RealmSnapshot, questId: string): QuestNode | null {
+  const hierarchy = snapshot.hierarchy;
+  if (!hierarchy) return null;
+  const fromCampaigns = (hierarchy.campaigns ?? []).flatMap((campaign) => [
+    ...(campaign.directQuests ?? []),
+    ...campaign.acts.flatMap((act) => act.quests),
+  ]);
+  return [...(hierarchy.standaloneQuests ?? []), ...fromCampaigns].find((node) => node.id === questId) ?? null;
 }
 
 function Codex({ speaking = false }: { speaking?: boolean }) {
@@ -106,6 +126,7 @@ function RealmMenu({
   onReset,
   onNotifications,
   onTreasury,
+  onBarracks,
   onOpenQuest,
 }: {
   snapshot: RealmSnapshot;
@@ -116,6 +137,7 @@ function RealmMenu({
   onReset: () => void;
   onNotifications: () => void;
   onTreasury: () => void;
+  onBarracks: () => void;
   onOpenQuest: (questId: string) => void;
 }) {
   const stats = statsOf(snapshot);
@@ -128,6 +150,27 @@ function RealmMenu({
     (node) => node.status === "draft" || node.status === "accepted" || node.status === "waiting_external" || node.status === "active",
   );
   const unread = snapshot.unreadNotifications ?? 0;
+  // La navegación del mundo la declara el Core. Si algún día falta, se cae a
+  // una lista mínima equivalente: nunca a Tesorería colgando de otra cosa.
+  const worldSystems: WorldSystemView[] =
+    snapshot.worldSystems && snapshot.worldSystems.length > 0
+      ? snapshot.worldSystems
+      : [
+          { id: "quick_battles", icon: "⚡", label: "BATALLAS LIBRES", detail: `${quickBattles.length} abierta(s)`, screen: "realm" },
+          { id: "campaigns", icon: "🏰", label: "CAMPAÑAS", detail: `${activeCampaigns} frente(s)`, screen: "campaign" },
+          { id: "barracks", icon: "🛡️", label: "BARRACAS", detail: "El grupo y los agentes", screen: "barracks" },
+          { id: "treasury", icon: "💰", label: "TESORERÍA", detail: "Dinero real del reino", screen: "treasury" },
+          { id: "notifications", icon: "🔔", label: "NOTIFICACIONES", detail: `${unread} sin leer`, screen: "notifications" },
+        ];
+  const openSystem = (system: WorldSystemView) => {
+    if (system.id === "treasury") return onTreasury();
+    if (system.id === "barracks") return onBarracks();
+    if (system.id === "notifications") return onNotifications();
+    if (system.id === "campaigns") return onCampaign();
+    if (system.id === "battle") return onBattle();
+    // Batallas Libres ya viven en esta misma pantalla, justo debajo.
+    document.querySelector(".realm-dock")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
   return (
     <main className="scene realm-scene">
       <img className="realm-mockup" src="/assets/art/realm-menu-mockup.png" alt="" aria-hidden="true" />
@@ -155,11 +198,33 @@ function RealmMenu({
         🔔{unread > 0 ? <span className="realm-bell-badge">{unread > 99 ? "99+" : unread}</span> : null}
       </button>
 
-      {/* ⚡ BATALLAS LIBRES + 💰 TESORERÍA: no toda acción real es una Campaña. */}
+      {/*
+        SISTEMAS DEL MUNDO.
+
+        TREASURY IS NOT A QUICK BATTLE. Barracas y Tesorería son HERMANAS de
+        Batallas Libres, no botones dentro de su cabecera. La lista la fija el
+        Core en `worldSystems`; aquí sólo se pinta.
+      */}
+      <nav className="world-systems glass-panel" aria-label="Sistemas del reino">
+        {worldSystems.map((system) => (
+          <button
+            key={system.id}
+            type="button"
+            className={`world-system ${system.id}`}
+            onClick={() => openSystem(system)}
+          >
+            <span className="world-icon" aria-hidden="true">{system.icon}</span>
+            <strong>{system.label}</strong>
+            <small>{system.detail}</small>
+            {system.badge ? <em className="world-badge">{system.badge > 99 ? "99+" : system.badge}</em> : null}
+          </button>
+        ))}
+      </nav>
+
+      {/* ⚡ BATALLAS LIBRES: la vida cotidiana no necesita ceremonia. */}
       <aside className="realm-dock glass-panel">
         <div className="realm-dock-head">
           <span>⚡ BATALLAS LIBRES</span>
-          <button type="button" className="dock-treasury" onClick={onTreasury}>💰 TESORERÍA</button>
         </div>
         {quickBattles.length === 0 ? (
           <p className="dock-empty">Sin Quick Battles. Pídele una a Códice para una tarea real de pocos minutos.</p>
@@ -276,6 +341,15 @@ function NotificationCenter({
         </div>
       </header>
 
+      {/*
+        SCROLL VERTICAL REAL.
+
+        La cabecera queda fija y la LISTA es la que se desplaza. No se resuelve
+        archivando avisos, ni subiendo una altura fija, ni renderizando menos:
+        con veinte avisos hay que poder llegar al último y seguir tocando sus
+        botones.
+      */}
+      <div className="notif-list">
       {notifications.length === 0 ? (
         <p className="notif-empty">No hay avisos. Un pacto nuevo aparecerá aquí y no se perderá aunque llegue otro después.</p>
       ) : (
@@ -304,6 +378,7 @@ function NotificationCenter({
           );
         })
       )}
+      </div>
     </main>
   );
 }
@@ -348,6 +423,7 @@ function TreasuryScreen({
         </div>
       </header>
 
+      <div className="treasury-body">
       <section className="treasury-grid">
         <article className="config-card">
           <p className="eyebrow">BALANCE OBSERVADO</p>
@@ -407,7 +483,219 @@ function TreasuryScreen({
       <p className="treasury-note">
         Pagar una obligación concede XP y Aura, pero el dinero real SALE de aquí. Ninguna quest fabrica monedas por gastar dinero real.
       </p>
+      </div>
     </main>
+  );
+}
+
+
+const DEPLOYMENT_LABEL: Record<string, string> = {
+  known: "CONOCIDO",
+  available: "DISPONIBLE",
+  deployed: "EN EL FRENTE",
+  participated: "HA PARTICIPADO",
+  contribution_validated: "CONTRIBUCIÓN VALIDADA",
+  unavailable: "NO DISPONIBLE",
+};
+
+const DEED_LABEL: Record<string, string> = {
+  participated: "ejecutó",
+  verified: "verificado",
+  victory: "victoria",
+};
+
+/**
+ * 🛡️ BARRACAS.
+ *
+ * No es inventario, no es Campaña y no es historial de Battles: es donde vive
+ * la representación persistente del jugador, sus compañeros y sus agentes.
+ *
+ * AN AGENT IS A HERO ONLY WHEN IT ACTUALLY PARTICIPATES: un aliado que nunca
+ * ejecutó nada aparece aquí con todos sus contadores en cero, y eso es lo
+ * honesto. LEVEL IS NOT PERMISSION: subir de nivel no abre ninguna puerta del
+ * mundo real; enviar, firmar, pagar o desplegar siguen exigiendo autorización.
+ */
+function BarracksScreen({
+  barracks,
+  onBack,
+}: {
+  barracks: BarracksView;
+  onBack: () => void;
+}) {
+  const [openHeroId, setOpenHeroId] = useState<string | null>(null);
+  const party = barracks.heroes.filter((hero) => hero.kind === "party");
+  const agents = barracks.heroes.filter((hero) => hero.kind === "agent");
+  const openHero = barracks.heroes.find((hero) => hero.id === openHeroId) ?? null;
+
+  const card = (hero: HeroProfileView) => {
+    const ratio = hero.xpToNextLevel > 0 ? Math.min(100, Math.round((hero.xpIntoLevel / hero.xpToNextLevel) * 100)) : 100;
+    const veteran = hero.stats.executions > 0 || hero.stats.battlesEntered > 0;
+    return (
+      <article key={hero.id} className={`hero-card ${hero.kind} ${veteran ? "veteran" : "fresh"}`}>
+        <header>
+          <strong>{hero.displayName.toUpperCase()}</strong>
+          <em>{DEPLOYMENT_LABEL[hero.deployment] ?? hero.deployment}</em>
+        </header>
+        <small className="hero-class">{hero.className}</small>
+        <p className="hero-level">NIVEL {hero.level}</p>
+        <div className="hero-xp"><span style={{ width: `${ratio}%` }} /></div>
+        <small className="hero-xp-label">
+          {hero.xpToNextLevel > 0 ? `${hero.xpIntoLevel}/${hero.xpToNextLevel} XP` : "NIVEL MÁXIMO"}
+        </small>
+        <ul className="hero-stats">
+          {hero.kind === "agent" ? (
+            <>
+              <li><span>Assists validados</span><b>{hero.stats.validatedAssists}</b></li>
+              <li><span>Ejecuciones</span><b>{hero.stats.successfulExecutions}</b></li>
+              <li><span>Battles asistidas</span><b>{hero.stats.questsAssisted}</b></li>
+              <li><span>Impacto apoyado</span><b>{hero.stats.supportedImpact}</b></li>
+            </>
+          ) : (
+            <>
+              <li><span>Battles</span><b>{hero.stats.battlesEntered}</b></li>
+              <li><span>Victorias</span><b>{hero.stats.battlesWon}</b></li>
+              <li><span>Quests</span><b>{hero.stats.questsCompleted}</b></li>
+              <li><span>Impacto validado</span><b>{hero.stats.validatedImpact}</b></li>
+            </>
+          )}
+        </ul>
+        {!veteran ? <p className="hero-empty">Todavía no ha peleado. Sus cifras se quedan en cero: aquí no se inventan hazañas.</p> : null}
+        <button className="ghost-button" type="button" onClick={() => setOpenHeroId(hero.id)}>VER HÉROE</button>
+      </article>
+    );
+  };
+
+  return (
+    <main className="scene barracks-scene">
+      <header className="barracks-top">
+        <button className="back-button" type="button" onClick={onBack}>← VOLVER</button>
+        <div>
+          <p className="eyebrow">SISTEMA DEL MUNDO</p>
+          <h1>🛡️ Barracas</h1>
+        </div>
+      </header>
+
+      <div className="barracks-body">
+        {barracks.lastFormation ? (
+          <section className="last-formation glass-panel">
+            <p className="eyebrow">ÚLTIMA FORMACIÓN</p>
+            <p className="formation-heroes">{barracks.lastFormation.heroes.map((hero) => hero.displayName).join(" · ")}</p>
+            <p className="formation-quest">
+              <strong>{barracks.lastFormation.questTitle}</strong>
+              <em>
+                {barracks.lastFormation.result === "victory"
+                  ? "VICTORIA"
+                  : barracks.lastFormation.result === "in_progress"
+                    ? "EN CURSO"
+                    : "FRENTE ABIERTO"}
+              </em>
+            </p>
+          </section>
+        ) : null}
+
+        <p className="barracks-bucket">EL GRUPO</p>
+        <section className="hero-grid">{party.map(card)}</section>
+
+        <p className="barracks-bucket">AGENTES</p>
+        <section className="hero-grid">{agents.map(card)}</section>
+
+        <p className="barracks-note">
+          Códice no ocupa slot: es el Dungeon Master. Y el nivel de un héroe es gameplay, nunca un permiso: enviar, firmar,
+          pagar o desplegar siguen exigiendo autorización humana real.
+        </p>
+      </div>
+
+      {openHero ? (
+        <div className="hero-sheet" role="dialog" aria-modal="true" aria-label={`Hoja de ${openHero.displayName}`}>
+          <article>
+            <button className="notice-dismiss" type="button" onClick={() => setOpenHeroId(null)} aria-label="Cerrar">×</button>
+            <p className="eyebrow">{openHero.className.toUpperCase()}</p>
+            <h2>{openHero.displayName}</h2>
+            <p className="hero-sheet-level">
+              NIVEL {openHero.level} · {openHero.xp} XP · {DEPLOYMENT_LABEL[openHero.deployment] ?? openHero.deployment}
+            </p>
+
+            <p className="eyebrow">CAPACIDADES</p>
+            <p className="hero-caps">{openHero.capabilities.join(" · ") || "Sin capacidades declaradas."}</p>
+
+            <p className="eyebrow">HABILIDADES</p>
+            <ul className="hero-abilities">
+              {openHero.abilities.map((ability) => (
+                <li key={ability.id}>
+                  <strong>{ability.name}</strong>
+                  <small>{ability.description} — se activa por {ability.triggeredBy}.</small>
+                </li>
+              ))}
+            </ul>
+
+            <p className="eyebrow">MAESTRÍAS</p>
+            {openHero.masteries.length === 0 ? (
+              <p className="hero-empty">Ninguna maestría todavía. Sólo un resultado validado la mueve.</p>
+            ) : (
+              <ul className="hero-masteries">
+                {openHero.masteries.map((mastery) => (
+                  <li key={mastery.domain}>
+                    <strong>{mastery.domain} · {mastery.points}</strong>
+                    {/* MASTERY MUST BE EXPLAINABLE: de dónde salió cada punto. */}
+                    <small>{mastery.evidence.join(" · ") || "Sin desglose registrado."}</small>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <p className="eyebrow">HAZAÑAS RECIENTES</p>
+            {openHero.recentDeeds.length === 0 ? (
+              <p className="hero-empty">Sin hazañas. No se narra ninguna sin un hecho real detrás.</p>
+            ) : (
+              <ul className="hero-deeds">
+                {openHero.recentDeeds.map((deed) => (
+                  <li key={deed.id}>
+                    <strong>{deed.questTitle}</strong>
+                    <small>
+                      {deed.summary}
+                      {deed.sourceTool ? ` · ${deed.sourceTool}` : ""} · {DEED_LABEL[deed.outcome] ?? deed.outcome} · {relativeTime(deed.createdAt)}
+                    </small>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </article>
+        </div>
+      ) : null}
+    </main>
+  );
+}
+
+/**
+ * INFORME DE ACCIÓN.
+ *
+ * Determinista: sale de los hechos de la Battle, no de un relato. Aquí es donde
+ * el jugador ve cuánto duró DE VERDAD lo que creía que tomaba veinte minutos.
+ */
+function AfterActionPanel({ report }: { report: AfterActionReport }) {
+  const minutes = Math.round(report.actualActiveMs / 60_000);
+  return (
+    <section className="after-action glass-panel">
+      <p className="eyebrow">INFORME DE ACCIÓN</p>
+      <h3>{report.questTitle}</h3>
+      <ul className="aar-facts">
+        <li><span>Duración real</span><b>{minutes} min</b></li>
+        <li><span>Pactada</span><b>{report.plannedDurationMinutes} min</b></li>
+        <li><span>Replanes</span><b>{report.replans}</b></li>
+        <li><span>Imprevistos</span><b>{report.unexpectedRequirements}</b></li>
+      </ul>
+      <p className="aar-party">{report.party.join(" · ")}</p>
+      {report.companionsUsed.length > 0 ? (
+        <p className="aar-agent">
+          Agentes: {report.companionsUsed.join(", ")} · {report.agentContribution.assistedSteps} paso(s) asistidos · +{report.agentContribution.comboDamage} combo
+        </p>
+      ) : null}
+      {report.lessons.length > 0 ? (
+        <ul className="aar-lessons">
+          {report.lessons.map((lesson) => <li key={lesson}>✦ {lesson}</li>)}
+        </ul>
+      ) : null}
+    </section>
   );
 }
 
@@ -802,21 +1090,37 @@ function PartyHud({
   party,
   agent,
   flash,
+  heroes,
   onUseItem,
 }: {
   party: PartyState;
   agent: AgentSlot;
   flash: PartyFlash;
+  heroes: HeroProfileView[];
   onUseItem?: (target: PartyMemberId) => void;
 }) {
+  /*
+    INFORMACIÓN COMPACTA, NO UN MODAL GIGANTE.
+
+    Tocar un aliado durante la Battle abre una línea con su carrera; tocar al
+    agente muestra su estado de asistencia. Nada de esto ataca ni concede nada:
+    no existe un botón de ATACAR para los agentes, y no va a existir.
+  */
+  const [peek, setPeek] = useState<string | null>(null);
+  const heroById = (id: string) => heroes.find((hero) => hero.id === id) ?? null;
   return (
     <section className="party-hud" aria-label="El grupo del Marqués">
       {PARTY_SLOTS.map((id) => {
         const member = party[id];
         const pulse = flash[id];
         const badge = member.status === "ko" ? "KO" : pulse ? pulse.toUpperCase() : "ACTIVE";
+        const hero = heroById(id);
         return (
-          <article key={id} className={`party-member is-${member.status} ${pulse ?? ""}`}>
+          <article
+            key={id}
+            className={`party-member is-${member.status} ${pulse ?? ""} ${peek === id ? "peeking" : ""}`}
+            onClick={() => setPeek((open) => (open === id ? null : id))}
+          >
             <header>
               <strong>{member.name.toUpperCase()}</strong>
               <em>{badge}</em>
@@ -829,27 +1133,56 @@ function PartyHud({
                 <b className="shield-value">SH {member.shield ?? 0}/{member.maxShield}</b>
               </>
             ) : null}
+            {peek === id && hero ? (
+              <p className="party-peek">
+                NV {hero.level} · {hero.stats.battlesWon}/{hero.stats.battlesEntered} Battles · {hero.stats.questsCompleted} Quests
+              </p>
+            ) : null}
             {member.status === "ko" && onUseItem ? (
-              <button className="revive-button" type="button" onClick={() => onUseItem(id)}>REVIVIR</button>
+              <button
+                className="revive-button"
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onUseItem(id);
+                }}
+              >
+                REVIVIR
+              </button>
             ) : null}
           </article>
         );
       })}
-      <article className={`party-member agent ${agent.deployed ? agent.status : "undeployed"}`}>
+      <article
+        className={`party-member agent ${agent.deployed ? agent.status : "undeployed"} ${peek === "agent" ? "peeking" : ""}`}
+        onClick={() => setPeek((open) => (open === "agent" ? null : "agent"))}
+      >
         <header>
           <strong>{agent.deployed ? (agent.name ?? "AGENTE").toUpperCase() : "AGENTE"}</strong>
-          <em>{agent.status === "assist_validated" ? "COMBO" : agent.deployed ? "LISTO" : "—"}</em>
+          <em>{agent.status === "assist_validated" ? "COMBO" : agent.deployed ? "PENDIENTE" : "—"}</em>
         </header>
         {agent.deployed ? (
           <>
             <small className="agent-role">{agent.role}</small>
-            <b>{agent.comboDamage > 0 ? `+${agent.comboDamage} COMBO` : "ASSIST READY"}</b>
+            <b>{agent.comboDamage > 0 ? `+${agent.comboDamage} COMBO` : "ASSIST SIN VALIDAR"}</b>
             {agent.secondaryAssists.length > 0 ? <small className="agent-extra">+{agent.secondaryAssists.join(", ")}</small> : null}
+            {peek === "agent" && agent.companion ? (
+              <p className="party-peek">
+                {(() => {
+                  const hero = heroById(agent.companion);
+                  if (!hero) return "Sin carrera registrada todavía.";
+                  return `NV ${hero.level} · ${hero.stats.validatedAssists} assist validados · ${hero.stats.successfulExecutions} ejecuciones`;
+                })()}
+              </p>
+            ) : null}
           </>
         ) : (
           <>
             <small className="agent-role">Sin desplegar</small>
             <b>NINGÚN ALIADO HA PELEADO</b>
+            {peek === "agent" ? (
+              <p className="party-peek">Estar disponible no es haber peleado: el slot se llena con una ejecución real.</p>
+            ) : null}
           </>
         )}
       </article>
@@ -1288,6 +1621,19 @@ function QuestOrder({
   const reward = isCurrent ? snapshot.rewardPreview : null;
   const engagedQuestId = snapshot.hierarchy?.engagedQuestId ?? null;
   const engagedElsewhere = Boolean(engagedQuestId) && engagedQuestId !== quest.id;
+  /*
+    ESTA QUEST YA NO «ESPERA SU TURNO» POR NO SER LA ACTUAL.
+
+    Antes el botón se apagaba con `!isCurrent`, es decir con la proyección
+    legada `currentQuest`: una Quest con locked=false y el Core permitiendo
+    accept_quest y start_quest aparecía bloqueada en la pantalla. Ahora el
+    bloqueo sólo puede venir del Core, y sólo si hay una dependencia declarada.
+  */
+  const report = (snapshot.battleMemory?.reports ?? []).find((candidate) => candidate.questId === quest.id) ?? null;
+  const node = questNodeOf(snapshot, quest.id);
+  const lockedByDependency = node?.locked ?? false;
+  // Sólo se puede entrar a la Battle de la Quest que el Core está proyectando.
+  const battleViewable = quest.id === (engagedQuestId ?? current?.id ?? null);
   const campaign = snapshot.hierarchy?.campaigns.find((candidate) => candidate.id === snapshot.hierarchy.currentCampaignId) ?? null;
 
   return (
@@ -1344,6 +1690,15 @@ function QuestOrder({
           </section>
         </div>
 
+        {/*
+          AFTER ACTION REPORT.
+
+          Determinista y sacado de los hechos de la Battle. Es lo que impide que
+          la próxima vez se vuelva a estimar mal: aquí se ve cuánto duró de
+          verdad lo que se pactó en otra cifra.
+        */}
+        {report ? <AfterActionPanel report={report} /> : null}
+
         <section className="order-attack">
           <p className="eyebrow">VALOR DEL ATAQUE · {totalAttack} PUNTOS</p>
           <ul>
@@ -1394,19 +1749,29 @@ function QuestOrder({
 
       <div className="order-actions">
         <button className="back-button" type="button" onClick={onBack}>← ATRÁS</button>
-        {engagedElsewhere ? (
-          // ONE ENGAGED BATTLE: esta orden se consulta, pero no abre un reloj.
-          <button className="expedition-button" type="button" onClick={onEnterBattle}>⚔ VOLVER A BATALLA ACTIVA</button>
-        ) : !isCurrent ? (
-          <button className="expedition-button" type="button" disabled>ESTA QUEST ESPERA SU TURNO</button>
+        {lockedByDependency ? (
+          // El ÚNICO bloqueo legítimo, y dice exactamente quién lo causa.
+          <button className="expedition-button" type="button" disabled title={node?.lockedBy}>
+            🔒 {node?.lockedBy ?? "ESTA QUEST DEPENDE DE OTRA TODAVÍA ABIERTA"}
+          </button>
         ) : quest.status === "draft" ? (
+          // Sellar un pacto NUNCA depende de que otra Battle esté corriendo.
           <button className="expedition-button" type="button" disabled={busy} onClick={() => onAccept(quest.id)}>✍ ACEPTAR CONTRATO</button>
+        ) : quest.status === "accepted" && engagedElsewhere ? (
+          // ONE ENGAGED BATTLE: el contrato está sellado, pero el reloj no es suyo.
+          <button className="expedition-button" type="button" onClick={onEnterBattle}>⚔ OTRO FRENTE TIENE EL RELOJ</button>
         ) : quest.status === "accepted" ? (
           <button className="expedition-button" type="button" disabled={busy} onClick={() => onStart(quest.id)}>⚔ INICIAR EXPEDICIÓN · {quest.durationMinutes} MIN</button>
         ) : quest.status === "completed" ? (
-          <button className="expedition-button" type="button" onClick={onEnterBattle}>🏆 VER RESULTADO</button>
-        ) : (
+          battleViewable ? (
+            <button className="expedition-button" type="button" onClick={onEnterBattle}>🏆 VER RESULTADO</button>
+          ) : (
+            <button className="expedition-button" type="button" disabled>🏆 VICTORIA · {validated}/100</button>
+          )
+        ) : battleViewable ? (
           <button className="expedition-button" type="button" onClick={onEnterBattle}>⚔ VOLVER A LA BATALLA · {validated}/100</button>
+        ) : (
+          <button className="expedition-button" type="button" disabled>⚔ FRENTE ABIERTO · {validated}/100</button>
         )}
       </div>
     </main>
@@ -1522,6 +1887,7 @@ function Battle({
           party={battle.party}
           agent={battle.agent}
           flash={partyFlash}
+          heroes={snapshot.barracks?.heroes ?? []}
           onUseItem={(target) => {
             setBagOpen(true);
             void target;
@@ -2035,6 +2401,10 @@ function App() {
    */
   const openNotice = (notice: RealmNotice) => {
     setNotice(null);
+    if (notice.kind === "levelup") {
+      setScreen("barracks");
+      return;
+    }
     if (notice.entityType === "campaign") {
       setOpenCampaignId(notice.entityId);
       setOpenActId(null);
@@ -2078,6 +2448,7 @@ function App() {
           onReset={() => void act(() => api("/api/reset", { method: "POST" }))}
           onNotifications={() => setScreen("notifications")}
           onTreasury={() => setScreen("treasury")}
+          onBarracks={() => setScreen("barracks")}
           onOpenQuest={openOrder}
         />
         {composerOpen ? (
@@ -2106,6 +2477,11 @@ function App() {
           onOpen={openNotification}
           onArchive={(id) => void act(() => api(`/api/notifications/${id}/archive`, { method: "POST" }))}
           onResend={(id) => void act(() => api(`/api/notifications/${id}/resend`, { method: "POST" }))}
+        />
+      ) : screen === "barracks" ? (
+        <BarracksScreen
+          barracks={snapshot.barracks ?? { heroes: [], lastFormation: null }}
+          onBack={() => setScreen("realm")}
         />
       ) : screen === "treasury" ? (
         <TreasuryScreen

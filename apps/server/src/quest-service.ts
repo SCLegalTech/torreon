@@ -3,24 +3,58 @@ import { ingestArtifact, witnessArtifact, type ArtifactInput, type WitnessInput 
 import {
   advanceBattles,
   battleClock,
+  battleStatusOf,
   clampBattleMinutes,
   createBattleRecord,
   hordeIsDown,
   needsAdvance,
   openAttempt,
+  reconcileBattleProjection,
   resolve as resolveBattle,
   totalPressureRate,
 } from "./battle.js";
-import { COMPANIONS, comboDamageFor, deployAgent, emptyAgentSlot, pendingAssistsFor } from "./companions.js";
+import {
+  assistKeyFor,
+  COMPANIONS,
+  comboDamageFor,
+  deployAgent,
+  emptyAgentSlot,
+  findExistingAssist,
+  pendingAssistsFor,
+} from "./companions.js";
+import {
+  barracksViewFor,
+  claimOnce,
+  ensureHero,
+  ensureRoster,
+  grantHeroXp,
+  grantMastery,
+  recordDeed,
+} from "./barracks.js";
+import {
+  battleMemoryFor,
+  buildAfterActionReport,
+  planningHintFor,
+  storeAfterActionReport,
+  upsertPlaybook,
+  type PlanningHint,
+} from "./battle-memory.js";
+import { AGENT_HERO_IDS, HERO_DEFAULT_MASTERY, HERO_DISPLAY_NAME, PARTY_HERO_IDS, XP_REWARDS } from "./progression.js";
 import { distributeEnemyDamage, enemyTarget as enemyTargetFor } from "./horde.js";
 import { grantItem, STARTER_INVENTORY, useItem } from "./inventory.js";
 import { HeuristicCodice, questFromIntent, validatePlan, type CodicePlanner, type Judgement } from "./codice.js";
 import type {
   Act,
+  AfterActionReport,
+  BarracksView,
+  BattleMemoryView,
   BattleState,
   Campaign,
   CompanionAssist,
+  CompanionExecution,
   CompanionId,
+  HeroAvailability,
+  HeroId,
   FinancialTransaction,
   InventoryItemId,
   NotificationEntityType,
@@ -75,7 +109,7 @@ import {
   refreshShield,
   SHIELD_PER_VALIDATED_IMPACT,
 } from "./party.js";
-import { consistencyFor, currentStepFor, hierarchyFor, progressFor, questDetailFor, statsFor } from "./read-models.js";
+import { consistencyFor, currentStepFor, hierarchyFor, progressFor, questDetailFor, statsFor, worldSystemsFor } from "./read-models.js";
 import {
   classifyScale,
   estimateActiveMinutes,
@@ -128,6 +162,8 @@ export function battleFor(quest: Quest | null, _gameEvents: GameEvent[] = [], no
   if (!quest) return null;
   const damage = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
   const record = quest.battle;
+  // UNA SOLA FUENTE AUTORITATIVA: nunca `won` aquí y `active` en otra vista.
+  const status = battleStatusOf(quest);
   // El grupo y la Horda viven en la Battle: sobreviven a los replanes.
   const party = record?.party ?? freshParty();
   const enemies = record?.enemies ?? [];
@@ -149,14 +185,18 @@ export function battleFor(quest: Quest | null, _gameEvents: GameEvent[] = [], no
     isKo: damage === 100,
     isPlayerKo: playerHealth === 0,
     durationMinutes: record?.durationMinutes ?? clampBattleMinutes(quest.durationMinutes),
-    status: record?.status ?? "pending",
+    status,
     attempt: record?.attempt ?? 1,
     attempts: record?.attempts ?? [],
     party,
     agent: record?.agent ?? emptyAgentSlot(),
     enemies,
-    hordeNeutralized: enemies.length > 0 && enemies.every((enemy) => enemy.status === "ko"),
-    pressureRate: enemies.length > 0 && record?.status === "active" ? Math.round(totalPressureRate(enemies) * 10) / 10 : 0,
+    // Un contrato validado al 100% neutraliza la Horda por definición: no puede
+    // quedar un enemigo «vivo» en la proyección de una Battle ya ganada.
+    hordeNeutralized: status === "won" || (enemies.length > 0 && enemies.every((enemy) => enemy.status === "ko")),
+    // Una Battle que no está corriendo NO ejerce presión. Ni ganada, ni
+    // suspendida, ni vencida: cero, y el renderer no tiene que deducirlo.
+    pressureRate: enemies.length > 0 && status === "active" ? Math.round(totalPressureRate(enemies) * 10) / 10 : 0,
     pendingRecontract: record?.pendingRecontract
       ? { id: record.pendingRecontract.id, reason: record.pendingRecontract.reason, newDurationMinutes: record.pendingRecontract.newDurationMinutes }
       : undefined,
@@ -215,6 +255,297 @@ export function grantQuestRewards(state: RealmState, quest: Quest): RewardGrant 
 
   return { xp, aura, masteryDomain: domain, masteryPoints: domain ? 1 : 0 };
 }
+
+// ---------------------------------------------------------------------------
+// PROGRESIÓN DE HÉROES
+//
+// LEVEL IS NOT PERMISSION. Nada de lo que hay aquí abre una puerta del mundo
+// real: no autoriza enviar, firmar, pagar, borrar ni desplegar. Es gameplay.
+//
+// Y ningún punto nace del tiempo, de abrir la app ni de mandar mensajes: sólo
+// de participación validada en una Battle y de resultados reales comprobados.
+// ---------------------------------------------------------------------------
+
+function pushGameEvent(state: RealmState, event: Omit<GameEvent, "id">): string {
+  const id = randomUUID();
+  state.gameEvents.unshift({ id, ...event });
+  state.gameEvents = state.gameEvents.slice(0, 200);
+  return id;
+}
+
+/** Concede XP y, si cruza umbral, emite `hero_level_up` UNA sola vez. */
+function applyXp(state: RealmState, heroId: HeroId, amount: number, key: string, questId: string): void {
+  const grant = grantHeroXp(state, heroId, amount, key);
+  if (!grant?.leveledUp) return;
+  const timestamp = now();
+  pushGameEvent(state, {
+    type: "hero_level_up",
+    questId,
+    damage: 0,
+    heroId,
+    level: grant.level,
+    message: `${HERO_DISPLAY_NAME[heroId]} ha alcanzado el nivel ${grant.level}.`,
+    createdAt: timestamp,
+  });
+  addEvent(state, {
+    type: "hero_level_up",
+    entityType: "quest",
+    entityId: questId,
+    message: `${HERO_DISPLAY_NAME[heroId]} ha alcanzado el nivel ${grant.level}. El nivel es gameplay: no concede ningún permiso nuevo.`,
+  });
+}
+
+/**
+ * EJECUCIÓN VISIBLE.
+ *
+ * Permite que la pantalla muestre «OPUS HA ENTRADO EN COMBATE» sin esperar al
+ * cierre de la Quest. Deduplicada por `executionRef`: la misma ejecución real
+ * no se registra dos veces, y una lectura de MCP no se convierte en push.
+ */
+function registerExecution(state: RealmState, assist: CompanionAssist, quest: Quest): CompanionExecution {
+  state.companionExecutions ??= [];
+  const executionRef = assist.executionRef?.trim() || assist.id;
+  const existing = state.companionExecutions.find((candidate) => candidate.executionRef === executionRef);
+  if (existing) return existing;
+  const execution: CompanionExecution = {
+    executionRef,
+    companionId: assist.companion,
+    questId: quest.id,
+    stepId: assist.stepId,
+    tool: assist.sourceTool,
+    startedAt: assist.createdAt,
+    completedAt: assist.createdAt,
+    status: "succeeded",
+    summary: assist.contributionSummary,
+  };
+  state.companionExecutions.unshift(execution);
+  state.companionExecutions = state.companionExecutions.slice(0, 200);
+  pushGameEvent(state, {
+    type: "companion_execution_completed",
+    questId: quest.id,
+    stepId: assist.stepId,
+    damage: 0,
+    companion: assist.companion,
+    heroId: assist.companion,
+    battleAttempt: quest.battle?.attempt ?? 1,
+    message: `${HERO_DISPLAY_NAME[assist.companion]} completó ${assist.sourceTool ?? "una operación"} sobre el frente.`,
+    createdAt: assist.createdAt,
+  });
+  return execution;
+}
+
+/** Marca que un agente ejecutó algo real. Estar disponible nunca cuenta. */
+function markAgentParticipation(state: RealmState, assist: CompanionAssist, quest: Quest): void {
+  const hero = ensureHero(state, assist.companion);
+  hero.availability = "connected";
+  hero.lastDeployedAt = assist.createdAt;
+  hero.lastQuestId = quest.id;
+  if (claimOnce(state, `execution:${assist.id}`)) {
+    // UN NUEVO ALIADO HA ENTRADO EN COMBATE. No cuando se instala: cuando pelea.
+    if (hero.stats.executions === 0) {
+      addEvent(state, {
+        type: "hero_discovered",
+        entityType: "quest",
+        entityId: quest.id,
+        questId: quest.id,
+        message: `Un nuevo aliado ha entrado en combate: ${HERO_DISPLAY_NAME[assist.companion]}.`,
+      });
+    }
+    hero.stats.executions += 1;
+    hero.stats.successfulExecutions += 1;
+    // Telemetría de uso: cuenta trabajo real, nunca mensajes ni prompts.
+    rolloverUsage(state.usage);
+    state.usage.companionExecutions += 1;
+    state.usage.companionSuccessfulExecutions += 1;
+  }
+  applyXp(state, assist.companion, XP_REWARDS.agentExecution, `execution:${assist.id}`, quest.id);
+  recordDeed(
+    state,
+    {
+      heroId: assist.companion,
+      questId: quest.id,
+      questTitle: quest.title,
+      stepId: assist.stepId,
+      summary: assist.contributionSummary,
+      sourceTool: assist.sourceTool,
+      outcome: "participated",
+    },
+    `assist:${assist.id}`,
+  );
+}
+
+/**
+ * Una contribución ACEPTADA. Aquí —y sólo aquí— el agente deja de ser un
+ * nombre disponible y pasa a tener carrera: XP, maestría y hazaña verificada.
+ */
+function markAgentValidation(
+  state: RealmState,
+  assist: CompanionAssist,
+  quest: Quest,
+  impactAwarded: number,
+  evidenceId: string,
+): void {
+  const hero = ensureHero(state, assist.companion);
+  if (claimOnce(state, `validated_assist:${assist.id}`)) {
+    hero.stats.validatedAssists += 1;
+    hero.stats.supportedImpact += impactAwarded;
+    rolloverUsage(state.usage);
+    state.usage.companionValidatedAssists += 1;
+  }
+  applyXp(state, assist.companion, XP_REWARDS.agentValidatedAssist, `validated_assist:${assist.id}`, quest.id);
+  grantMastery(state, assist.companion, HERO_DEFAULT_MASTERY[assist.companion], `assist:${assist.id}`);
+  recordDeed(
+    state,
+    {
+      heroId: assist.companion,
+      questId: quest.id,
+      questTitle: quest.title,
+      stepId: assist.stepId,
+      summary: assist.contributionSummary,
+      sourceTool: assist.sourceTool,
+      outcome: "verified",
+      evidenceId,
+    },
+    `validated:${assist.id}`,
+  );
+  pushGameEvent(state, {
+    type: "companion_assist_validated",
+    questId: quest.id,
+    stepId: assist.stepId,
+    damage: 0,
+    companion: assist.companion,
+    heroId: assist.companion,
+    battleAttempt: quest.battle?.attempt ?? 1,
+    message: `La contribución de ${HERO_DISPLAY_NAME[assist.companion]} quedó validada por la evidencia del paso.`,
+    createdAt: now(),
+  });
+}
+
+/** Carrera del grupo y de los agentes al cerrarse un contrato al 100%. */
+function applyCareerProgression(state: RealmState, quest: Quest, timestamp: string): void {
+  const validatedImpact = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
+  const won = battleStatusOf(quest) === "won";
+
+  for (const heroId of PARTY_HERO_IDS) {
+    const hero = ensureHero(state, heroId, timestamp);
+    if (claimOnce(state, `quest_completed:${heroId}:${quest.id}`)) {
+      hero.stats.questsCompleted += 1;
+      hero.stats.validatedImpact += validatedImpact;
+      if (won) hero.stats.battlesWon += 1;
+      hero.lastQuestId = quest.id;
+    }
+    applyXp(state, heroId, XP_REWARDS.questCompleted, `quest_completed:${quest.id}`, quest.id);
+    grantMastery(state, heroId, quest.rewardProfile?.masteryDomain, `quest:${quest.id}`);
+    recordDeed(
+      state,
+      {
+        heroId,
+        questId: quest.id,
+        questTitle: quest.title,
+        summary: `${quest.title}: ${quest.outcome}`,
+        outcome: "victory",
+      },
+      `quest_victory:${quest.id}`,
+    );
+  }
+
+  const validatedAssists = (state.companionAssists ?? []).filter(
+    (assist) => assist.questId === quest.id && assist.status === "contribution_validated",
+  );
+  for (const companion of new Set(validatedAssists.map((assist) => assist.companion))) {
+    const hero = ensureHero(state, companion, timestamp);
+    if (claimOnce(state, `quest_assisted:${companion}:${quest.id}`)) {
+      hero.stats.questsAssisted += 1;
+      if (won) hero.stats.battlesWonWithParty += 1;
+    }
+    recordDeed(
+      state,
+      {
+        heroId: companion,
+        questId: quest.id,
+        questTitle: quest.title,
+        summary: `${quest.title}: VICTORIA con contribución validada.`,
+        outcome: "victory",
+      },
+      `quest_victory:${quest.id}`,
+    );
+  }
+
+  const campaign = quest.campaignId ? state.campaigns.find((candidate) => candidate.id === quest.campaignId) : undefined;
+  if (campaign?.status === "completed") {
+    for (const heroId of PARTY_HERO_IDS) {
+      const hero = ensureHero(state, heroId, timestamp);
+      if (claimOnce(state, `campaign_completed:${heroId}:${campaign.id}`)) hero.stats.campaignsCompleted += 1;
+      applyXp(state, heroId, XP_REWARDS.campaignCompleted, `campaign_completed:${campaign.id}`, quest.id);
+    }
+  }
+}
+
+/**
+ * BATTLE COMPLETION MUST BE ATOMIC.
+ *
+ * Cuando la evidencia final cierra el contrato, TODO ocurre en la misma
+ * mutación: paso cerrado, Quest al 100, Horda neutralizada, Battle ganada,
+ * intento cerrado, frente liberado, presión a cero, hecho de cierre, carrera
+ * actualizada, XP concedida e informe de acción generado. No se deja ninguna
+ * proyección a medias, y repetir la llamada no concede nada dos veces.
+ */
+function completeQuest(state: RealmState, quest: Quest, timestamp: string): void {
+  if (quest.status === "completed") return;
+  quest.status = "completed";
+  quest.completedAt = timestamp;
+  quest.updatedAt = timestamp;
+
+  const record = quest.battle;
+  if (record) {
+    if (record.status === "active") resolveBattle(state, quest, record, "won", Date.parse(timestamp));
+    // El contrato validado neutraliza la Horda por definición: no puede quedar
+    // un enemigo «vivo» en la proyección de una Battle ya ganada.
+    for (const enemy of record.enemies) {
+      enemy.health = 0;
+      enemy.status = "ko";
+    }
+    record.hordeNeutralizedAt ??= timestamp;
+    // Una espera externa, un replan pendiente o una suspensión NO pueden
+    // sobrevivir a la victoria: aquí se alinean con la única verdad.
+    reconcileBattleProjection(quest, Date.parse(timestamp));
+  }
+
+  closeParents(state, quest);
+  addEvent(state, { type: "quest_completed", questId: quest.id, message: `KO: «${quest.title}» fue completada.` });
+
+  const reward = grantQuestRewards(state, quest);
+  if (reward) {
+    const mastery = reward.masteryDomain ? ` +${reward.masteryPoints} ${reward.masteryDomain}` : "";
+    addEvent(state, {
+      type: "reward_granted",
+      questId: quest.id,
+      message: `El resultado validado concede +${reward.xp} XP +${reward.aura} Aura${mastery}.`,
+    });
+  }
+
+  applyCareerProgression(state, quest, timestamp);
+
+  // MEMORIA DE BATALLA: el reino aprende cuánto duró de verdad este trabajo.
+  const report = storeAfterActionReport(state, buildAfterActionReport(state, quest));
+  upsertPlaybook(state, quest, report);
+  addEvent(state, {
+    type: "after_action_report",
+    entityType: "quest",
+    entityId: quest.id,
+    questId: quest.id,
+    message: `Informe de acción de «${quest.title}»: ${Math.round(report.actualActiveMs / 60_000)} min activos frente a ${report.plannedDurationMinutes} pactados.`,
+  });
+}
+
+/**
+ * Motivos que NUNCA son una exigencia nueva del mundo real.
+ *
+ * Se comprueba en el servidor, no en el prompt: un Dungeon Master apurado no
+ * puede convertir un fallo técnico en daño narrativo.
+ */
+const FORBIDDEN_REQUIREMENT_REASON =
+  /\b(reintent\w*|retry|reintento|timeout|time-?out|latenc\w*|debug\w*|depurac\w*|duplicad\w*|duplicate|stack ?trace|500|502|503|rate ?limit|tard\w+ (mucho|demasiado)|se demor\w+|tiempo (transcurrido|agotado)|error (t[eé]cnico|de red|de conexi[oó]n))\b/i;
 
 /** Pasos cuya condición pactada exige una prueba, no un relato. */
 const ARTIFACT_KINDS = new Set(["file", "link", "screenshot", "photo"]);
@@ -534,6 +865,8 @@ export class QuestService {
     const engaged = engagedQuest(realm);
     const { availableBalance, expectedIncome, committedExpenses, reserveTarget } = realm.financial;
     const battle = battleFor(quest, realm.gameEvents);
+    const hierarchy = hierarchyFor(realm, quest, engaged?.id ?? null);
+    const unread = unreadCount(realm);
     return {
       realm,
       currentQuest: quest,
@@ -545,16 +878,55 @@ export class QuestService {
       battle,
       stats: statsFor(realm, battle),
       inventory: realm.inventory,
-      hierarchy: hierarchyFor(realm, quest, engaged?.id ?? null),
+      hierarchy,
       rewardPreview: quest ? previewRewards(quest) : null,
       consistency: consistencyFor(realm, this.instance, quest),
       projectedMargin: availableBalance + expectedIncome - committedExpenses - reserveTarget,
       notifications: notificationViewsFor(realm),
-      unreadNotifications: unreadCount(realm),
+      unreadNotifications: unread,
       treasury: treasuryViewFor(realm),
       entitlements: realm.entitlements,
       usage: realm.usage,
+      // 🛡️ BARRACAS y 💰 TESORERÍA son sistemas del MUNDO, no hijos de las
+      // Batallas Libres: la jerarquía la fija el Core y el renderer la obedece.
+      barracks: barracksViewFor(realm),
+      worldSystems: worldSystemsFor(realm, {
+        engagedQuest: engaged,
+        quickBattles: hierarchy.standaloneQuests.length,
+        activeCampaigns: hierarchy.activeCampaignIds.length,
+        unreadNotifications: unread,
+      }),
+      afterActionReport: quest
+        ? (realm.afterActionReports ?? []).find((report) => report.questId === quest.id) ?? null
+        : null,
+      battleMemory: battleMemoryFor(realm),
     };
+  }
+
+  /** 🛡️ Barracas: el grupo y los agentes con la historia que de verdad tienen. */
+  async barracks(): Promise<BarracksView> {
+    return barracksViewFor(await this.tick());
+  }
+
+  /** Lo que el reino aprendió: duraciones reales, lecciones y playbooks. */
+  async battleMemory(): Promise<BattleMemoryView> {
+    return battleMemoryFor(await this.tick());
+  }
+
+  /**
+   * Pista de planificación para un objetivo NUEVO.
+   *
+   * Devolverla no repacta nada: un contrato aceptado sólo cambia con un
+   * amendment sellado por el jugador.
+   */
+  async planningHint(intent: string): Promise<PlanningHint> {
+    return planningHintFor(await this.tick(), intent);
+  }
+
+  /** El informe determinista de una Battle ganada, si ya existe. */
+  async afterActionReport(questId: string): Promise<AfterActionReport | null> {
+    const state = await this.tick();
+    return (state.afterActionReports ?? []).find((report) => report.questId === questId) ?? null;
   }
 
   /**
@@ -723,6 +1095,13 @@ export class QuestService {
         questId,
         message: `Comienza la batalla: «${quest.title}». El reloj corre ${duration} min y la Horda lo aprovechará.`,
       });
+      // El grupo entró de verdad a un frente con reloj. Un reintento sobre la
+      // misma Quest no vuelve a contar: la clave es el id de la Quest.
+      for (const heroId of PARTY_HERO_IDS) {
+        const hero = ensureHero(state, heroId);
+        if (claimOnce(state, `battle_entered:${heroId}:${quest.id}`)) hero.stats.battlesEntered += 1;
+        applyXp(state, heroId, XP_REWARDS.battleEntered, `battle_entered:${quest.id}`, quest.id);
+      }
       return quest;
     });
     return result;
@@ -902,6 +1281,11 @@ export class QuestService {
    *
    * Todavía no concede nada: nace `used_pending_validation`. Opus no ataca
    * porque su nombre exista; ataca cuando su contribución termina validada.
+   *
+   * IDEMPOTENTE. `questId + stepId + companion + executionRef` —o el mismo
+   * `sourceTool` dentro de una ventana corta— identifican LA MISMA ejecución
+   * real. Repetir la llamada devuelve el registro existente sin inflar stats,
+   * XP, combo ni historia: un reintento técnico no es una hazaña nueva.
    */
   async recordCompanionAssist(input: {
     questId: string;
@@ -911,12 +1295,19 @@ export class QuestService {
     sourceTool?: string;
     executionRef?: string;
     contributionSummary: string;
-  }): Promise<CompanionAssist> {
+  }): Promise<{ assist: CompanionAssist; duplicate: boolean }> {
     if (input.contributionSummary.trim().length < 5) throw new Error("Describe qué hizo realmente el compañero.");
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, input.questId);
       requireStep(quest, input.stepId);
       const timestamp = now();
+      const key = assistKeyFor(input);
+      const existing = findExistingAssist(state.companionAssists ?? [], key, Boolean(input.executionRef?.trim()), Date.now());
+      if (existing) {
+        // MISMA EJECUCIÓN REAL -> MISMO REGISTRO. Ni evento nuevo, ni stat nueva.
+        return { assist: existing, duplicate: true };
+      }
+
       const assist: CompanionAssist = {
         id: randomUUID(),
         questId: quest.id,
@@ -927,43 +1318,74 @@ export class QuestService {
         executionRef: input.executionRef?.trim().slice(0, 200),
         contributionSummary: input.contributionSummary.trim().slice(0, 500),
         status: "used_pending_validation",
+        assistKey: key,
         createdAt: timestamp,
       };
       state.companionAssists.unshift(assist);
       state.companionAssists = state.companionAssists.slice(0, 200);
+      registerExecution(state, assist, quest);
+      markAgentParticipation(state, assist, quest);
 
       if (quest.battle) {
         const first = deployAgent(quest.battle.agent, input.companion);
         if (first) {
-          state.gameEvents.unshift({
-            id: randomUUID(),
+          pushGameEvent(state, {
             type: "agent_deployed",
             questId: quest.id,
             damage: 0,
             companion: input.companion,
+            heroId: input.companion,
             battleAttempt: quest.battle.attempt,
             message: `${COMPANIONS[input.companion].name} entra al frente como ${COMPANIONS[input.companion].role}.`,
             createdAt: timestamp,
           });
         }
-        state.gameEvents.unshift({
-          id: randomUUID(),
+        pushGameEvent(state, {
           type: "companion_used",
           questId: quest.id,
           stepId: input.stepId,
           damage: 0,
           companion: input.companion,
+          heroId: input.companion,
           battleAttempt: quest.battle.attempt,
           message: `${COMPANIONS[input.companion].name}: ${assist.contributionSummary}`,
           createdAt: timestamp,
         });
-        state.gameEvents = state.gameEvents.slice(0, 200);
       }
-      return assist;
+      return { assist, duplicate: false };
     });
     return result;
   }
 
+  /**
+   * Declara la disponibilidad de un agente sin tocar su historia.
+   *
+   * Si un conector deja de existir NO se borra al héroe ni sus hazañas: se
+   * marca `unavailable` y se conserva cuándo fue su último despliegue.
+   */
+  async setHeroAvailability(heroId: HeroId, availability: HeroAvailability): Promise<BarracksView> {
+    const { state } = await this.store.mutate((draft) => {
+      ensureRoster(draft);
+      const hero = ensureHero(draft, heroId);
+      // Declarar acceso NO es participación: los contadores no se tocan aquí.
+      hero.availability = availability;
+      hero.known = true;
+      return hero;
+    });
+    return barracksViewFor(state);
+  }
+
+  /**
+   * MENOS LLAMADAS, MISMA VERDAD.
+   *
+   * Cuando la evidencia llega con metadata suficiente —`sourceProvider`,
+   * `sourceTool`, `executionRef`— el Core registra y coalesce la participación
+   * del compañero en la MISMA operación autoritativa: no hace falta una llamada
+   * aparte a `record_companion_assist` para que Opus aparezca en el frente.
+   *
+   * `record_companion_assist` sigue existiendo porque sirve para mostrar el
+   * despliegue ANTES de la validación; simplemente ya es idempotente.
+   */
   async submitEvidence(
     questId: string,
     stepId: string,
@@ -974,6 +1396,9 @@ export class QuestService {
       reasoning: string;
       impactAwarded: number;
       artifactIds?: string[];
+      sourceProvider?: CompanionId;
+      sourceTool?: string;
+      executionRef?: string;
     },
   ): Promise<{ quest: Quest; battle: BattleState; evidenceId: string; lifeEventId: string; gameEventId: string | null }> {
     const { result } = await this.store.mutate((state) => {
@@ -1004,6 +1429,41 @@ export class QuestService {
       }
 
       const timestamp = now();
+
+      // COALESCENCIA DE PARTICIPACIÓN: si la prueba viene de una ejecución real
+      // de un compañero, esa participación se registra aquí mismo —idempotente
+      // por la misma clave— en vez de exigir una segunda llamada.
+      if (input.sourceProvider) {
+        const key = assistKeyFor({
+          questId,
+          stepId,
+          companion: input.sourceProvider,
+          executionRef: input.executionRef,
+          sourceTool: input.sourceTool,
+        });
+        const already = findExistingAssist(state.companionAssists ?? [], key, Boolean(input.executionRef?.trim()), Date.now());
+        if (!already) {
+          const assist: CompanionAssist = {
+            id: randomUUID(),
+            questId,
+            stepId,
+            companion: input.sourceProvider,
+            source: "mcp",
+            sourceTool: input.sourceTool?.trim().slice(0, 120),
+            executionRef: input.executionRef?.trim().slice(0, 200),
+            contributionSummary: input.summary.trim().slice(0, 500),
+            status: "used_pending_validation",
+            assistKey: key,
+            createdAt: timestamp,
+          };
+          state.companionAssists.unshift(assist);
+          state.companionAssists = state.companionAssists.slice(0, 200);
+          registerExecution(state, assist, quest);
+          markAgentParticipation(state, assist, quest);
+          if (quest.battle) deployAgent(quest.battle.agent, input.sourceProvider);
+        }
+      }
+
       const evidenceId = randomUUID();
       const artifactIds = (input.artifactIds ?? []).filter((id) => state.artifacts.some((artifact) => artifact.id === id && artifact.questId === questId && artifact.stepIds.includes(stepId)));
       state.evidence.unshift({ id: evidenceId, questId, stepId, summary: input.summary.trim(), source: input.source, verdict: input.verdict, reasoning: input.reasoning.trim(), impactAwarded: input.impactAwarded, artifactIds, createdAt: timestamp });
@@ -1067,6 +1527,9 @@ export class QuestService {
               assist.validatedAt = timestamp;
               assist.bonusDamage = Math.round(combo / assists.length);
               deployAgent(record.agent, assist.companion);
+              // A VALIDATED CONTRIBUTION CAN BECOME COMBAT — y sólo entonces
+              // deja carrera. Idempotente por el id del assist.
+              markAgentValidation(state, assist, quest, input.impactAwarded, evidenceId);
             }
             record.agent.status = "assist_validated";
             record.agent.comboDamage += combo;
@@ -1160,24 +1623,11 @@ export class QuestService {
         questId,
         message: input.impactAwarded > 0 ? `${step.title}: impacto validado de ${input.impactAwarded} puntos.` : `${step.title}: evidencia rechazada; sin impacto.`,
       });
-      const battle = battleFor(quest, state.gameEvents)!;
+      let battle = battleFor(quest, state.gameEvents)!;
       if (battle.isKo) {
-        quest.status = "completed";
-        quest.completedAt = now();
-        quest.updatedAt = quest.completedAt;
-        // Si la Horda cae antes del plazo, el reloj deja de ser enemigo.
-        if (quest.battle?.status === "active") resolveBattle(state, quest, quest.battle, "won", Date.now());
-        closeParents(state, quest);
-        addEvent(state, { type: "quest_completed", questId, message: `KO: «${quest.title}» fue completada.` });
-        const reward = grantQuestRewards(state, quest);
-        if (reward) {
-          const mastery = reward.masteryDomain ? ` +${reward.masteryPoints} ${reward.masteryDomain}` : "";
-          addEvent(state, {
-            type: "reward_granted",
-            questId,
-            message: `El resultado validado concede +${reward.xp} XP +${reward.aura} Aura${mastery}.`,
-          });
-        }
+        // TODO EN LA MISMA MUTACIÓN: nada de proyecciones a medias.
+        completeQuest(state, quest, now());
+        battle = battleFor(quest, state.gameEvents)!;
       }
       return { quest, battle, evidenceId, lifeEventId, gameEventId };
     });
@@ -1252,7 +1702,15 @@ export class QuestService {
   async verifyStep(
     questId: string,
     stepId: string,
-    input: { note?: string; artifactIds?: string[]; attach?: ArtifactInput },
+    input: {
+      note?: string;
+      artifactIds?: string[];
+      attach?: ArtifactInput;
+      /** Compañero real cuya ejecución produjo esta prueba, si lo hubo. */
+      sourceProvider?: CompanionId;
+      sourceTool?: string;
+      executionRef?: string;
+    },
   ): Promise<CodiceVerdictResult> {
     if (input.attach) await this.attachArtifact(questId, stepId, input.attach);
 
@@ -1286,6 +1744,9 @@ export class QuestService {
       reasoning: judgement.reasoning,
       impactAwarded: judgement.impactAwarded,
       artifactIds: artifacts.map((artifact) => artifact.id),
+      sourceProvider: input.sourceProvider,
+      sourceTool: input.sourceTool,
+      executionRef: input.executionRef,
     });
 
     return { ...applied, judgement, artifacts };
@@ -1393,12 +1854,26 @@ export class QuestService {
     return result;
   }
 
+  /**
+   * LA HORDA SÓLO GOLPEA POR UNA EXIGENCIA REAL.
+   *
+   * `unexpected_requirement` representa una condición nueva e imprevista que
+   * AUMENTA el trabajo del jugador. Jamás puede nacer de un reintento de
+   * herramienta, de una traza de depuración, de latencia, de un assist
+   * duplicado ni del simple paso del tiempo: la presión temporal ya la cobra el
+   * propio servidor por ventanas, y castigar dos veces lo mismo sería mentir.
+   */
   async recordUnexpectedRequirement(
     questId: string,
     input: { reason: string; damage: number; stepId?: string },
   ): Promise<{ battle: BattleState; lifeEventId: string; gameEventId: string }> {
     if (input.reason.trim().length < 10) throw new Error("Describe el requisito inesperado que representa este ataque.");
     if (!Number.isInteger(input.damage) || input.damage < 1 || input.damage > 50) throw new Error("El daño debe ser un entero entre 1 y 50.");
+    if (FORBIDDEN_REQUIREMENT_REASON.test(input.reason)) {
+      throw new Error(
+        "Un reintento, un error técnico, la latencia, un assist duplicado o el tiempo transcurrido NO son exigencias nuevas de la realidad. La presión del reloj ya la cobra el servidor: no la cobres otra vez a mano.",
+      );
+    }
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (quest.status !== "active") throw new Error("La Horda sólo puede atacar un frente activo con presión real; una espera externa no recibe daño automático.");
@@ -1436,6 +1911,7 @@ export class QuestService {
         state.gameEvents.unshift({
           id: randomUUID(),
           type: "shield_absorbed",
+          sourceLifeEventId: lifeEventId,
           questId,
           damage: absorbed,
           target,
@@ -1448,6 +1924,7 @@ export class QuestService {
         state.gameEvents.unshift({
           id: randomUUID(),
           type: "party_member_ko",
+          sourceLifeEventId: lifeEventId,
           questId,
           damage: 0,
           target,
@@ -1469,6 +1946,91 @@ export class QuestService {
         battle = battleFor(quest, state.gameEvents)!;
       }
       return { battle, lifeEventId, gameEventId };
+    });
+    return result;
+  }
+
+  /**
+   * ANULAR UN HECHO REGISTRADO POR ERROR.
+   *
+   * NO HARD DELETE. El hecho se queda en la auditoría marcado `invalidated`,
+   * con quién lo anuló, cuándo y por qué; las proyecciones de gameplay dejan de
+   * contarlo. Corregir un error operativo no puede exigir falsificar historia.
+   *
+   * Si el hecho anulado fue un `unexpected_requirement`, su daño se devuelve al
+   * grupo con exactitud —vida y escudo por separado—, porque ese golpe nunca
+   * debió existir. Lo que sí es historia real (evidencia validada, impacto,
+   * dinero) no se toca aquí y no se toca nunca.
+   */
+  async invalidateEvent(input: {
+    eventId: string;
+    reason: string;
+    invalidatedBy?: string;
+  }): Promise<{ eventId: string; type: string; healed: number; shieldRestored: number; message: string }> {
+    if (input.reason.trim().length < 10) throw new Error("Explica por qué este hecho fue un error operativo antes de anularlo.");
+    const { result } = await this.store.mutate((state) => {
+      const timestamp = now();
+      const by = input.invalidatedBy?.trim().slice(0, 60) || "codice";
+      const lifeEvent = (state.lifeEvents ?? []).find((candidate) => candidate.id === input.eventId);
+      const gameEvent = (state.gameEvents ?? []).find((candidate) => candidate.id === input.eventId);
+      if (!lifeEvent && !gameEvent) throw new Error(`Hecho no encontrado: ${input.eventId}`);
+      if (lifeEvent?.status === "invalidated" || gameEvent?.status === "invalidated") {
+        throw new Error("Ese hecho ya estaba anulado. Anular dos veces no devuelve el doble.");
+      }
+
+      let healed = 0;
+      let shieldRestored = 0;
+      const target = lifeEvent ?? gameEvent!;
+      const type = lifeEvent ? lifeEvent.type : gameEvent!.type;
+
+      const stamp = (record: { status?: string; invalidatedAt?: string; invalidatedBy?: string; invalidationReason?: string }) => {
+        record.status = "invalidated";
+        record.invalidatedAt = timestamp;
+        record.invalidatedBy = by;
+        record.invalidationReason = input.reason.trim().slice(0, 300);
+      };
+      stamp(target as never);
+
+      if (lifeEvent) {
+        // Los hechos visuales derivados dejan de contar con él.
+        const derived = (state.gameEvents ?? []).filter((candidate) => candidate.sourceLifeEventId === lifeEvent.id);
+        for (const event of derived) stamp(event as never);
+
+        if (lifeEvent.type === "unexpected_requirement") {
+          const quest = state.quests.find((candidate) => candidate.id === lifeEvent.questId);
+          const party = quest?.battle?.party;
+          const attack = derived.find((event) => event.type === "horde_attack");
+          const absorbedEvent = derived.find((event) => event.type === "shield_absorbed");
+          if (party && attack?.target) {
+            const member = party[attack.target];
+            const absorbed = absorbedEvent?.damage ?? 0;
+            const toHealth = Math.max(0, attack.damage - absorbed);
+            const beforeHealth = member.health;
+            member.health = Math.min(member.maxHealth, member.health + toHealth);
+            healed = member.health - beforeHealth;
+            if (member.maxShield !== undefined && member.shield !== undefined && absorbed > 0) {
+              const beforeShield = member.shield;
+              member.shield = Math.min(member.maxShield, member.shield + absorbed);
+              shieldRestored = member.shield - beforeShield;
+            }
+            if (member.health > 0) member.status = "active";
+          }
+        }
+      }
+
+      const message =
+        healed > 0 || shieldRestored > 0
+          ? `Hecho anulado. El grupo recupera ${healed} HP y ${shieldRestored} de escudo que un error operativo le había quitado. La auditoría conserva el registro.`
+          : "Hecho anulado. Sigue en la auditoría marcado como inválido y las proyecciones de gameplay dejan de contarlo.";
+
+      addEvent(state, {
+        type: "event_invalidated",
+        entityType: "quest",
+        entityId: (lifeEvent?.questId ?? gameEvent?.questId) || input.eventId,
+        message: `Hecho «${type}» anulado por ${by}: ${input.reason.trim()}`,
+      });
+
+      return { eventId: input.eventId, type, healed, shieldRestored, message };
     });
     return result;
   }

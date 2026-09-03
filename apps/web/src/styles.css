@@ -1171,7 +1171,17 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 .realm-bell-badge { position: absolute; top: -6px; right: -6px; min-width: 18px; padding: 0 4px; border-radius: 9px; background: #c53a2b; color: #fff; font: 900 .58rem/18px ui-monospace, "Cascadia Mono", monospace; text-align: center; box-shadow: 0 0 0 1px #2a0d09; }
 
 /* Dock inferior: Quick Battles + acceso a Tesorería. No se pierden en el mapa. */
-.realm-dock { position: absolute; right: 1.6%; bottom: 2.5%; width: min(360px, 32%); max-height: 46%; padding: .55rem .6rem; overflow-y: auto; }
+.realm-dock {
+  position: absolute;
+  right: 1.6%;
+  bottom: calc(2.5% + 136px);
+  width: min(360px, 32%);
+  max-height: 32%;
+  padding: .55rem .6rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
 .realm-dock-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .4rem; color: var(--gold-bright); font: 900 .62rem/1 ui-monospace, "Cascadia Mono", monospace; letter-spacing: .1em; }
 .dock-treasury { padding: .3rem .5rem; cursor: pointer; border: 1px solid #6b4a1c; color: #f3d79a; background: rgba(12,10,8,.85); font: 900 .55rem/1 ui-monospace, "Cascadia Mono", monospace; letter-spacing: .06em; }
 .dock-treasury:active { transform: translateY(1px); }
@@ -1183,8 +1193,28 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 .dock-list small { color: #b8ab93; font-size: .52rem; }
 
 /* Pantalla completa del Centro de Notificaciones. */
-.notif-scene { width: 100%; max-width: none; min-height: 100dvh; padding: 1rem clamp(1rem, 4vw, 3rem) 2rem; background: #07080a; }
-.notif-top { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.notif-scene {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  min-height: 100dvh;
+  padding: max(1rem, env(safe-area-inset-top)) clamp(1rem, 4vw, 3rem) 0;
+  overflow: hidden;
+  background: #07080a;
+}
+.notif-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-bottom: max(1.5rem, calc(env(safe-area-inset-bottom) + 1rem));
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+.notif-top { display: flex; flex: 0 0 auto; align-items: center; gap: 1rem; margin-bottom: 1rem; }
 .notif-top h1 { display: flex; align-items: center; gap: .5rem; margin: 0; color: #f3d79a; font-size: 1.2rem; }
 .notif-count { min-width: 20px; padding: 0 6px; border-radius: 10px; background: #c53a2b; color: #fff; font: 900 .7rem/20px ui-monospace, monospace; text-align: center; }
 .notif-empty, .treasury-empty { color: #9a8d78; font-size: .74rem; line-height: 1.5; max-width: 52ch; }
@@ -1202,8 +1232,28 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 .notif-actions .gold-button, .notif-actions .ghost-button { min-height: 32px; padding: .3rem .7rem; font-size: .54rem; }
 
 /* Pantalla completa de Tesorería. */
-.treasury-scene { width: 100%; max-width: none; min-height: 100dvh; padding: 1rem clamp(1rem, 4vw, 3rem) 2rem; background: #07080a; }
-.treasury-top { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.treasury-scene {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  min-height: 100dvh;
+  padding: max(1rem, env(safe-area-inset-top)) clamp(1rem, 4vw, 3rem) 0;
+  overflow: hidden;
+  background: #07080a;
+}
+.treasury-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-bottom: max(1.5rem, calc(env(safe-area-inset-bottom) + 1rem));
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+.treasury-top { display: flex; flex: 0 0 auto; align-items: center; gap: 1rem; margin-bottom: 1rem; }
 .treasury-top h1 { margin: 0; color: #f3d79a; font-size: 1.15rem; }
 .treasury-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .5rem; margin-bottom: 1.2rem; }
 .treasury-grid .config-card strong { font-size: 1rem; }
@@ -1221,7 +1271,166 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 .treasury-note { max-width: 60ch; color: #9a8d78; font-size: .62rem; line-height: 1.5; }
 
 @media (orientation: portrait) {
-  .realm-dock { right: 3%; bottom: 2%; width: 60%; }
+  .realm-dock { right: 3%; bottom: calc(2% + 130px); width: 60%; max-height: 28%; }
+  .world-systems { right: 3%; width: 60%; }
   .notif-card { grid-template-columns: auto 1fr; }
   .notif-actions { grid-column: 1 / -1; grid-auto-flow: column; }
+}
+
+/* ---------------------------------------------------------------------------
+   SISTEMAS DEL MUNDO
+
+   TREASURY IS NOT A QUICK BATTLE. Barracas y Tesorería se dibujan como
+   hermanas de Batallas Libres, no como un botón dentro de su cabecera.
+   --------------------------------------------------------------------------- */
+.world-systems {
+  position: absolute;
+  z-index: 6;
+  right: 1.6%;
+  bottom: max(2.5%, env(safe-area-inset-bottom));
+  width: min(360px, 32%);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: .3rem;
+  padding: .4rem;
+}
+.world-system {
+  position: relative;
+  display: grid;
+  gap: .1rem;
+  min-height: 56px;
+  padding: .35rem .4rem;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  color: #f3d79a;
+  background: linear-gradient(150deg, rgba(35,28,18,.95), rgba(10,10,8,.95));
+  text-align: left;
+}
+.world-system strong { font-size: .52rem; letter-spacing: .07em; }
+.world-system small { overflow: hidden; color: #a99a80; font-size: .44rem; line-height: 1.25; }
+.world-icon { font-size: .9rem; }
+.world-badge {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #c53a2b;
+  color: #fff;
+  font: 900 .44rem/16px ui-monospace, monospace;
+  font-style: normal;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------------------
+   BARRACAS
+
+   Cabecera fija y cuerpo desplazable, igual que el Centro de Notificaciones:
+   con siete héroes hay que poder llegar al último.
+   --------------------------------------------------------------------------- */
+.barracks-scene {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  min-height: 100dvh;
+  padding: max(1rem, env(safe-area-inset-top)) clamp(1rem, 4vw, 3rem) 0;
+  overflow: hidden;
+  background: radial-gradient(circle at 78% 8%, rgba(120,90,40,.18), transparent 42%), #07080a;
+}
+.barracks-top { display: flex; flex: 0 0 auto; align-items: center; gap: 1rem; margin-bottom: .8rem; }
+.barracks-top h1 { margin: 0; color: #f3d79a; font-size: 1.15rem; }
+.barracks-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-bottom: max(1.5rem, calc(env(safe-area-inset-bottom) + 1rem));
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+.barracks-bucket { margin: 1rem 0 .45rem; color: var(--gold-bright); font: 900 .62rem/1 ui-monospace, monospace; letter-spacing: .18em; }
+.barracks-note { margin: 1.2rem 0 0; color: #8d806d; font-size: .58rem; line-height: 1.5; }
+.last-formation { padding: .7rem .8rem; }
+.formation-heroes { margin: .2rem 0; color: #f3d79a; font-size: .78rem; }
+.formation-quest { display: flex; align-items: center; justify-content: space-between; gap: .6rem; margin: .2rem 0 0; }
+.formation-quest strong { color: #cbbda5; font-size: .68rem; font-weight: 400; }
+.formation-quest em { color: var(--gold-bright); font: 900 .56rem ui-monospace, monospace; font-style: normal; letter-spacing: .1em; }
+
+.hero-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .5rem; }
+.hero-card {
+  display: grid;
+  align-content: start;
+  gap: .18rem;
+  padding: .6rem .65rem;
+  border: 1px solid var(--line);
+  background: linear-gradient(148deg, rgba(28,24,17,.97), rgba(10,10,8,.97));
+}
+.hero-card.agent { border-left: 3px solid #36e9a9; }
+.hero-card.party { border-left: 3px solid var(--gold-bright); }
+.hero-card.fresh { opacity: .78; }
+.hero-card header { display: flex; align-items: baseline; justify-content: space-between; gap: .4rem; }
+.hero-card header strong { color: #f3d79a; font-size: .72rem; letter-spacing: .05em; }
+.hero-card header em { color: #9ad9bd; font: 900 .4rem ui-monospace, monospace; font-style: normal; letter-spacing: .06em; }
+.hero-class { color: #a99a80; font-size: .52rem; }
+.hero-level { margin: .25rem 0 .1rem; color: #f0d9a8; font: 900 .6rem ui-monospace, monospace; letter-spacing: .12em; }
+.hero-xp { height: 7px; overflow: hidden; border: 1px solid #3a2f22; background: #120e09; }
+.hero-xp span { display: block; height: 100%; background: linear-gradient(90deg, #b7791f, #f3bf57); }
+.hero-xp-label { color: #8d806d; font-size: .44rem; }
+.hero-stats { margin: .35rem 0 .4rem; padding: 0; list-style: none; }
+.hero-stats li { display: flex; justify-content: space-between; gap: .4rem; color: #bcae95; font-size: .5rem; line-height: 1.6; }
+.hero-stats b { color: #f3d79a; }
+.hero-empty { margin: .2rem 0; color: #8d806d; font-size: .5rem; line-height: 1.4; }
+.hero-card .ghost-button { min-height: 30px; padding: .25rem; font-size: .48rem; }
+
+.hero-sheet {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: grid;
+  padding: max(14px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom));
+  place-items: center;
+  background: #030403e8;
+}
+.hero-sheet article {
+  position: relative;
+  width: min(560px, 100%);
+  max-height: 100%;
+  padding: 1rem 1.1rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  border: 1px solid var(--line);
+  background: linear-gradient(150deg, #1b1710f8, #0a0a08f8);
+}
+.hero-sheet h2 { margin: .1rem 0 .3rem; color: #f3d79a; font-size: 1.1rem; }
+.hero-sheet-level { margin: 0 0 .8rem; color: #cbbda5; font-size: .62rem; letter-spacing: .06em; }
+.hero-sheet .eyebrow { margin-top: .9rem; }
+.hero-caps { margin: .2rem 0; color: #bcae95; font-size: .6rem; line-height: 1.5; }
+.hero-abilities, .hero-masteries, .hero-deeds { margin: .2rem 0; padding: 0; list-style: none; }
+.hero-abilities li, .hero-masteries li, .hero-deeds li { padding: .35rem 0; border-bottom: 1px solid #241d13; }
+.hero-abilities strong, .hero-masteries strong, .hero-deeds strong { display: block; color: #f0d9a8; font-size: .64rem; }
+.hero-abilities small, .hero-masteries small, .hero-deeds small { display: block; color: #9d9078; font-size: .52rem; line-height: 1.45; }
+
+/* Tap compacto sobre un aliado durante la Battle: nunca un modal gigante. */
+.party-member { cursor: pointer; }
+.party-member.peeking { box-shadow: inset 0 0 0 1px var(--gold-bright); }
+.party-peek { margin: .22rem 0 0; color: #e7d3aa; font-size: .42rem; line-height: 1.35; }
+
+/* Informe de acción: hechos, no relato. */
+.after-action { padding: .7rem .8rem; margin-top: .6rem; }
+.after-action h3 { margin: .1rem 0 .4rem; color: #f3d79a; font-size: .8rem; }
+.aar-facts { display: grid; grid-template-columns: repeat(2, 1fr); gap: .2rem .6rem; margin: 0 0 .4rem; padding: 0; list-style: none; }
+.aar-facts li { display: flex; justify-content: space-between; color: #bcae95; font-size: .52rem; }
+.aar-facts b { color: #f3d79a; }
+.aar-party, .aar-agent { margin: .12rem 0; color: #cbbda5; font-size: .54rem; }
+.aar-lessons { margin: .4rem 0 0; padding: 0; list-style: none; }
+.aar-lessons li { color: #9d9078; font-size: .52rem; line-height: 1.5; }
+
+@media (max-width: 520px) {
+  .hero-grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
+  .aar-facts { grid-template-columns: 1fr; }
 }

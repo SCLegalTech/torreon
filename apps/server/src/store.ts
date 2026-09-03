@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { ensureRoster } from "./barracks.js";
+import { reconcileBattleProjection } from "./battle.js";
 import { emptyAgentSlot } from "./companions.js";
 import type { RealmState } from "./domain.js";
 import { backfillEncounter } from "./horde.js";
 import { backfillNotifications } from "./notifications.js";
-import { freshParty } from "./party.js";
+import { freshParty, refreshPartyDisplay } from "./party.js";
 import { DEV_ENTITLEMENTS, freshUsage, rolloverUsage } from "./product.js";
 
 const now = () => new Date().toISOString();
@@ -20,6 +22,12 @@ export function createInitialState(): RealmState {
     },
     inventory: { items: [], initializedAt: undefined },
     companionAssists: [],
+    companionExecutions: [],
+    heroes: {},
+    progressionLedger: [],
+    afterActionReports: [],
+    battleLessons: [],
+    playbooks: [],
     character: {
       xp: 0,
       aura: 0,
@@ -101,13 +109,22 @@ export class JsonRealmStore {
     state.financialTransactions ??= [];
     // Capa de producto: se completan los campos que falten sin pisar los puestos.
     state.entitlements = { ...DEV_ENTITLEMENTS, ...(state.entitlements ?? {}) };
-    state.usage ??= freshUsage();
+    // La telemetría nueva empieza en cero sin pisar lo ya contado hoy.
+    state.usage = { ...freshUsage(), ...(state.usage ?? {}) };
     rolloverUsage(state.usage);
     // Reinos anteriores a la hoja de personaje empiezan en cero, no en inventado.
     state.character ??= { xp: 0, aura: 0, mastery: {}, rewardedQuestIds: [] };
     state.inventory ??= { items: [] };
     state.inventory.items ??= [];
     state.companionAssists ??= [];
+    // BARRACAS y MEMORIA DE BATALLA: un reino anterior nace sin ellas y las
+    // estrena vacías. NO se fabrican estadísticas retroactivas de la nada.
+    state.companionExecutions ??= [];
+    state.heroes ??= {};
+    state.progressionLedger ??= [];
+    state.afterActionReports ??= [];
+    state.battleLessons ??= [];
+    state.playbooks ??= [];
     state.character.mastery ??= {};
     state.character.rewardedQuestIds ??= [];
     for (const quest of state.quests) {
@@ -145,8 +162,13 @@ export class JsonRealmStore {
           battle.enemies = backfillEncounter(battle.encounterSeed, historicHealth);
         }
         if ((battle.status as string) === "lost") battle.status = "awaiting_replan";
-        // Una espera externa nunca puede exponer una Battle activa.
-        if (battle.status === "active" && quest.status === "waiting_external") battle.status = "suspended_external";
+        // NOMBRE VISIBLE ≠ ID INTERNO: una formación guardada antes de la
+        // corrección canónica lleva «Roko» dentro. Se corrige el nombre y NADA
+        // más: id, HP, escudo y cicatrices siguen exactamente igual.
+        refreshPartyDisplay(battle.party);
+        // UNA SOLA FUENTE AUTORITATIVA. Nunca `won` en una vista y `active` en
+        // otra: si el contrato está validado, la Battle está ganada aquí también.
+        reconcileBattleProjection(quest);
       }
       for (const step of quest.steps) {
         step.impactAwarded ??= step.status === "completed" ? step.weight : 0;
@@ -157,6 +179,9 @@ export class JsonRealmStore {
     for (const artifact of state.artifacts) {
       artifact.stepIds ??= [artifact.stepId];
     }
+    // El roster base se reconoce siempre; sus contadores siguen en cero hasta
+    // que alguien pelee de verdad. B-003: conocido no es haber participado.
+    ensureRoster(state);
     // BACKFILL SEGURO: sólo estado accionable ahora, idempotente por `key`.
     // Los registros nuevos persisten en la siguiente mutación; mientras tanto
     // el snapshot ya los ve, así que el jugador nunca «pierde» un pacto.

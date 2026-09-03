@@ -150,7 +150,9 @@ export interface QuestNode {
   validatedImpact: number;
   percent: number;
   battleStatus: BattleStatus;
+  /** Sólo por dependencia declarada. NUNCA por posición en la lista. */
   locked: boolean;
+  lockedBy?: string;
   isBoss: boolean;
   /** `standalone` = Quick Battle sin Campaña ni Acto. */
   scope: "standalone" | "campaign";
@@ -346,7 +348,8 @@ export interface RealmSnapshot {
         | "campaign_completed" | "campaign_abandoned"
         | "act_created" | "act_completed" | "act_focused" | "quest_assigned"
         | "quest_deleted" | "quest_focused"
-        | "recurring_obligation_created" | "recurring_obligation_updated" | "financial_transaction_recorded";
+        | "recurring_obligation_created" | "recurring_obligation_updated" | "financial_transaction_recorded"
+        | "hero_level_up" | "hero_discovered" | "after_action_report" | "event_invalidated";
       /** A qué entidad se refiere el hecho. La notificación nunca adivina. */
       entityType: EntityType;
       entityId: string;
@@ -381,6 +384,10 @@ export interface RealmSnapshot {
         | "companion_used"
         | "companion_combo_attack"
         | "agent_deployed"
+        | "companion_execution_started"
+        | "companion_execution_completed"
+        | "companion_assist_validated"
+        | "hero_level_up"
         | "battle_recontracted"
         | "party_heal"
         | "shield_gained"
@@ -400,6 +407,8 @@ export interface RealmSnapshot {
       critical?: boolean;
       sourceEnemyId?: string;
       companion?: CompanionId;
+      heroId?: HeroId;
+      level?: number;
       itemId?: InventoryItemId;
       allocations?: Array<{ sourceEnemyId?: string; sourceName?: string; target: PartyMemberId; damage: number; absorbed: number; critical?: boolean }>;
       enemyAllocations?: Array<{ enemyId: string; name: string; damage: number; killed: boolean }>;
@@ -455,4 +464,144 @@ export interface RealmSnapshot {
   treasury?: TreasuryView;
   entitlements?: Entitlements;
   usage?: UsageCounters;
+  /** 🛡️ Barracas: el grupo y los agentes con la historia que de verdad tienen. */
+  barracks?: BarracksView;
+  /** Navegación autoritativa. Tesorería NO cuelga de Batallas Libres. */
+  worldSystems?: WorldSystemView[];
+  afterActionReport?: AfterActionReport | null;
+  battleMemory?: BattleMemoryView;
+}
+
+// ---------------------------------------------------------------------------
+// 🛡️ BARRACAS Y MEMORIA DE BATALLA
+//
+// AN AGENT IS A HERO ONLY WHEN IT ACTUALLY PARTICIPATES.
+// LEVEL IS NOT PERMISSION.
+// ---------------------------------------------------------------------------
+
+export type HeroId = PartyMemberId | CompanionId;
+export type HeroKind = "party" | "agent";
+export type HeroAvailability = "connected" | "available" | "unavailable" | "unknown";
+export type AgentDeploymentState =
+  | "known"
+  | "available"
+  | "deployed"
+  | "participated"
+  | "contribution_validated"
+  | "unavailable";
+
+/** Una hazaña SIEMPRE cita un hecho: quest, paso, herramienta y veredicto. */
+export interface HeroDeed {
+  id: string;
+  heroId: HeroId;
+  questId: string;
+  questTitle: string;
+  stepId?: string;
+  summary: string;
+  sourceTool?: string;
+  outcome: "participated" | "verified" | "victory";
+  evidenceId?: string;
+  createdAt: string;
+}
+
+/** Nunca un Life Score: cada contador es específico y explicable. */
+export interface HeroCareerStats {
+  battlesEntered: number;
+  battlesWon: number;
+  questsCompleted: number;
+  campaignsCompleted: number;
+  validatedImpact: number;
+  executions: number;
+  successfulExecutions: number;
+  validatedAssists: number;
+  supportedImpact: number;
+  questsAssisted: number;
+  battlesWonWithParty: number;
+}
+
+export interface HeroProfileView {
+  id: HeroId;
+  kind: HeroKind;
+  displayName: string;
+  className: string;
+  level: number;
+  xp: number;
+  xpIntoLevel: number;
+  xpToNextLevel: number;
+  availability: HeroAvailability;
+  deployment: AgentDeploymentState;
+  stats: HeroCareerStats;
+  masteries: Array<{ domain: string; points: number; evidence: string[] }>;
+  capabilities: string[];
+  abilities: Array<{ id: string; name: string; description: string; triggeredBy: string }>;
+  recentDeeds: HeroDeed[];
+  lastDeployedAt?: string;
+}
+
+export interface LastFormationView {
+  questId: string;
+  questTitle: string;
+  result: "victory" | "in_progress" | "unresolved";
+  heroes: Array<{ id: HeroId; displayName: string; kind: HeroKind }>;
+  endedAt?: string;
+}
+
+export interface BarracksView {
+  heroes: HeroProfileView[];
+  lastFormation: LastFormationView | null;
+}
+
+export interface AfterActionReport {
+  id: string;
+  questId: string;
+  questTitle: string;
+  attempts: number;
+  plannedDurationMinutes: number;
+  actualActiveMs: number;
+  externalWaitMs: number;
+  replans: number;
+  unexpectedRequirements: number;
+  toolsUsed: string[];
+  companionsUsed: CompanionId[];
+  party: string[];
+  agentContribution: { executions: number; assistedSteps: number; comboDamage: number };
+  hordeNeutralized: boolean;
+  result: "victory";
+  outcome: string;
+  lessons: string[];
+  createdAt: string;
+}
+
+export interface BattleMemoryView {
+  durations: Array<{
+    signature: string;
+    title: string;
+    samples: number;
+    plannedMedianMinutes: number;
+    actualMedianMinutes: number;
+    driftRatio: number;
+  }>;
+  lessons: Array<{ id: string; questId: string; signature: string; text: string; createdAt: string }>;
+  playbooks: Array<{
+    id: string;
+    signature: string;
+    title: string;
+    typicalDurationMinutes: number;
+    evidenceExpectations: string[];
+    preferredCompanions: CompanionId[];
+    knownFriction: string[];
+    timesUsed: number;
+  }>;
+  reports: AfterActionReport[];
+}
+
+/** TREASURY IS NOT A QUICK BATTLE: la jerarquía la fija el Core. */
+export interface WorldSystemView {
+  id: "battle" | "quick_battles" | "campaigns" | "barracks" | "treasury" | "notifications";
+  icon: string;
+  label: string;
+  detail: string;
+  screen: string;
+  entityId?: string;
+  badge?: number;
 }

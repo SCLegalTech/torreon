@@ -16,7 +16,9 @@ import type {
   RealmHierarchy,
   RealmState,
   SagaView,
+  WorldSystemView,
 } from "./domain.js";
+import { battleStatusOf } from "./battle.js";
 
 /**
  * Modelos de lectura para el Dungeon Master.
@@ -217,10 +219,31 @@ export function questDetailFor(state: RealmState, questId: string): QuestDetail 
 
 const CLOSED_QUEST = new Set(["completed", "abandoned"]);
 
+/**
+ * POSITION IS PRESENTATION, NOT PERMISSION.
+ *
+ * Una Quest sólo espera turno si DECLARA una dependencia y esa dependencia
+ * sigue abierta, o si su Acto está bloqueado por una dependencia explícita.
+ * Estar tercera en una lista, no ser la `currentQuestId` legada o no haber
+ * llegado la última notificación NO bloquean absolutamente nada.
+ */
+export function questLockFor(state: RealmState, quest: Quest, actLocked: boolean, actTitle?: string): { locked: boolean; lockedBy?: string } {
+  if (actLocked) return { locked: true, lockedBy: actTitle ? `El acto «${actTitle}» todavía no está disponible.` : "Su acto todavía no está disponible." };
+  const deps = quest.dependsOnQuestIds ?? [];
+  for (const depId of deps) {
+    const dependency = state.quests.find((candidate) => candidate.id === depId);
+    if (!dependency) continue;
+    if (!CLOSED_QUEST.has(dependency.status)) {
+      return { locked: true, lockedBy: `Depende de «${dependency.title}», que sigue abierta.` };
+    }
+  }
+  return { locked: false };
+}
+
 function questNodeFor(
   quest: Quest,
   position: number,
-  locked: boolean,
+  lock: { locked: boolean; lockedBy?: string },
   isBoss: boolean,
   financeKind?: QuestNode["financeKind"],
 ): QuestNode {
@@ -234,8 +257,9 @@ function questNodeFor(
     durationMinutes: quest.durationMinutes,
     validatedImpact,
     percent: Math.min(100, validatedImpact),
-    battleStatus: quest.battle?.status ?? "pending",
-    locked,
+    battleStatus: battleStatusOf(quest),
+    locked: lock.locked,
+    lockedBy: lock.lockedBy,
     isBoss,
     scope: !quest.actId && !quest.campaignId ? "standalone" : "campaign",
     financeKind,
@@ -247,13 +271,11 @@ function actViewFor(state: RealmState, act: Act, position: number, locked: boole
     .map((questId) => state.quests.find((quest) => quest.id === questId))
     .filter((quest): quest is Quest => Boolean(quest));
 
-  let previousDone = true;
-  const nodes = quests.map((quest, index) => {
-    // El camino se abre en orden: un nodo espera a que caiga el anterior.
-    const node = questNodeFor(quest, index + 1, locked || !previousDone, index === quests.length - 1 && quests.length > 1);
-    previousDone = quest.status === "completed";
-    return node;
-  });
+  // GHOST LOCK ELIMINADO: ya no se bloquea por posición. Sólo una dependencia
+  // declarada —de la Quest o de su Acto— puede hacer que una Quest espere turno.
+  const nodes = quests.map((quest, index) =>
+    questNodeFor(quest, index + 1, questLockFor(state, quest, locked, act.title), index === quests.length - 1 && quests.length > 1),
+  );
 
   const completedQuests = quests.filter((quest) => quest.status === "completed").length;
   return {
@@ -296,7 +318,7 @@ function campaignViewFor(state: RealmState, campaign: Campaign): CampaignView {
 
   // Una quest puede colgar de la campaña sin Acto intermedio: también cuenta.
   const direct = state.quests.filter((quest) => quest.campaignId === campaign.id && !quest.actId);
-  const directQuests = direct.map((quest, index) => questNodeFor(quest, index + 1, false, false));
+  const directQuests = direct.map((quest, index) => questNodeFor(quest, index + 1, questLockFor(state, quest, false), false));
 
   const completedActs = acts.filter((act) => act.status === "completed").length;
   const totalQuests = acts.reduce((sum, act) => sum + act.totalQuests, 0) + directQuests.length;
@@ -367,7 +389,7 @@ export function hierarchyFor(state: RealmState, currentQuest: Quest | null, enga
       questNodeFor(
         quest,
         index + 1,
-        false,
+        questLockFor(state, quest, false),
         false,
         financeByQuestId.get(quest.id) ??
           (financeQuestNames.has(quest.title.toLowerCase()) ? "expense" : undefined),
@@ -389,4 +411,70 @@ export function hierarchyFor(state: RealmState, currentQuest: Quest | null, enga
     currentQuestId: currentQuest?.id ?? null,
     standaloneQuests,
   };
+}
+
+// ---------------------------------------------------------------------------
+// SISTEMAS DEL MUNDO
+//
+// TREASURY IS NOT A QUICK BATTLE.
+//
+// La jerarquía de navegación la fija el Core, no la maqueta: Barracas y
+// Tesorería son HERMANAS de Batallas Libres y de Campañas, nunca hijas suyas.
+// Un renderer que quiera moverlas tendrá que discutirlo con este modelo.
+// ---------------------------------------------------------------------------
+
+export function worldSystemsFor(
+  state: RealmState,
+  input: { engagedQuest: Quest | null; quickBattles: number; activeCampaigns: number; unreadNotifications: number },
+): WorldSystemView[] {
+  const systems: WorldSystemView[] = [];
+  if (input.engagedQuest) {
+    systems.push({
+      id: "battle",
+      icon: "⚔️",
+      label: "BATALLA ACTIVA",
+      detail: input.engagedQuest.title,
+      screen: "battle",
+      entityId: input.engagedQuest.id,
+    });
+  }
+  systems.push({
+    id: "quick_battles",
+    icon: "⚡",
+    label: "BATALLAS LIBRES",
+    detail: input.quickBattles === 0 ? "Sin Quick Battles abiertas" : `${input.quickBattles} abierta(s)`,
+    screen: "realm",
+    badge: input.quickBattles || undefined,
+  });
+  systems.push({
+    id: "campaigns",
+    icon: "🏰",
+    label: "CAMPAÑAS",
+    detail: input.activeCampaigns === 0 ? "Ningún frente abierto" : `${input.activeCampaigns} frente(s) abierto(s)`,
+    screen: "campaign",
+    badge: input.activeCampaigns || undefined,
+  });
+  systems.push({
+    id: "barracks",
+    icon: "🛡️",
+    label: "BARRACAS",
+    detail: "El grupo y los agentes con su historia real",
+    screen: "barracks",
+  });
+  systems.push({
+    id: "treasury",
+    icon: "💰",
+    label: "TESORERÍA",
+    detail: "Dinero real del reino",
+    screen: "treasury",
+  });
+  systems.push({
+    id: "notifications",
+    icon: "🔔",
+    label: "NOTIFICACIONES",
+    detail: input.unreadNotifications > 0 ? `${input.unreadNotifications} sin leer` : "Sin avisos pendientes",
+    screen: "notifications",
+    badge: input.unreadNotifications || undefined,
+  });
+  return systems;
 }

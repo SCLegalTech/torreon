@@ -4,6 +4,7 @@ import type {
   AttemptEndReason,
   BattleClock,
   BattleRecord,
+  BattleStatus,
   DamageAllocation,
   GameEvent,
   Quest,
@@ -117,6 +118,66 @@ export function battleClock(record: BattleRecord, nowMs: number): BattleClock {
 
 export function hordeIsDown(record: BattleRecord): boolean {
   return record.enemies.every((enemy) => enemy.status === "ko");
+}
+
+/**
+ * UNA SOLA FUENTE AUTORITATIVA DEL ESTADO DE LA BATALLA.
+ *
+ * Nunca puede ocurrir `won` en un sitio y `active` en otro. La Quest manda: si
+ * el contrato quedó validado, la Battle está ganada mire quien la mire; si el
+ * frente espera a un tercero, está suspendida; si la Quest se abandonó, no
+ * queda ningún combate vivo que pintar.
+ */
+export function battleStatusOf(quest: Quest): BattleStatus | "pending" {
+  const record = quest.battle;
+  if (!record) return "pending";
+  if (quest.status === "completed") return "won";
+  if (quest.status === "abandoned") return record.status === "active" ? "awaiting_replan" : record.status;
+  if (quest.status === "waiting_external" && record.status === "active") return "suspended_external";
+  return record.status;
+}
+
+/**
+ * Alinea el registro persistido con esa única verdad.
+ *
+ * No inventa nada: sólo impide que un estado a medias sobreviva a un fallo, a
+ * un redeploy o a una migración. Se aplica al leer y al cerrar una Battle.
+ */
+export function reconcileBattleProjection(quest: Quest, nowMs = Date.now()): boolean {
+  const record = quest.battle;
+  if (!record) return false;
+  const authoritative = battleStatusOf(quest);
+  if (authoritative === "pending") return false;
+  let changed = record.status !== authoritative;
+  record.status = authoritative;
+
+  if (authoritative === "won") {
+    // La forma de una victoria se impone entera, no sólo la etiqueta: un
+    // contrato validado al 100% no puede dejar un enemigo en pie, un reloj
+    // suspendido ni un intento abierto en NINGUNA proyección.
+    const timestamp = new Date(nowMs).toISOString();
+    for (const enemy of record.enemies) {
+      if (enemy.status === "ko" && enemy.health === 0) continue;
+      enemy.health = 0;
+      enemy.status = "ko";
+      changed = true;
+    }
+    if (!record.endedAt) {
+      record.endedAt = timestamp;
+      changed = true;
+    }
+    record.hordeNeutralizedAt ??= timestamp;
+    if (record.suspendedAt || record.pendingRecontract) changed = true;
+    delete record.suspendedAt;
+    delete record.pendingRecontract;
+    const attempt = record.attempts.find((candidate) => candidate.attempt === record.attempt);
+    if (attempt && !attempt.endedAt) {
+      attempt.endedAt = timestamp;
+      attempt.endReason = "won";
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 function pushGameEvent(state: RealmState, event: Omit<GameEvent, "id">): void {

@@ -95,7 +95,7 @@ export function createMcpServer(service: QuestService): McpServer {
     { name: "torreon", version: "0.1.0" },
     {
       instructions:
-        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito —de cualquier dominio— en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño. La mejor partida es la que el jugador juega sin tocar el teléfono: la evidencia debe entrar por la conversación, no por la pantalla del juego. Si el archivo, la imagen o los datos están cargados en TU conversación, ábrelos, examínalos y regístralos con attest_evidence_artifact declarando qué viste. Si el archivo está en el disco donde corre este MCP, usa attach_evidence_artifact y el servidor comprobará los hechos (existe, tamaño, tipo, hash, extracto). Reutiliza un mismo artefacto entre pasos con reuse_evidence_artifact: no dupliques sus bytes ni su identidad, pero emite un veredicto independiente por paso. Solo después emite el veredicto con submit_quest_evidence citando los artifactIds; no existe ningún atajo para cerrar un paso sin veredicto razonado; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante. Un artefacto que el servidor no pudo comprobar nunca justifica accepted por sí solo. Si la realidad refuta el plan activo, no borres ni reescribas la historia: propón un amendment y aplícalo sólo tras aceptación explícita. Un bloqueo externo sin acción disponible coloca la quest en waiting_external. La horda sólo contraataca mediante record_unexpected_requirement cuando aparece una complicación real y concreta; jamás por silencio ni por inactividad. El único ataque temporal legítimo lo aplica el propio servidor en diez ventanas repartidas por el plazo pactado en start_quest —con críticos derivados de la semilla del combate, nunca de un dado del cliente—, y una quest en waiting_external suspende esa presión. El grupo es Roko (guardia, escudo primero), Marqués (arquero: su caída cierra el intento) y Cordera (sanadora), más un cuarto slot que sólo ocupa un compañero que ejecutó algo real. La Horda son CUATRO enemigos con rostro: un arquero puede saltarse a Roko y un asesino puede caer sobre Cordera. Neutralizar a los cuatro detiene la presión pero NO es victoria: la victoria la firma el contrato validado al 100%. Puede haber varias campañas activas a la vez, pero UNA sola Battle con reloj: si ya hay una comprometida, otra quest se consulta pero no se inicia. Antes de crear estructura, usa classify_objective_scale: la escala la fijan los MINUTOS DE TRABAJO ACTIVO, nunca el calendario, y una microquest de quince minutos no necesita Acto ni Campaña.",
+        "Actúa como el Códice de la Marca, Dungeon Master del mundo real. Convierte cualquier propósito —de cualquier dominio— en un resultado verificable y pasos cuyos pesos sumen 100. Negocia en la conversación y no crees estado hasta resumir el contrato. La aceptación es explícita. El tiempo y los clics no causan daño. La mejor partida es la que el jugador juega sin tocar el teléfono: la evidencia debe entrar por la conversación, no por la pantalla del juego. Si el archivo, la imagen o los datos están cargados en TU conversación, ábrelos, examínalos y regístralos con attest_evidence_artifact declarando qué viste. Si el archivo está en el disco donde corre este MCP, usa attach_evidence_artifact y el servidor comprobará los hechos (existe, tamaño, tipo, hash, extracto). Reutiliza un mismo artefacto entre pasos con reuse_evidence_artifact: no dupliques sus bytes ni su identidad, pero emite un veredicto independiente por paso. Solo después emite el veredicto con submit_quest_evidence citando los artifactIds; no existe ningún atajo para cerrar un paso sin veredicto razonado; rejected causa 0, partial causa una parte y accepted concede todo el impacto restante. Un artefacto que el servidor no pudo comprobar nunca justifica accepted por sí solo. Si la realidad refuta el plan activo, no borres ni reescribas la historia: propón un amendment y aplícalo sólo tras aceptación explícita. Un bloqueo externo sin acción disponible coloca la quest en waiting_external. La horda sólo contraataca mediante record_unexpected_requirement cuando aparece una complicación real y concreta; jamás por silencio ni por inactividad. El único ataque temporal legítimo lo aplica el propio servidor en diez ventanas repartidas por el plazo pactado en start_quest —con críticos derivados de la semilla del combate, nunca de un dado del cliente—, y una quest en waiting_external suspende esa presión. El grupo es Roku (guardia, escudo primero), Marqués (arquero: su caída cierra el intento) y Cordera (sanadora), más un cuarto slot que sólo ocupa un compañero que ejecutó algo real. El personaje se llama ROKU, con U: escríbelo siempre así aunque su id interno siga siendo `roko`. Cuando uses de verdad a Opus, Codex, Claude o Gemini para un paso, decláralo: lo más barato es pasar sourceProvider, sourceTool y executionRef dentro de submit_quest_evidence o verify_step_evidence, y el Core registra la participación y —si la evidencia se acepta— el assist validado en UNA sola operación autoritativa. record_companion_assist sigue sirviendo para mostrar el despliegue ANTES de la validación y ahora es idempotente: repetir la misma ejecución real no duplica nada. Un agente no golpea por estar disponible ni por que lo llames muchas veces; golpea cuando su contribución termina validada, y cada compañero cuenta como mucho una vez por paso. Nunca llames a un agente sólo para subir estadísticas: cada ejecución debe tener intención de contribución sobre el paso actual, y si existe una herramienta determinista especializada, prefiérela antes que razonar de más. Consulta get_barracks para saber quién ha peleado de verdad, y get_planning_hint antes de proponer un plazo: si el reino ya sabe que un trabajo así toma 47 minutos, no vuelvas a proponer 20 sin una razón. Reconocer un playbook no lo acepta ni lo inicia: pregunta. El nivel de un héroe es gameplay y NUNCA un permiso: enviar, firmar, pagar, borrar o desplegar siguen exigiendo autorización humana real sea cual sea el nivel. Y si registraste un hecho por error operativo, no lo borres ni lo reescribas: anúlalo con invalidate_event explicando por qué. La Horda son CUATRO enemigos con rostro: un arquero puede saltarse a Roku y un asesino puede caer sobre Cordera. Neutralizar a los cuatro detiene la presión pero NO es victoria: la victoria la firma el contrato validado al 100%. Puede haber varias campañas activas a la vez, pero UNA sola Battle con reloj: si ya hay una comprometida, otra quest se consulta pero no se inicia. Antes de crear estructura, usa classify_objective_scale: la escala la fijan los MINUTOS DE TRABAJO ACTIVO, nunca el calendario, y una microquest de quince minutos no necesita Acto ni Campaña.",
     },
   );
 
@@ -299,10 +299,12 @@ export function createMcpServer(service: QuestService): McpServer {
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
     async (args) => {
-      const assist = await service.recordCompanionAssist(args);
+      const { assist, duplicate } = await service.recordCompanionAssist(args);
       return toolResult(
-        `Ayuda de ${assist.companion} registrada como pendiente de validación. El combo llegará si la evidencia del paso se acepta.`,
-        { assist },
+        duplicate
+          ? `Esa misma ejecución de ${assist.companion} ya estaba registrada. Mismo hecho real, mismo registro: no se duplican stats, XP ni combo.`
+          : `Ayuda de ${assist.companion} registrada como pendiente de validación. El combo llegará si la evidencia del paso se acepta.`,
+        { assist, duplicate },
       );
     },
   );
@@ -644,6 +646,14 @@ export function createMcpServer(service: QuestService): McpServer {
           .max(20)
           .optional()
           .describe("Artefactos entregados con attach_evidence_artifact en los que se apoya este veredicto."),
+        sourceProvider: z
+          .enum(["opus", "codex", "claude", "gemini"])
+          .optional()
+          .describe(
+            "Compañero REAL cuya ejecución produjo esta prueba. Declararlo aquí registra su participación y, si el veredicto la acepta, su assist validado en UNA sola operación: no hace falta llamar antes a record_companion_assist.",
+          ),
+        sourceTool: z.string().max(120).optional().describe("Herramienta concreta que se ejecutó, p. ej. gmail_search_inbox."),
+        executionRef: z.string().max(200).optional().describe("Referencia de esa ejecución. Repetirla NO duplica la participación."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
@@ -723,11 +733,17 @@ export function createMcpServer(service: QuestService): McpServer {
         stepId: z.string().uuid(),
         note: z.string().max(2000).optional().describe("Declaración del jugador sobre lo que ocurrió."),
         artifactIds: z.array(z.string().uuid()).max(20).optional().describe("Artefactos a considerar. Por defecto, todos los del paso."),
+        sourceProvider: z
+          .enum(["opus", "codex", "claude", "gemini"])
+          .optional()
+          .describe("Compañero real cuya ejecución produjo la prueba. Registra su participación en la misma operación."),
+        sourceTool: z.string().max(120).optional(),
+        executionRef: z.string().max(200).optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async ({ questId, stepId, note, artifactIds }) => {
-      const result = await service.verifyStep(questId, stepId, { note, artifactIds });
+    async ({ questId, stepId, note, artifactIds, sourceProvider, sourceTool, executionRef }) => {
+      const result = await service.verifyStep(questId, stepId, { note, artifactIds, sourceProvider, sourceTool, executionRef });
       const message = result.battle.isKo
         ? `KO. «${result.quest.title}» fue completada con evidencia validada.`
         : `Veredicto ${result.judgement.verdict}: ${result.judgement.reasoning} La horda conserva ${result.battle.enemyHealth} puntos.`;
@@ -1062,6 +1078,129 @@ export function createMcpServer(service: QuestService): McpServer {
           : `Movimiento de ${result.transaction.amount.toLocaleString("es-CO")} COP registrado${result.obligation ? ` para «${result.obligation.name}»` : ""}.`,
         result,
       );
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // BARRACAS Y MEMORIA DE BATALLA
+  //
+  // AN AGENT IS A HERO ONLY WHEN IT ACTUALLY PARTICIPATES.
+  // THE PARTY REMEMBERS WHAT IT HAS DONE.
+  // THE GAME LEARNS HOW LONG REAL WORK ACTUALLY TAKES.
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "get_barracks",
+    {
+      title: "Abrir las Barracas",
+      description:
+        "Lee el grupo (Roku, Marqués, Cordera) y los agentes (Opus, Claude, Codex, Gemini) con su carrera REAL: nivel, XP, estadísticas, maestrías explicables y hazañas verificadas. Un agente que nunca ejecutó nada aparece conocido y con todos sus contadores en cero: no se le inventan estadísticas ni hazañas. El nivel es gameplay y NO concede ningún permiso: enviar, firmar, pagar, borrar o desplegar siguen exigiendo confirmación humana sea cual sea el nivel.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async () => {
+      const barracks = await service.barracks();
+      const veterans = barracks.heroes.filter((hero) => hero.kind === "agent" && hero.stats.executions > 0);
+      const resumen =
+        veterans.length > 0
+          ? `Agentes con historia real: ${veterans.map((hero) => `${hero.displayName} (nv ${hero.level}, ${hero.stats.validatedAssists} assist validados)`).join(", ")}.`
+          : "Ningún agente ha ejecutado todavía nada real: el cuarto slot sigue vacío.";
+      return toolResult(resumen, { barracks });
+    },
+  );
+
+  server.registerTool(
+    "set_hero_availability",
+    {
+      title: "Declarar la disponibilidad de un aliado",
+      description:
+        "Marca si un compañero está conectado, disponible o no disponible ahora mismo. Disponible NO es desplegado y NO es haber participado. Si un conector deja de existir, esto NO borra al héroe ni su historia: sólo lo marca como no disponible conservando su último despliegue.",
+      inputSchema: {
+        heroId: z.enum(["roko", "marques", "cordera", "opus", "codex", "claude", "gemini"]),
+        availability: z.enum(["connected", "available", "unavailable", "unknown"]),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ heroId, availability }) => {
+      const barracks = await service.setHeroAvailability(heroId, availability);
+      return toolResult(`Disponibilidad de ${heroId} declarada como ${availability}. Su historia queda intacta.`, { barracks });
+    },
+  );
+
+  server.registerTool(
+    "get_battle_memory",
+    {
+      title: "Consultar lo que el reino aprendió",
+      description:
+        "Duraciones reales frente a las pactadas, lecciones concretas y playbooks de batallas repetidas. Consúltalo ANTES de proponer un plazo: si un trabajo así tomó 47 minutos de mediana, no vuelvas a proponer 20 sin una razón. Esto NO cambia ningún contrato ya aceptado.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async () => {
+      const memory = await service.battleMemory();
+      const drift = memory.durations.filter((entry) => entry.driftRatio > 1.2);
+      const resumen =
+        drift.length > 0
+          ? `El reino subestima ${drift.length} tipo(s) de trabajo. Ej.: «${drift[0].title}» se planea en ${drift[0].plannedMedianMinutes} min y toma ${drift[0].actualMedianMinutes}.`
+          : `${memory.reports.length} informe(s) de acción registrados.`;
+      return toolResult(resumen, { memory });
+    },
+  );
+
+  server.registerTool(
+    "get_planning_hint",
+    {
+      title: "Pedir memoria antes de planear",
+      description:
+        "Dada una intención NUEVA, devuelve lo que el reino ya sabe de un trabajo parecido: duración real mediana, lecciones aprendidas, playbook y compañeros que funcionaron. Úsalo al planear; nunca para repactar en silencio un contrato vivo, porque cambiar un pacto aceptado exige un amendment sellado por el jugador. Reconocer un playbook tampoco lo acepta ni lo inicia: pregunta primero.",
+      inputSchema: { intent: z.string().min(4).max(500) },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ intent }) => {
+      const hint = await service.planningHint(intent);
+      const resumen = hint.suggestedDurationMinutes
+        ? `Historial de ${hint.samples} batalla(s) parecida(s): mediana real ${hint.suggestedDurationMinutes} min (se planearon ${hint.plannedMedianMinutes}).`
+        : "El reino todavía no tiene historia de un trabajo parecido: estima con lo que sepas y luego aprenderá.";
+      return toolResult(resumen, { hint });
+    },
+  );
+
+  server.registerTool(
+    "get_after_action_report",
+    {
+      title: "Leer el informe de acción de una Battle",
+      description:
+        "Informe determinista de una Battle ganada: duración real frente a la pactada, replanes, exigencias imprevistas, herramientas, compañeros y lecciones. Se genera desde los hechos, no desde un relato.",
+      inputSchema: { questId: z.string().uuid() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId }) => {
+      const report = await service.afterActionReport(questId);
+      return toolResult(
+        report
+          ? `«${report.questTitle}»: ${Math.round(report.actualActiveMs / 60_000)} min activos frente a ${report.plannedDurationMinutes} pactados, ${report.replans} replan(es).`
+          : "Esta Quest todavía no tiene informe de acción: sólo lo genera una victoria.",
+        { report },
+      );
+    },
+  );
+
+  server.registerTool(
+    "invalidate_event",
+    {
+      title: "Anular un hecho registrado por error",
+      description:
+        "Marca como inválido un hecho registrado por un error OPERATIVO —por ejemplo un unexpected_requirement que no correspondía a ninguna exigencia real—. NO borra nada: la auditoría lo conserva con quién lo anuló y por qué, y las proyecciones de gameplay dejan de contarlo. Si ese hecho había golpeado al grupo, el daño se devuelve con exactitud. Nunca la uses para deshacer historia real: la evidencia validada, el impacto y el dinero no se anulan desde aquí.",
+      inputSchema: {
+        eventId: z.string().uuid().describe("Id del LifeEvent o GameEvent registrado por error."),
+        reason: z.string().min(10).max(300).describe("Por qué fue un error operativo y no un hecho real."),
+        invalidatedBy: z.string().max(60).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const result = await service.invalidateEvent(args);
+      return toolResult(result.message, result);
     },
   );
 

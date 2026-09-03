@@ -29,6 +29,34 @@ export type EnemyRole = "tank" | "ranged" | "assassin" | "breaker" | "support" |
  */
 export type TargetPolicy = "frontline" | "backline" | "lowest_health" | "shield_first" | "weighted";
 export type PartyMemberId = "roko" | "marques" | "cordera";
+/**
+ * BARRACAS.
+ *
+ * Un héroe es un miembro del grupo o un agente real. El id interno es estable
+ * —`roko` sigue siendo `roko` en toda la historia persistida— y el nombre
+ * visible se resuelve en la lectura: renombrar la pantalla nunca rompe el log.
+ */
+export type HeroId = PartyMemberId | CompanionId;
+export type HeroKind = "party" | "agent";
+/** Si un conector desaparece, el héroe NO se borra: se marca no disponible. */
+export type HeroAvailability = "connected" | "available" | "unavailable" | "unknown";
+/**
+ * ESTAR INSTALADO NO ES HABER PELEADO.
+ *
+ *   known                  — el reino sabe que existe.
+ *   available              — podría asistir.
+ *   deployed               — ocupa el cuarto slot de una Battle viva.
+ *   participated           — ejecutó algo real alguna vez.
+ *   contribution_validated — una evidencia aceptada citó su ejecución.
+ *   unavailable            — el conector ya no responde. La historia se queda.
+ */
+export type AgentDeploymentState =
+  | "known"
+  | "available"
+  | "deployed"
+  | "participated"
+  | "contribution_validated"
+  | "unavailable";
 /** Un Acto es planificación operativa del Códice: no exige ceremonia propia. */
 export type ActStatus = "locked" | "available" | "active" | "completed" | "abandoned";
 /** Una Campaña sí exige pacto: nace en borrador y sólo el jugador la activa. */
@@ -166,6 +194,13 @@ export interface Quest extends Omit<QuestPlanInput, "steps" | "campaignTitle"> {
   actId?: string;
   campaignId?: string;
   sagaId?: string;
+  /**
+   * POSITION IS PRESENTATION, NOT PERMISSION.
+   *
+   * Una Quest sólo espera turno si DECLARA aquí de quién depende y esa Quest
+   * sigue abierta. Estar tercera en una lista no bloquea nada.
+   */
+  dependsOnQuestIds?: string[];
   steps: QuestStep[];
   createdAt: string;
   updatedAt: string;
@@ -282,7 +317,11 @@ export interface RealmEvent {
     | "quest_assigned"
     | "recurring_obligation_created"
     | "recurring_obligation_updated"
-    | "financial_transaction_recorded";
+    | "financial_transaction_recorded"
+    | "hero_level_up"
+    | "hero_discovered"
+    | "after_action_report"
+    | "event_invalidated";
   /**
    * A QUÉ ENTIDAD se refiere este hecho.
    *
@@ -316,8 +355,34 @@ export interface CompanionAssist {
   contributionSummary: string;
   status: "used_pending_validation" | "contribution_validated" | "expired";
   bonusDamage?: number;
+  /**
+   * SAME REAL EXECUTION -> SAME ASSIST RECORD.
+   *
+   * `questId:stepId:companion:executionRef`, o `…:sourceTool` dentro de una
+   * ventana corta cuando no hay referencia. Un reintento de red no infla stats,
+   * ni XP, ni combo, ni historia.
+   */
+  assistKey?: string;
   createdAt: string;
   validatedAt?: string;
+}
+
+/**
+ * UNA EJECUCIÓN REAL DE UN COMPAÑERO.
+ *
+ * Permite que el frontend vea «OPUS HA ENTRADO EN COMBATE» sin esperar al final
+ * de la Quest. Una ejecución NO concede daño: sólo prueba participación.
+ */
+export interface CompanionExecution {
+  executionRef: string;
+  companionId: CompanionId;
+  questId: string;
+  stepId?: string;
+  tool?: string;
+  startedAt: string;
+  completedAt?: string;
+  status: "running" | "succeeded" | "failed";
+  summary: string;
 }
 
 export interface EvidenceRecord {
@@ -364,7 +429,21 @@ export interface EvidenceArtifact {
   createdAt: string;
 }
 
-export interface LifeEvent {
+/**
+ * ANULAR NO ES BORRAR.
+ *
+ * Un hecho registrado por error operativo se marca `invalidated`: la auditoría
+ * lo conserva y las proyecciones de gameplay lo ignoran. Nunca hard delete: la
+ * historia no se falsifica ni hacia arriba ni hacia abajo.
+ */
+export interface EventInvalidation {
+  status?: "recorded" | "invalidated";
+  invalidatedAt?: string;
+  invalidatedBy?: string;
+  invalidationReason?: string;
+}
+
+export interface LifeEvent extends EventInvalidation {
   id: string;
   type: "evidence_submitted" | "unexpected_requirement";
   questId: string;
@@ -380,7 +459,7 @@ export interface LifeEvent {
  * Contrato renderer-agnóstico. React lo dibuja hoy; Unity podrá consumir los
  * mismos eventos mañana sin portar ninguna regla de negocio.
  */
-export interface GameEvent {
+export interface GameEvent extends EventInvalidation {
   id: string;
   type:
     | "quest_attack"
@@ -401,6 +480,10 @@ export interface GameEvent {
     | "companion_used"
     | "companion_combo_attack"
     | "agent_deployed"
+    | "companion_execution_started"
+    | "companion_execution_completed"
+    | "companion_assist_validated"
+    | "hero_level_up"
     | "battle_started"
     | "battle_recontracted"
     | "battle_won"
@@ -423,6 +506,10 @@ export interface GameEvent {
   /** Quién dio el golpe, cuando la Horda tiene rostro. */
   sourceEnemyId?: string;
   abilityId?: string;
+  /** Héroe al que se refiere el hecho (subida de nivel, hazaña, ejecución). */
+  heroId?: HeroId;
+  /** Nivel alcanzado en un `hero_level_up`. */
+  level?: number;
   /** Desglose de un golpe sostenido: cada línea es atribuible. */
   allocations?: DamageAllocation[];
   /** Reparto del ataque del Marqués entre los enemigos vivos. */
@@ -507,6 +594,210 @@ export interface Saga {
   completedAt?: string;
 }
 
+// ---------------------------------------------------------------------------
+// BARRACAS — LA PARTIDA RECUERDA LO QUE HIZO
+//
+// AN AGENT IS A HERO ONLY WHEN IT ACTUALLY PARTICIPATES.
+// LEVEL IS NOT PERMISSION.
+//
+// Aquí no hay Life Score, Productivity Score ni Worth Score: las estadísticas
+// son específicas, explicables y nacen de hechos validados, nunca de clics.
+// ---------------------------------------------------------------------------
+
+/** Un hecho legible atado a la Quest, el paso y la prueba que lo respaldan. */
+export interface HeroDeed {
+  id: string;
+  heroId: HeroId;
+  questId: string;
+  questTitle: string;
+  stepId?: string;
+  summary: string;
+  sourceTool?: string;
+  /** `verified` exige evidencia aceptada. Nunca se narra una hazaña sin hecho. */
+  outcome: "participated" | "verified" | "victory";
+  evidenceId?: string;
+  createdAt: string;
+}
+
+/**
+ * CARRERA ≠ COMBATE.
+ *
+ * El HP de una Battle vive en `BattleRecord.party`. Esto es lo que sobrevive a
+ * todas las batallas y jamás lo pisa un snapshot viejo de vida.
+ */
+export interface HeroCareerStats {
+  battlesEntered: number;
+  battlesWon: number;
+  questsCompleted: number;
+  campaignsCompleted: number;
+  /** Impacto validado acumulado. NO es dinero ni puntuación de vida. */
+  validatedImpact: number;
+  executions: number;
+  successfulExecutions: number;
+  validatedAssists: number;
+  /** Impacto validado de los pasos que este agente asistió. Nunca son pesos. */
+  supportedImpact: number;
+  questsAssisted: number;
+  battlesWonWithParty: number;
+}
+
+export interface HeroCareerState {
+  id: HeroId;
+  kind: HeroKind;
+  xp: number;
+  level: number;
+  /** Maestrías explicables: cada punto viene de un resultado validado. */
+  masteries: Record<string, number>;
+  stats: HeroCareerStats;
+  known: boolean;
+  availability: HeroAvailability;
+  firstSeenAt: string;
+  lastDeployedAt?: string;
+  lastQuestId?: string;
+  deeds: HeroDeed[];
+}
+
+/** Cómo se explica una maestría. Sin esto, el número sería magia. */
+export interface MasteryBreakdown {
+  domain: string;
+  points: number;
+  evidence: string[];
+}
+
+export interface HeroAbilityView {
+  id: string;
+  name: string;
+  description: string;
+  /** Se dispara desde hechos reales del Core, jamás desde un botón de ataque. */
+  triggeredBy: string;
+}
+
+export interface HeroProfileView {
+  id: HeroId;
+  kind: HeroKind;
+  displayName: string;
+  className: string;
+  level: number;
+  xp: number;
+  xpIntoLevel: number;
+  xpToNextLevel: number;
+  availability: HeroAvailability;
+  deployment: AgentDeploymentState;
+  stats: HeroCareerStats;
+  masteries: MasteryBreakdown[];
+  capabilities: string[];
+  abilities: HeroAbilityView[];
+  recentDeeds: HeroDeed[];
+  lastDeployedAt?: string;
+}
+
+/** La última formación que peleó de verdad. Memoria emocional de la partida. */
+export interface LastFormationView {
+  questId: string;
+  questTitle: string;
+  result: "victory" | "in_progress" | "unresolved";
+  heroes: Array<{ id: HeroId; displayName: string; kind: HeroKind }>;
+  endedAt?: string;
+}
+
+export interface BarracksView {
+  heroes: HeroProfileView[];
+  lastFormation: LastFormationView | null;
+}
+
+/**
+ * INFORME DE ACCIÓN.
+ *
+ * Determinista: se genera desde eventos, sin pedirle nada a ningún modelo.
+ * La narrativa, si algún día llega, va ENCIMA de estos hechos.
+ */
+export interface AfterActionReport {
+  id: string;
+  questId: string;
+  questTitle: string;
+  attempts: number;
+  plannedDurationMinutes: number;
+  /** Reloj activo real: descuenta la espera externa. */
+  actualActiveMs: number;
+  externalWaitMs: number;
+  replans: number;
+  unexpectedRequirements: number;
+  toolsUsed: string[];
+  companionsUsed: CompanionId[];
+  party: string[];
+  agentContribution: { executions: number; assistedSteps: number; comboDamage: number };
+  hordeNeutralized: boolean;
+  result: "victory";
+  outcome: string;
+  lessons: string[];
+  createdAt: string;
+}
+
+/** Una lección concreta y reutilizable. No es chat guardado. */
+export interface BattleLesson {
+  id: string;
+  questId: string;
+  /** Firma normalizada de la actividad, para poder recuperarla al planear. */
+  signature: string;
+  text: string;
+  createdAt: string;
+}
+
+/**
+ * PLAYBOOK.
+ *
+ * Cuando una actividad se repite, el reino puede reconocerla. Nunca auto-acepta
+ * ni auto-inicia: Códice pregunta, y la evidencia del período nuevo es nueva.
+ */
+export interface QuestPlaybook {
+  id: string;
+  signature: string;
+  title: string;
+  steps: QuestStepInput[];
+  typicalDurationMinutes: number;
+  evidenceExpectations: string[];
+  preferredCompanions: CompanionId[];
+  knownFriction: string[];
+  timesUsed: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Lo que el reino aprendió sobre cuánto dura de verdad un trabajo así. */
+export interface DurationMemory {
+  signature: string;
+  title: string;
+  samples: number;
+  plannedMedianMinutes: number;
+  actualMedianMinutes: number;
+  /** > 1 significa que el reino subestima sistemáticamente este trabajo. */
+  driftRatio: number;
+}
+
+export interface BattleMemoryView {
+  durations: DurationMemory[];
+  lessons: BattleLesson[];
+  playbooks: QuestPlaybook[];
+  reports: AfterActionReport[];
+}
+
+/**
+ * SISTEMAS DEL MUNDO.
+ *
+ * TREASURY IS NOT A QUICK BATTLE. La jerarquía de navegación la fija el Core,
+ * no la maqueta: Barracas y Tesorería son hermanas de Batallas Libres, nunca
+ * hijas suyas.
+ */
+export interface WorldSystemView {
+  id: "battle" | "quick_battles" | "campaigns" | "barracks" | "treasury" | "notifications";
+  icon: string;
+  label: string;
+  detail: string;
+  screen: string;
+  entityId?: string;
+  badge?: number;
+}
+
 export interface RealmState {
   version: 1;
   /** Identidad del reino. Permite distinguir el reino local del de la nube. */
@@ -519,6 +810,21 @@ export interface RealmState {
   inventory: InventoryState;
   /** Ayudas reales de compañeros. Estar disponible no cuenta. */
   companionAssists: CompanionAssist[];
+  /** Ejecuciones reales, para ver al agente entrar antes de que cierre la Quest. */
+  companionExecutions: CompanionExecution[];
+  /** Carrera persistente de cada héroe, por id interno estable. */
+  heroes: Record<string, HeroCareerState>;
+  /**
+   * RETRIES MUST NOT CREATE FAKE HISTORY.
+   *
+   * Claves de recompensa ya aplicadas (XP, stats, hazañas). Un reintento
+   * técnico encuentra su clave y no concede nada por segunda vez.
+   */
+  progressionLedger: string[];
+  /** Informes de acción deterministas de cada Battle ganada. */
+  afterActionReports: AfterActionReport[];
+  battleLessons: BattleLesson[];
+  playbooks: QuestPlaybook[];
   financial: FinancialState;
   /**
    * MANY CAMPAIGNS. ONE ENGAGED BATTLE.
@@ -716,6 +1022,15 @@ export interface UsageCounters {
   codiceReasoningCalls: number;
   visionValidations: number;
   agentOrchestrations: number;
+  /**
+   * Cuánto trabajo real hicieron los compañeros hoy.
+   *
+   * Cuenta EJECUCIONES y VALIDACIONES, no mensajes: el número de mensajes no es
+   * proxy de costo ni de utilidad. No se guarda ningún prompt aquí.
+   */
+  companionExecutions: number;
+  companionSuccessfulExecutions: number;
+  companionValidatedAssists: number;
 }
 
 export type AdPlacementId = "battle_passive" | "battle_result" | "extra_battle_reward";
@@ -950,8 +1265,13 @@ export interface QuestNode {
   validatedImpact: number;
   percent: number;
   battleStatus: BattleStatus | "pending";
-  /** El camino se abre en orden: un nodo bloqueado espera al anterior. */
+  /**
+   * Sólo `true` si esta Quest declara una dependencia todavía abierta, o si su
+   * Acto la declara. NUNCA por posición: estar tercera no bloquea nada.
+   */
   locked: boolean;
+  /** Qué la bloquea exactamente, para que la pantalla no lo invente. */
+  lockedBy?: string;
   isBoss: boolean;
   /** `standalone` = Quick Battle sin Campaña ni Acto. `campaign` = tiene padres. */
   scope: "standalone" | "campaign";
@@ -1124,4 +1444,12 @@ export interface RealmSnapshot {
   /** Capa de producto config-driven. Ningún límite se aplica al jugador actual. */
   entitlements: Entitlements;
   usage: UsageCounters;
+  /** 🛡️ BARRACAS: el grupo y los agentes con su historia real. */
+  barracks: BarracksView;
+  /** Navegación autoritativa del mundo. Tesorería no cuelga de Batallas Libres. */
+  worldSystems: WorldSystemView[];
+  /** Informe determinista de la última Battle ganada de esta Quest, si existe. */
+  afterActionReport: AfterActionReport | null;
+  /** Lo que el reino aprendió sobre duraciones, lecciones y playbooks. */
+  battleMemory: BattleMemoryView;
 }

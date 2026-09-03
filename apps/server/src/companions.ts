@@ -1,4 +1,5 @@
 import type { AgentSlot, CompanionAssist, CompanionId } from "./domain.js";
+import { HERO_CLASS, HERO_DISPLAY_NAME } from "./progression.js";
 
 /**
  * LOS ALIADOS SÓLO AYUDAN SI REALMENTE LUCHARON.
@@ -16,10 +17,10 @@ export interface CompanionProfile {
 }
 
 export const COMPANIONS: Record<CompanionId, CompanionProfile> = {
-  opus: { id: "opus", name: "Opus", role: "Asesino de Automatización", affinities: ["solve-coagula", "legaltech", "automation"] },
-  codex: { id: "codex", name: "Codex", role: "Asesino de Ingeniería", affinities: ["development", "software"] },
-  claude: { id: "claude", name: "Claude", role: "Asesino Estratega", affinities: ["development", "planning"] },
-  gemini: { id: "gemini", name: "Gemini", role: "Asesino Oráculo", affinities: ["analysis", "research"] },
+  opus: { id: "opus", name: HERO_DISPLAY_NAME.opus, role: HERO_CLASS.opus, affinities: ["solve-coagula", "legaltech", "automation"] },
+  codex: { id: "codex", name: HERO_DISPLAY_NAME.codex, role: HERO_CLASS.codex, affinities: ["development", "software"] },
+  claude: { id: "claude", name: HERO_DISPLAY_NAME.claude, role: HERO_CLASS.claude, affinities: ["development", "planning"] },
+  gemini: { id: "gemini", name: HERO_DISPLAY_NAME.gemini, role: HERO_CLASS.gemini, affinities: ["analysis", "research"] },
 };
 
 /** El combo vale una parte del impacto validado, nunca un ataque aparte. */
@@ -68,9 +69,56 @@ export function pendingAssistsFor(assists: CompanionAssist[], questId: string, s
   });
 }
 
+/**
+ * TECHO DEL COMBO.
+ *
+ * Aunque cuatro compañeros toquen el mismo paso, el apoyo NUNCA puede valer más
+ * que la mitad del resultado real: el trabajo verificado sigue siendo la fuente
+ * del daño, y llamar agentes en cadena no es una vía de progreso.
+ */
+export const COMPANION_COMBO_CAP_MULTIPLIER = 0.5;
+
 export function comboDamageFor(impactAwarded: number, assistCount: number, jammed: boolean): number {
   if (assistCount === 0 || impactAwarded <= 0) return 0;
+  // Un compañero cuenta como mucho UNA vez por paso; el resto es techo duro.
   const raw = Math.round(impactAwarded * COMPANION_ASSIST_MULTIPLIER) * assistCount;
+  const capped = Math.min(raw, Math.max(1, Math.round(impactAwarded * COMPANION_COMBO_CAP_MULTIPLIER)));
   // Un Saboteador vivo recorta el combo una vez; no borra la contribución.
-  return jammed ? Math.floor(raw / 2) : raw;
+  return jammed ? Math.floor(capped / 2) : capped;
+}
+
+/**
+ * SAME REAL EXECUTION -> SAME ASSIST RECORD.
+ *
+ * Con `executionRef` la identidad es exacta. Sin ella, la misma herramienta
+ * sobre el mismo paso dentro de una ventana corta se considera el MISMO hecho:
+ * un reintento técnico no puede fabricar historia.
+ */
+export const ASSIST_DEDUPE_WINDOW_MS = 10 * 60_000;
+
+export function assistKeyFor(input: {
+  questId: string;
+  stepId: string;
+  companion: CompanionId;
+  executionRef?: string;
+  sourceTool?: string;
+}): string {
+  const base = `${input.questId}:${input.stepId}:${input.companion}`;
+  if (input.executionRef?.trim()) return `${base}:exec:${input.executionRef.trim()}`;
+  return `${base}:tool:${input.sourceTool?.trim() || "unspecified"}`;
+}
+
+/** Busca el registro que ya representa esta misma ejecución real, si existe. */
+export function findExistingAssist(
+  assists: CompanionAssist[],
+  key: string,
+  hasExecutionRef: boolean,
+  nowMs: number,
+): CompanionAssist | undefined {
+  return assists.find((assist) => {
+    if (assist.assistKey !== key) return false;
+    // Con referencia de ejecución la identidad no caduca: es el mismo hecho.
+    if (hasExecutionRef) return true;
+    return nowMs - Date.parse(assist.createdAt) <= ASSIST_DEDUPE_WINDOW_MS;
+  });
 }
