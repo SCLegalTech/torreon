@@ -815,6 +815,14 @@ export interface RealmState {
   /** Carrera persistente de cada héroe, por id interno estable. */
   heroes: Record<string, HeroCareerState>;
   /**
+   * Marca de la reconstrucción ÚNICA de carrera sobre historia ya existente.
+   *
+   * Sólo se reconstruye desde datos autoritativos —asistencias registradas y
+   * Quests completadas— y deduplicando por ejecución real: los reintentos que
+   * inflaron el registro antiguo NO se convierten en hazañas.
+   */
+  heroesBackfilledAt?: string;
+  /**
    * RETRIES MUST NOT CREATE FAKE HISTORY.
    *
    * Claves de recompensa ya aplicadas (XP, stats, hazañas). Un reintento

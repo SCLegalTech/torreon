@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { ensureRoster } from "./barracks.js";
+import { backfillHeroCareer, ensureRoster } from "./barracks.js";
 import { reconcileBattleProjection } from "./battle.js";
 import { emptyAgentSlot } from "./companions.js";
 import type { RealmState } from "./domain.js";
@@ -182,6 +182,9 @@ export class JsonRealmStore {
     // El roster base se reconoce siempre; sus contadores siguen en cero hasta
     // que alguien pelee de verdad. B-003: conocido no es haber participado.
     ensureRoster(state);
+    // Un reino con historia previa recupera su carrera UNA vez, desde datos
+    // autoritativos y deduplicando reintentos. Nunca inventa lo que no consta.
+    backfillHeroCareer(state);
     // BACKFILL SEGURO: sólo estado accionable ahora, idempotente por `key`.
     // Los registros nuevos persisten en la siguiente mutación; mientras tanto
     // el snapshot ya los ve, así que el jugador nunca «pierde» un pacto.

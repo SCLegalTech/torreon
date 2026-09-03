@@ -18,12 +18,17 @@ import {
   HERO_ABILITIES,
   HERO_CAPABILITIES,
   HERO_CLASS,
+  HERO_DEFAULT_MASTERY,
   HERO_DISPLAY_NAME,
   PARTY_HERO_IDS,
+  XP_REWARDS,
   freshHero,
   heroKindOf,
+  levelForXp,
   levelProgress,
 } from "./progression.js";
+import { assistKeyFor } from "./companions.js";
+import { buildAfterActionReport, storeAfterActionReport, upsertPlaybook } from "./battle-memory.js";
 
 /**
  * 🛡️ BARRACAS.
@@ -225,3 +230,178 @@ export function knownAgents(state: RealmState): CompanionId[] {
 }
 
 export { heroKindOf };
+
+// ---------------------------------------------------------------------------
+// MIGRACIÓN — LA HISTORIA QUE YA EXISTÍA
+//
+// Un reino anterior a las Barracas ya tiene historia real: asistencias
+// registradas y Quests completadas. Reconstruir la carrera desde ahí es
+// legítimo. Inventarla no.
+//
+// RETRIES MUST NOT CREATE FAKE HISTORY: el registro antiguo contiene llamadas
+// repetidas a `record_companion_assist` sobre la MISMA ejecución real, porque
+// hasta ahora la API las aceptaba. La reconstrucción las deduplica por su clave
+// de ejecución, así que un reintento de red no se convierte en una hazaña.
+//
+// Si un dato es ambiguo —una asistencia que apunta a una Quest que ya no
+// existe— NO SE INVENTA: simplemente no cuenta.
+// ---------------------------------------------------------------------------
+
+export function backfillHeroCareer(state: RealmState): boolean {
+  if (state.heroesBackfilledAt) return false;
+  const timestamp = now();
+  ensureRoster(state, timestamp);
+
+  // 1. ASISTENCIAS REALES, una por ejecución.
+  //
+  // Se agrupan por clave y de cada grupo sobrevive UN registro: el que quedó
+  // validado si lo hay, y si no el más antiguo. Elegir por posición en la lista
+  // perdería la validación real cuando el reintento llegó después.
+  const byKey = new Map<string, (typeof state.companionAssists)[number]>();
+  for (const assist of state.companionAssists ?? []) {
+    assist.assistKey ??= assistKeyFor(assist);
+    const previous = byKey.get(assist.assistKey);
+    if (!previous) {
+      byKey.set(assist.assistKey, assist);
+      continue;
+    }
+    const previousValidated = previous.status === "contribution_validated";
+    const currentValidated = assist.status === "contribution_validated";
+    if (currentValidated && !previousValidated) byKey.set(assist.assistKey, assist);
+    else if (currentValidated === previousValidated && Date.parse(assist.createdAt) < Date.parse(previous.createdAt)) {
+      byKey.set(assist.assistKey, assist);
+    }
+  }
+
+  const assisted = new Set<string>();
+  for (const assist of byKey.values()) {
+    const quest = state.quests.find((candidate) => candidate.id === assist.questId);
+    if (!quest) continue;
+
+    const hero = ensureHero(state, assist.companion, timestamp);
+    hero.availability = "connected";
+    hero.lastDeployedAt = assist.createdAt;
+    hero.lastQuestId = quest.id;
+    if (claimOnce(state, `execution:${assist.id}`)) {
+      hero.stats.executions += 1;
+      hero.stats.successfulExecutions += 1;
+    }
+    grantHeroXp(state, assist.companion, XP_REWARDS.agentExecution, `execution:${assist.id}`);
+    recordDeed(
+      state,
+      {
+        heroId: assist.companion,
+        questId: quest.id,
+        questTitle: quest.title,
+        stepId: assist.stepId,
+        summary: assist.contributionSummary,
+        sourceTool: assist.sourceTool,
+        outcome: "participated",
+      },
+      `assist:${assist.id}`,
+    );
+
+    if (assist.status === "contribution_validated") {
+      if (claimOnce(state, `validated_assist:${assist.id}`)) {
+        hero.stats.validatedAssists += 1;
+        hero.stats.supportedImpact += assist.bonusDamage ?? 0;
+      }
+      grantHeroXp(state, assist.companion, XP_REWARDS.agentValidatedAssist, `validated_assist:${assist.id}`);
+      grantMastery(state, assist.companion, HERO_DEFAULT_MASTERY[assist.companion], `assist:${assist.id}`);
+      recordDeed(
+        state,
+        {
+          heroId: assist.companion,
+          questId: quest.id,
+          questTitle: quest.title,
+          stepId: assist.stepId,
+          summary: assist.contributionSummary,
+          sourceTool: assist.sourceTool,
+          outcome: "verified",
+        },
+        `validated:${assist.id}`,
+      );
+      assisted.add(`${assist.companion}:${quest.id}`);
+    }
+  }
+
+  for (const pair of assisted) {
+    const [companion, questId] = pair.split(":") as [CompanionId, string];
+    const quest = state.quests.find((candidate) => candidate.id === questId);
+    if (!quest) continue;
+    const hero = ensureHero(state, companion, timestamp);
+    if (claimOnce(state, `quest_assisted:${companion}:${questId}`)) {
+      hero.stats.questsAssisted += 1;
+      if (quest.status === "completed") hero.stats.battlesWonWithParty += 1;
+    }
+    if (quest.status === "completed") {
+      recordDeed(
+        state,
+        {
+          heroId: companion,
+          questId: quest.id,
+          questTitle: quest.title,
+          summary: `${quest.title}: VICTORIA con contribución validada.`,
+          outcome: "victory",
+        },
+        `quest_victory:${quest.id}`,
+      );
+    }
+  }
+
+  // 2. EL GRUPO. Una Quest completada es un resultado validado, no un clic.
+  for (const quest of state.quests) {
+    const validatedImpact = quest.steps.reduce((sum, step) => sum + (step.impactAwarded ?? 0), 0);
+    for (const heroId of PARTY_HERO_IDS) {
+      const hero = ensureHero(state, heroId, timestamp);
+      if (quest.battle && claimOnce(state, `battle_entered:${heroId}:${quest.id}`)) {
+        hero.stats.battlesEntered += 1;
+      }
+      if (quest.battle) grantHeroXp(state, heroId, XP_REWARDS.battleEntered, `battle_entered:${quest.id}`);
+      if (quest.status !== "completed") continue;
+      if (claimOnce(state, `quest_completed:${heroId}:${quest.id}`)) {
+        hero.stats.questsCompleted += 1;
+        hero.stats.validatedImpact += validatedImpact;
+        if (quest.battle) hero.stats.battlesWon += 1;
+        hero.lastQuestId = quest.id;
+      }
+      grantHeroXp(state, heroId, XP_REWARDS.questCompleted, `quest_completed:${quest.id}`);
+      grantMastery(state, heroId, quest.rewardProfile?.masteryDomain, `quest:${quest.id}`);
+      recordDeed(
+        state,
+        {
+          heroId,
+          questId: quest.id,
+          questTitle: quest.title,
+          summary: `${quest.title}: ${quest.outcome}`,
+          outcome: "victory",
+        },
+        `quest_victory:${quest.id}`,
+      );
+    }
+  }
+
+  for (const campaign of state.campaigns) {
+    if (campaign.status !== "completed") continue;
+    for (const heroId of PARTY_HERO_IDS) {
+      const hero = ensureHero(state, heroId, timestamp);
+      if (claimOnce(state, `campaign_completed:${heroId}:${campaign.id}`)) hero.stats.campaignsCompleted += 1;
+      grantHeroXp(state, heroId, XP_REWARDS.campaignCompleted, `campaign_completed:${campaign.id}`);
+    }
+  }
+
+  // 3. MEMORIA DE BATALLA de lo ya ganado: duraciones reales frente a pactadas.
+  for (const quest of state.quests) {
+    if (quest.status !== "completed" || !quest.battle) continue;
+    const report = storeAfterActionReport(state, buildAfterActionReport(state, quest));
+    upsertPlaybook(state, quest, report);
+  }
+
+  // El nivel se recalcula al final: la carrera manda sobre el número guardado.
+  for (const hero of Object.values(state.heroes)) {
+    hero.level = levelForXp(hero.xp);
+  }
+
+  state.heroesBackfilledAt = timestamp;
+  return true;
+}

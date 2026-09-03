@@ -753,6 +753,54 @@ describe("La partida viva", () => {
     expect(opus.lastDeployedAt).toBeDefined();
   });
 
+  it("MIG-001: la historia previa reconstruye la carrera sin contar los reintentos", async () => {
+    // Un reino como el real: una Quest ganada y CINCO registros de la MISMA
+    // ejecución de Opus, porque la API antigua aceptaba llamadas repetidas.
+    const questId = await winQuest(planNamed("El Llamado a la Fiscal"));
+    await store.mutate((state) => {
+      const quest = state.quests.find((candidate) => candidate.id === questId)!;
+      state.companionAssists = [];
+      for (let copy = 0; copy < 5; copy += 1) {
+        state.companionAssists.push({
+          id: `legacy-assist-${copy}`,
+          questId,
+          stepId: quest.steps[0].id,
+          companion: "opus",
+          source: "mcp",
+          sourceTool: "gmail_search_inbox",
+          contributionSummary: "Opus comprobó en Gmail que el correo fue enviado.",
+          status: copy === 0 ? "contribution_validated" : "used_pending_validation",
+          createdAt: new Date(Date.now() - (5 - copy) * 60_000).toISOString(),
+        });
+      }
+      // Se borra la marca y la carrera para simular el reino anterior a Barracas.
+      delete state.heroesBackfilledAt;
+      state.heroes = {};
+      state.progressionLedger = [];
+      state.afterActionReports = [];
+    });
+
+    const barracks = await service.barracks();
+    const opus = barracks.heroes.find((hero) => hero.id === "opus")!;
+    // Cinco registros, UNA ejecución real: los reintentos no son hazañas.
+    expect(opus.stats.executions).toBe(1);
+    expect(opus.stats.validatedAssists).toBe(1);
+    expect(opus.stats.questsAssisted).toBe(1);
+    expect(opus.deployment).toBe("contribution_validated");
+    expect(opus.recentDeeds.length).toBeGreaterThan(0);
+    expect(opus.recentDeeds.every((deed) => deed.questId === questId)).toBe(true);
+
+    // Y el grupo recupera la victoria que de verdad ocurrió.
+    const marques = barracks.heroes.find((hero) => hero.id === "marques")!;
+    expect(marques.stats.questsCompleted).toBe(1);
+    expect(marques.stats.battlesWon).toBe(1);
+
+    // Correrlo otra vez no vuelve a sumar nada.
+    const again = (await service.barracks()).heroes.find((hero) => hero.id === "opus")!;
+    expect(again.stats.executions).toBe(1);
+    expect(again.stats.validatedAssists).toBe(1);
+  });
+
   it("B-005: la última formación recuerda quién peleó y cómo terminó", async () => {
     const quest = await service.createDraft(planNamed("La formación recordada"));
     await service.accept(quest.id, true);
