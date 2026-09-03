@@ -149,6 +149,27 @@ describe("Centro de Notificaciones", () => {
     expect(migrated.realm.quests).toHaveLength(1);
   });
 
+  it("el id de una notificación por backfill es estable entre lecturas y se puede reenviar", async () => {
+    // Reino escrito antes del Centro: la notificación nace del backfill.
+    const draft = await service.createDraft(planFor("El Tributo del Refugio"));
+    const raw = JSON.parse(await readFile(statePath, "utf8")) as RealmState;
+    raw.notifications = [];
+    await writeFile(statePath, JSON.stringify(raw, null, 2), "utf8");
+    const fresh = new QuestService(new JsonRealmStore(statePath), undefined, directory, "torreon-notif-test");
+
+    const first = (await fresh.getNotifications({})).notifications.find((n) => n.entityId === draft.id)!;
+    const second = (await fresh.getNotifications({})).notifications.find((n) => n.entityId === draft.id)!;
+    expect(second.id).toBe(first.id);
+
+    const resent = await fresh.resendNotification(first.id);
+    expect(resent.id).toBe(first.id);
+    expect(resent.push.attempts).toBeGreaterThanOrEqual(1);
+    // Y sigue habiendo una sola Quest y un solo registro.
+    const snapshot = await fresh.snapshot();
+    expect(snapshot.realm.quests).toHaveLength(1);
+    expect(snapshot.realm.notifications.filter((n) => n.entityId === draft.id)).toHaveLength(1);
+  });
+
   it("un frente en espera externa y un replan disponible producen avisos de alta prioridad", async () => {
     const draft = await service.createDraft(planFor("El Tributo del Refugio"));
     await service.accept(draft.id, true);

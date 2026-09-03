@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type {
   NotificationEntityType,
   NotificationPriority,
@@ -33,6 +33,20 @@ export function notificationKey(
   version: number,
 ): string {
   return `${type}:${entityType}:${entityId}:v${version}`;
+}
+
+/**
+ * Id ESTABLE derivado del `key` (UUID v5 sobre sha1).
+ *
+ * El backfill regenera sus registros en cada lectura hasta que una mutación los
+ * persiste; si el id fuera aleatorio, cambiaría entre polls y `resend` no
+ * encontraría nada. Con un id derivado del key, el registro transitorio y el
+ * persistido comparten identidad.
+ */
+export function stableNotificationId(key: string): string {
+  const h = createHash("sha1").update(`torreon:notification:${key}`).digest("hex");
+  const variant = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
 /** El deep link apunta a una pantalla; el id lo resuelve exacto, nunca el título. */
@@ -73,7 +87,9 @@ export function addNotification(state: RealmState, spec: NotificationSpec): Noti
   if (existing) return existing;
 
   const record: NotificationRecord = {
-    id: randomUUID(),
+    // Id derivado del key: estable entre el registro transitorio del backfill y
+    // el persistido, para que `resend` siempre encuentre el mismo.
+    id: stableNotificationId(key),
     key,
     type: spec.type,
     title: spec.title,
