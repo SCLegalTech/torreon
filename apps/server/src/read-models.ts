@@ -217,7 +217,13 @@ export function questDetailFor(state: RealmState, questId: string): QuestDetail 
 
 const CLOSED_QUEST = new Set(["completed", "abandoned"]);
 
-function questNodeFor(quest: Quest, position: number, locked: boolean, isBoss: boolean): QuestNode {
+function questNodeFor(
+  quest: Quest,
+  position: number,
+  locked: boolean,
+  isBoss: boolean,
+  financeKind?: QuestNode["financeKind"],
+): QuestNode {
   const validatedImpact = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
   return {
     id: quest.id,
@@ -231,6 +237,8 @@ function questNodeFor(quest: Quest, position: number, locked: boolean, isBoss: b
     battleStatus: quest.battle?.status ?? "pending",
     locked,
     isBoss,
+    scope: !quest.actId && !quest.campaignId ? "standalone" : "campaign",
+    financeKind,
   };
 }
 
@@ -265,16 +273,26 @@ function actViewFor(state: RealmState, act: Act, position: number, locked: boole
   };
 }
 
+/**
+ * ACTOS EN PARALELO POR DEFECTO.
+ *
+ * Un Acto ya no se bloquea por su POSICIÓN: sólo si declara `dependsOnActIds` y
+ * alguno de esos Actos todavía no está cerrado. Sin dependencia, disponible.
+ */
+function actIsLocked(state: RealmState, act: Act): boolean {
+  const deps = act.dependsOnActIds ?? [];
+  if (deps.length === 0) return false;
+  return deps.some((depId) => {
+    const dependency = state.acts.find((candidate) => candidate.id === depId);
+    return !dependency || !["completed", "abandoned"].includes(dependency.status);
+  });
+}
+
 function campaignViewFor(state: RealmState, campaign: Campaign): CampaignView {
-  let previousDone = true;
   const acts = campaign.actIds
     .map((actId) => state.acts.find((act) => act.id === actId))
     .filter((act): act is Act => Boolean(act))
-    .map((act, index) => {
-      const view = actViewFor(state, act, index + 1, !previousDone);
-      previousDone = act.status === "completed";
-      return view;
-    });
+    .map((act, index) => actViewFor(state, act, index + 1, actIsLocked(state, act)));
 
   // Una quest puede colgar de la campaña sin Acto intermedio: también cuenta.
   const direct = state.quests.filter((quest) => quest.campaignId === campaign.id && !quest.actId);
@@ -335,16 +353,34 @@ export function hierarchyFor(state: RealmState, currentQuest: Quest | null, enga
       ? state.campaigns.find((candidate) => candidate.id === currentQuest.campaignId) ?? null
       : null;
 
-  // Microquests: sin Acto ni Campaña, y eso es legítimo. No se les fabrica padre.
+  // QUICK BATTLES / BATALLAS LIBRES: sin Acto ni Campaña, y eso es legítimo.
+  // No se les fabrica padre. Se marca su representación financiera si la tienen.
+  const financeByQuestId = new Map(
+    (state.financialTransactions ?? []).filter((tx) => tx.questId).map((tx) => [tx.questId!, tx.direction]),
+  );
+  const financeQuestNames = new Set(
+    (state.recurringObligations ?? []).flatMap((obligation) => [obligation.name.toLowerCase()]),
+  );
   const standaloneQuests = state.quests
     .filter((quest) => !quest.actId && !quest.campaignId && !CLOSED_QUEST.has(quest.status))
-    .map((quest, index) => questNodeFor(quest, index + 1, false, false));
+    .map((quest, index) =>
+      questNodeFor(
+        quest,
+        index + 1,
+        false,
+        false,
+        financeByQuestId.get(quest.id) ??
+          (financeQuestNames.has(quest.title.toLowerCase()) ? "expense" : undefined),
+      ),
+    );
 
   return {
     sagas,
     // MANY CAMPAIGNS: todas siguen vivas aunque el jugador mire sólo una.
     activeCampaignIds: state.campaigns.filter((candidate) => candidate.status === "active").map((candidate) => candidate.id),
     focusedCampaignId: state.focusedCampaignId ?? campaign?.id ?? null,
+    focusedQuestId: state.focusedQuestId ?? null,
+    focusedActId: state.focusedActId ?? null,
     engagedQuestId,
     campaigns,
     currentSagaId: campaign?.sagaId ?? currentQuest?.sagaId ?? null,

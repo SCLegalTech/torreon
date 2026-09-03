@@ -140,7 +140,12 @@ export interface CharacterStats {
 }
 
 export interface QuestPlanInput {
-  campaignTitle: string;
+  /**
+   * Nombre de la campaña a la que pertenece la quest, si pertenece a una.
+   * Una Quest Libre (standalone) no tiene campaña: este campo es opcional y no
+   * se fabrica una campaña ficticia para rellenarlo.
+   */
+  campaignTitle?: string;
   title: string;
   intent: string;
   outcome: string;
@@ -152,8 +157,10 @@ export interface QuestPlanInput {
   steps: QuestStepInput[];
 }
 
-export interface Quest extends Omit<QuestPlanInput, "steps"> {
+export interface Quest extends Omit<QuestPlanInput, "steps" | "campaignTitle"> {
   id: string;
+  /** Texto de campaña, ya normalizado. Vacío en una Quest Libre. */
+  campaignTitle: string;
   status: QuestStatus;
   /** Padres opcionales. Una microquest los tiene todos vacíos y eso es legítimo. */
   actId?: string;
@@ -261,6 +268,8 @@ export interface RealmEvent {
     | "quest_completed"
     | "reward_granted"
     | "quest_abandoned"
+    | "quest_deleted"
+    | "quest_focused"
     | "campaign_created"
     | "campaign_revised"
     | "campaign_accepted"
@@ -269,7 +278,11 @@ export interface RealmEvent {
     | "campaign_abandoned"
     | "act_created"
     | "act_completed"
-    | "quest_assigned";
+    | "act_focused"
+    | "quest_assigned"
+    | "recurring_obligation_created"
+    | "recurring_obligation_updated"
+    | "financial_transaction_recorded";
   /**
    * A QUÉ ENTIDAD se refiere este hecho.
    *
@@ -443,6 +456,13 @@ export interface Act {
   estimatedActiveMinutes: number;
   /** Ambientación visual, no jerarquía. */
   scenario?: string;
+  /**
+   * ACTOS EN PARALELO POR DEFECTO.
+   *
+   * Un Acto no se bloquea por su POSICIÓN: sólo si declara aquí una dependencia
+   * explícita y ese Acto todavía no está cerrado. Sin dependencia, disponible.
+   */
+  dependsOnActIds?: string[];
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -508,16 +528,205 @@ export interface RealmState {
    * Cambiar el foco no cierra ni reinicia ninguna otra.
    */
   focusedCampaignId?: string;
+  /**
+   * BACKLOG NO ES FOCO. FOCO NO ES COMPROMISO.
+   *
+   * `focusedQuestId` — la Quest que el jugador está mirando. La fija sólo una
+   * navegación explícita (`focus_quest`); crear un borrador NUNCA la mueve.
+   * El compromiso (la Battle con reloj) se deriva aparte y es la única que
+   * ataca al jugador.
+   */
+  focusedQuestId?: string;
+  focusedActId?: string;
   sagas: Saga[];
   campaigns: Campaign[];
   acts: Act[];
   quests: Quest[];
   events: RealmEvent[];
+  /**
+   * CENTRO DE NOTIFICACIONES.
+   *
+   * Una push es un golpe en la puerta y puede perderse; el registro persistente
+   * vive aquí. Separado de `events`: sólo los hechos que piden acción humana se
+   * vuelven notificación, y una push fallida deja la notificación sin leer.
+   */
+  notifications: NotificationRecord[];
+  /** Marca del backfill único de notificaciones sobre estado ya accionable. */
+  notificationsBackfilledAt?: string;
+  /** Tesorería viva: obligaciones y movimientos reales. Dinero real, no meta-recurso. */
+  recurringObligations: RecurringObligation[];
+  financialTransactions: FinancialTransaction[];
+  /** Capa de producto config-driven. Ningún límite se aplica al jugador actual. */
+  entitlements: Entitlements;
+  /** Telemetría de uso por período. El número de mensajes NO es proxy de costo. */
+  usage: UsageCounters;
   evidence: EvidenceRecord[];
   artifacts: EvidenceArtifact[];
   lifeEvents: LifeEvent[];
   gameEvents: GameEvent[];
   updatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// CENTRO DE NOTIFICACIONES
+//
+// DOMAIN EVENT ≠ NOTIFICATION RECORD ≠ PUSH DELIVERY ≠ FOCUS ≠ ENGAGEMENT.
+// Una notificación lleva SIEMPRE la entidad exacta (deepLink por entityId,
+// nunca por título) y no acepta, no inicia y no cambia el foco al abrirse.
+// ---------------------------------------------------------------------------
+
+export type NotificationType =
+  | "quest_created"
+  | "campaign_created"
+  | "quest_amendment_proposed"
+  | "battle_recontract_proposed"
+  | "quest_waiting_external"
+  | "quest_unblocked"
+  | "battle_lost"
+  | "recurring_obligation_due"
+  | "companion_result";
+
+export type NotificationPriority = "normal" | "high";
+export type PushStatus = "sent" | "failed" | "unknown";
+export type NotificationEntityType = "quest" | "campaign" | "act" | "saga" | "obligation";
+export type NotificationScreen = "quest" | "campaign" | "act" | "battle" | "treasury";
+
+export interface NotificationDeepLink {
+  screen: NotificationScreen;
+  /** SIEMPRE un id. Resolver por título abriría la entidad equivocada. */
+  entityId: string;
+}
+
+export interface NotificationPushState {
+  lastAttemptAt: string | null;
+  lastStatus: PushStatus;
+  attempts: number;
+}
+
+export interface NotificationRecord {
+  id: string;
+  /**
+   * DEDUPLICACIÓN.
+   *
+   * `type:entityType:entityId:version`. Un polling o un redeploy no crean un
+   * segundo registro; `resend` tampoco. Sólo un cambio material sube `version`
+   * y produce una notificación nueva sin sobrescribir la anterior.
+   */
+  key: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  entityType: NotificationEntityType;
+  entityId: string;
+  priority: NotificationPriority;
+  deepLink: NotificationDeepLink;
+  version: number;
+  createdAt: string;
+  readAt: string | null;
+  archivedAt: string | null;
+  /** Push es entrega efímera, no almacenamiento. Su estado no implica «visto». */
+  push: NotificationPushState;
+  /** Nació del backfill sobre estado accionable, no de un hecho nuevo. */
+  backfilled?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// TESORERÍA VIVA — dinero real en COP. Nunca un recurso comprable del juego.
+// ---------------------------------------------------------------------------
+
+export type ObligationDirection = "expense" | "income";
+export type ObligationFrequency =
+  | "weekly"
+  | "biweekly"
+  | "monthly"
+  | "bimonthly"
+  | "quarterly"
+  | "yearly";
+
+export interface ObligationDueRule {
+  type: "day_of_month" | "day_of_week" | "date" | "unknown";
+  /** 1..31 para day_of_month; 0..6 para day_of_week. */
+  day?: number;
+  /** Fecha ISO para una obligación con vencimiento puntual. */
+  date?: string;
+}
+
+export interface RecurringObligation {
+  id: string;
+  name: string;
+  direction: ObligationDirection;
+  category: string;
+  frequency: ObligationFrequency;
+  /** Puede ser desconocido al inicio y completarse luego con evidencia real. */
+  expectedAmount: number | null;
+  currency: "COP";
+  provider?: string;
+  dueRule: ObligationDueRule;
+  nextDueDate: string | null;
+  /** "YYYY-MM" del último período conciliado. No marca «pagado para siempre». */
+  lastPaidPeriod: string | null;
+  active: boolean;
+  /** Cerca del vencimiento, Torreón PROPONE una Quick Battle. Nunca la inicia. */
+  autoProposeBattle: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TransactionStatus = "confirmed" | "pending";
+
+export interface FinancialTransaction {
+  id: string;
+  direction: ObligationDirection;
+  /** Monto real declarado. NUNCA se infiere del `impact` de una Quest. */
+  amount: number;
+  currency: "COP";
+  occurredAt: string;
+  /** "YYYY-MM" del período que este movimiento concilia. */
+  period: string;
+  recurringObligationId?: string;
+  questId?: string;
+  evidenceArtifactId?: string;
+  note?: string;
+  status: TransactionStatus;
+  createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// PRODUCT ENTITLEMENTS Y TELEMETRÍA — sólo boundaries y estado. Nada se aplica.
+// ---------------------------------------------------------------------------
+
+export type PlanId = "free" | "premium" | "dev";
+
+export interface Entitlements {
+  plan: PlanId;
+  /** null = ilimitado. La monetización vende ACCESO, jamás un resultado falso. */
+  dailyBattleLimit: number | null;
+  dailyCodiceCallLimit: number | null;
+  adsEnabled: boolean;
+  reasoningCallsPerDay: number | null;
+  visionValidationsPerDay: number | null;
+  agentExecutionsPerDay: number | null;
+}
+
+export interface UsageCounters {
+  /** "YYYY-MM-DD" del período de conteo. Rota sin borrar historia. */
+  period: string;
+  /** Cuenta inicios de Battle. NO cuenta borradores, reintentos ni recontratos. */
+  battlesStartedToday: number;
+  codiceReasoningCalls: number;
+  visionValidations: number;
+  agentOrchestrations: number;
+}
+
+export type AdPlacementId = "battle_passive" | "battle_result" | "extra_battle_reward";
+
+export interface AdPlacement {
+  id: AdPlacementId;
+  /** Ranura discreta; jamás interstitial sobre el timer ni audio periódico. */
+  style: "native_static" | "rewarded_optional" | "result_optional";
+  /** Un ad NUNCA concede daño ni progreso validado. */
+  grantsProgress: false;
+  description: string;
 }
 
 /**
@@ -744,6 +953,10 @@ export interface QuestNode {
   /** El camino se abre en orden: un nodo bloqueado espera al anterior. */
   locked: boolean;
   isBoss: boolean;
+  /** `standalone` = Quick Battle sin Campaña ni Acto. `campaign` = tiene padres. */
+  scope: "standalone" | "campaign";
+  /** Marca la representación financiera: 💰 GASTO/INGRESO RECURRENTE. */
+  financeKind?: ObligationDirection;
 }
 
 export interface ActView {
@@ -807,6 +1020,9 @@ export interface RealmHierarchy {
   activeCampaignIds: string[];
   /** La que el jugador mira ahora mismo. */
   focusedCampaignId: string | null;
+  /** La Quest que el jugador mira ahora. La fija sólo `focus_quest`. */
+  focusedQuestId: string | null;
+  focusedActId: string | null;
   /** La ÚNICA Battle con reloj corriendo. Null si el frente está libre. */
   engagedQuestId: string | null;
   currentSagaId: string | null;
@@ -817,9 +1033,70 @@ export interface RealmHierarchy {
   standaloneQuests: QuestNode[];
 }
 
+// ---------------------------------------------------------------------------
+// VISTAS DERIVADAS: notificaciones y tesorería listas para cualquier renderer.
+// ---------------------------------------------------------------------------
+
+export interface NotificationView {
+  id: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  entityType: NotificationEntityType;
+  entityId: string;
+  priority: NotificationPriority;
+  deepLink: NotificationDeepLink;
+  createdAt: string;
+  read: boolean;
+  archived: boolean;
+  push: NotificationPushState;
+  /** Agrupación simple, sin algoritmo: «hoy», «ayer», «anteriores». */
+  bucket: "hoy" | "ayer" | "anteriores";
+}
+
+export interface ObligationView {
+  id: string;
+  name: string;
+  direction: ObligationDirection;
+  category: string;
+  frequency: ObligationFrequency;
+  expectedAmount: number | null;
+  currency: "COP";
+  provider?: string;
+  nextDueDate: string | null;
+  /** Estado del PERÍODO en curso, nunca «pagado para siempre». */
+  periodStatus: "paid" | "pending" | "upcoming";
+  currentPeriod: string;
+  lastPaidPeriod: string | null;
+  active: boolean;
+  autoProposeBattle: boolean;
+}
+
+export interface TreasuryView {
+  currency: "COP";
+  /** Lo que el reino observa hoy. No es contabilidad completa. */
+  observedBalance: number;
+  expectedIncome: number;
+  committedExpenses: number;
+  reserveTarget: number;
+  projectedMargin: number;
+  /** Obligaciones cuyo período está pendiente o próximo. */
+  upcomingObligations: ObligationView[];
+  recurring: ObligationView[];
+}
+
 export interface RealmSnapshot {
   realm: RealmState;
+  /**
+   * Compatibilidad. Deriva del frente comprometido, luego del foco explícito,
+   * luego de la campaña en foco. YA NO devuelve un borrador al azar cuando no
+   * hay ni compromiso ni foco: para eso están `focusedQuest` y `engagedQuest`.
+   */
   currentQuest: Quest | null;
+  /** La Quest que el jugador mira. NOTIFICATION IS NOT FOCUS. */
+  focusedQuest: Quest | null;
+  /** La Quest cuya Battle corre. FOCUS IS NOT ENGAGEMENT. */
+  engagedQuest: Quest | null;
   /** Progreso derivado del impacto validado, para que Códice no lo recalcule. */
   progress: QuestProgress | null;
   /** Paso accionable derivado en la lectura; nunca un puntero guardado. */
@@ -838,4 +1115,13 @@ export interface RealmSnapshot {
   rewardPreview: { xp: number; aura: number; masteryDomain?: string } | null;
   consistency: RealmConsistency;
   projectedMargin: number;
+  /** Centro de Notificaciones: registro persistente, no la última push. */
+  notifications: NotificationView[];
+  /** Para el badge 🔔. Contador de no leídas ni archivadas. */
+  unreadNotifications: number;
+  /** Tesorería viva derivada del estado financiero real. */
+  treasury: TreasuryView;
+  /** Capa de producto config-driven. Ningún límite se aplica al jugador actual. */
+  entitlements: Entitlements;
+  usage: UsageCounters;
 }

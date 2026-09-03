@@ -307,6 +307,7 @@ export function createHttpApp(service: QuestService) {
           campaignId: req.body?.campaignId ? String(req.body.campaignId) : undefined,
           scenario: req.body?.scenario ? String(req.body.scenario) : undefined,
           estimatedActiveMinutes: Number(req.body?.estimatedActiveMinutes ?? 0),
+          dependsOnActIds: Array.isArray(req.body?.dependsOnActIds) ? req.body.dependsOnActIds.map(String) : undefined,
         }),
       });
     } catch (error) {
@@ -418,6 +419,121 @@ export function createHttpApp(service: QuestService) {
   app.post("/api/reset", async (_req, res, next) => {
     try {
       res.json(await service.reset());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // CENTRO DE NOTIFICACIONES. Push es entrega; el registro es la verdad.
+  // -------------------------------------------------------------------------
+  app.get("/api/notifications", async (req, res, next) => {
+    try {
+      const limit = Number(req.query.limit);
+      res.json(
+        await service.getNotifications({
+          unreadOnly: req.query.unreadOnly === "true" || req.query.unreadOnly === "1",
+          limit: Number.isFinite(limit) ? limit : undefined,
+          entityType: req.query.entityType ? (String(req.query.entityType) as never) : undefined,
+        }),
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/notifications/:id/read", async (req, res, next) => {
+    try {
+      res.json({ notification: await service.markNotificationRead(req.params.id) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/notifications/:id/archive", async (req, res, next) => {
+    try {
+      res.json({ notification: await service.archiveNotification(req.params.id) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Reenviar sólo abre otro intento de entrega: no recrea nada.
+  app.post("/api/notifications/:id/resend", async (req, res, next) => {
+    try {
+      res.json({ notification: await service.resendNotification(req.params.id) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // FOCO / CICLO DE VIDA DEL BORRADOR. Navegación, no compromiso.
+  // -------------------------------------------------------------------------
+  app.post("/api/quests/:questId/focus", async (req, res, next) => {
+    try {
+      res.json(await service.focusQuest(req.params.questId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/quests/focus", async (_req, res, next) => {
+    try {
+      res.json(await service.focusQuest(null));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/acts/:actId/focus", async (req, res, next) => {
+    try {
+      res.json(await service.focusAct(req.params.actId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Sólo un borrador nunca aceptado y sin evidencia validada.
+  app.delete("/api/quests/:questId", async (req, res, next) => {
+    try {
+      res.json(await service.deleteQuestDraft(req.params.questId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // TESORERÍA VIVA. Dinero real en COP; nunca un recurso comprable del juego.
+  // -------------------------------------------------------------------------
+  app.get("/api/finance/obligations", async (_req, res, next) => {
+    try {
+      res.json(await service.getFinancialObligations());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/finance/obligations", async (req, res, next) => {
+    try {
+      res.status(201).json({ obligation: await service.createRecurringObligation(req.body ?? {}) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/finance/obligations/:id", async (req, res, next) => {
+    try {
+      res.json({ obligation: await service.updateRecurringObligation(req.params.id, req.body ?? {}) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // El monto es explícito y obligatorio; nunca se infiere del impacto.
+  app.post("/api/finance/transactions", async (req, res, next) => {
+    try {
+      res.status(201).json(await service.recordFinancialTransaction(req.body ?? {}));
     } catch (error) {
       next(error);
     }

@@ -1159,3 +1159,69 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
   .inventory-drawer { right: 3%; bottom: 30%; width: 94%; }
   .defeat-actions { grid-template-columns: 1fr; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CENTRO DE NOTIFICACIONES · QUICK BATTLES · TESORERÍA
+   A PUSH IS A KNOCK ON THE GATE. THE NOTIFICATION CENTER IS THE RECORD.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 🔔 Campana con badge de no leídas, sobre la maqueta del reino. */
+.realm-bell { position: absolute; top: 1.4%; right: 6.6%; display: grid; place-items: center; width: 4.2%; min-width: 46px; aspect-ratio: 1; cursor: pointer; border: 1px solid rgba(127,100,58,.86); color: #f6d084; background: rgba(8,10,10,.72); box-shadow: inset 0 0 0 1px rgba(231,185,94,.12), 0 0 18px #000b; font-size: 1.2rem; }
+.realm-bell:active { transform: translateY(2px); filter: brightness(1.2); }
+.realm-bell-badge { position: absolute; top: -6px; right: -6px; min-width: 18px; padding: 0 4px; border-radius: 9px; background: #c53a2b; color: #fff; font: 900 .58rem/18px ui-monospace, "Cascadia Mono", monospace; text-align: center; box-shadow: 0 0 0 1px #2a0d09; }
+
+/* Dock inferior: Quick Battles + acceso a Tesorería. No se pierden en el mapa. */
+.realm-dock { position: absolute; right: 1.6%; bottom: 2.5%; width: min(360px, 32%); max-height: 46%; padding: .55rem .6rem; overflow-y: auto; }
+.realm-dock-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .4rem; color: var(--gold-bright); font: 900 .62rem/1 ui-monospace, "Cascadia Mono", monospace; letter-spacing: .1em; }
+.dock-treasury { padding: .3rem .5rem; cursor: pointer; border: 1px solid #6b4a1c; color: #f3d79a; background: rgba(12,10,8,.85); font: 900 .55rem/1 ui-monospace, "Cascadia Mono", monospace; letter-spacing: .06em; }
+.dock-treasury:active { transform: translateY(1px); }
+.dock-empty { margin: 0; color: #9a8d78; font-size: .56rem; line-height: 1.35; }
+.dock-list { display: grid; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+.dock-list button { display: grid; gap: .12rem; width: 100%; padding: .38rem .5rem; cursor: pointer; border: 1px solid #5c4a2a; color: #e9d19b; background: rgba(10,8,7,.72); text-align: left; }
+.dock-list button:active { transform: translateY(1px); filter: brightness(1.15); }
+.dock-list strong { color: #8dffc0; font-size: .64rem; }
+.dock-list small { color: #b8ab93; font-size: .52rem; }
+
+/* Pantalla completa del Centro de Notificaciones. */
+.notif-scene { width: 100%; max-width: none; min-height: 100dvh; padding: 1rem clamp(1rem, 4vw, 3rem) 2rem; background: #07080a; }
+.notif-top { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.notif-top h1 { display: flex; align-items: center; gap: .5rem; margin: 0; color: #f3d79a; font-size: 1.2rem; }
+.notif-count { min-width: 20px; padding: 0 6px; border-radius: 10px; background: #c53a2b; color: #fff; font: 900 .7rem/20px ui-monospace, monospace; text-align: center; }
+.notif-empty, .treasury-empty { color: #9a8d78; font-size: .74rem; line-height: 1.5; max-width: 52ch; }
+.notif-group { margin-bottom: 1.2rem; }
+.notif-bucket { margin: 0 0 .45rem; color: var(--gold-bright); font: 900 .62rem/1 ui-monospace, monospace; letter-spacing: .18em; }
+.notif-card { display: grid; grid-template-columns: auto 1fr auto; gap: .7rem; align-items: center; padding: .7rem .8rem; margin-bottom: .45rem; border: 1px solid var(--line); background: linear-gradient(145deg, rgba(27,23,17,.96), rgba(10,10,8,.96)); }
+.notif-card.unread { border-left: 3px solid var(--gold-bright); }
+.notif-card.read { opacity: .62; }
+.notif-card.high { box-shadow: inset 0 0 0 1px rgba(197,58,43,.35); }
+.notif-icon { font-size: 1.3rem; }
+.notif-body strong { display: block; color: #f3d79a; font-size: .78rem; }
+.notif-body p { margin: .12rem 0; color: #cbbda5; font-size: .68rem; line-height: 1.35; }
+.notif-body small { color: #8d806d; font-size: .54rem; }
+.notif-actions { display: grid; gap: .3rem; }
+.notif-actions .gold-button, .notif-actions .ghost-button { min-height: 32px; padding: .3rem .7rem; font-size: .54rem; }
+
+/* Pantalla completa de Tesorería. */
+.treasury-scene { width: 100%; max-width: none; min-height: 100dvh; padding: 1rem clamp(1rem, 4vw, 3rem) 2rem; background: #07080a; }
+.treasury-top { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.treasury-top h1 { margin: 0; color: #f3d79a; font-size: 1.15rem; }
+.treasury-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .5rem; margin-bottom: 1.2rem; }
+.treasury-grid .config-card strong { font-size: 1rem; }
+.treasury-grid .config-card strong.negative { color: #ff9d84; }
+.treasury-list { margin-bottom: 1.2rem; }
+.treasury-list .eyebrow { margin-bottom: .5rem; }
+.obligation-card { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .6rem .75rem; margin-bottom: .4rem; border: 1px solid #5c4a2a; background: rgba(10,8,7,.7); }
+.obligation-card.pending { border-color: #a36519; }
+.obligation-card.paid { opacity: .6; }
+.obligation-card strong { display: block; color: #e9d19b; font-size: .74rem; }
+.obligation-card small { color: #b8ab93; font-size: .56rem; }
+.obligation-right { text-align: right; }
+.obligation-card b { display: block; color: #f3d79a; font-family: ui-monospace, "Cascadia Mono", monospace; font-size: .7rem; }
+.obligation-card em { color: var(--gold-bright); font-size: .54rem; font-style: normal; letter-spacing: .1em; }
+.treasury-note { max-width: 60ch; color: #9a8d78; font-size: .62rem; line-height: 1.5; }
+
+@media (orientation: portrait) {
+  .realm-dock { right: 3%; bottom: 2%; width: 60%; }
+  .notif-card { grid-template-columns: auto 1fr; }
+  .notif-actions { grid-column: 1 / -1; grid-auto-flow: column; }
+}

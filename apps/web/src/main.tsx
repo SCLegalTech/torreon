@@ -2,10 +2,10 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 import { Sprite } from "./Sprite";
-import type { ActView, AgentSlot, BattleClock, BattleStatus, CampaignView, CharacterStats, EnemyCombatant, EntityType, InventoryItemId, InventoryState, PartyMemberId, PartyState, Quest, RealmSnapshot } from "./types";
+import type { ActView, AgentSlot, BattleClock, BattleStatus, CampaignView, CharacterStats, EnemyCombatant, EntityType, InventoryItemId, InventoryState, NotificationView, ObligationView, PartyMemberId, PartyState, Quest, QuestNode, RealmSnapshot, TreasuryView } from "./types";
 import "./styles.css";
 
-type Screen = "loading" | "realm" | "thinking" | "campaign" | "act" | "quest" | "battle" | "stats";
+type Screen = "loading" | "realm" | "thinking" | "campaign" | "act" | "quest" | "battle" | "stats" | "notifications" | "treasury";
 
 const API_BASE = Capacitor.isNativePlatform() ? "https://torreon.fly.dev" : "";
 
@@ -104,6 +104,9 @@ function RealmMenu({
   onBattle,
   onStats,
   onReset,
+  onNotifications,
+  onTreasury,
+  onOpenQuest,
 }: {
   snapshot: RealmSnapshot;
   onCampaign: () => void;
@@ -111,10 +114,20 @@ function RealmMenu({
   onBattle: () => void;
   onStats: () => void;
   onReset: () => void;
+  onNotifications: () => void;
+  onTreasury: () => void;
+  onOpenQuest: (questId: string) => void;
 }) {
-  const quest = snapshot.currentQuest;
   const stats = statsOf(snapshot);
   const [confirmingReset, setConfirmingReset] = useState(false);
+  // FOCO NO ES COMPROMISO: sólo hay «batalla activa» si el reloj corre de verdad.
+  const engaged = snapshot.engagedQuest ?? (snapshot.hierarchy.engagedQuestId ? snapshot.currentQuest : null);
+  const activeCampaigns = snapshot.hierarchy.campaigns.filter((campaign) => campaign.status === "active").length;
+  // ⚡ BATALLAS LIBRES: Quick Battles que no se pierden dentro del mapa de Campañas.
+  const quickBattles: QuestNode[] = (snapshot.hierarchy.standaloneQuests ?? []).filter(
+    (node) => node.status === "draft" || node.status === "accepted" || node.status === "waiting_external" || node.status === "active",
+  );
+  const unread = snapshot.unreadNotifications ?? 0;
   return (
     <main className="scene realm-scene">
       <img className="realm-mockup" src="/assets/art/realm-menu-mockup.png" alt="" aria-hidden="true" />
@@ -123,19 +136,47 @@ function RealmMenu({
         <span>{stats.hp} HP · {stats.xp} XP · {stats.aura} Aura</span>
       </button>
       <button className="realm-hotspot campaign-hotspot" onClick={onCampaign}>
-        <strong>{quest ? "CAMPAÑA ACTIVA" : "CAMPAÑAS"}</strong>
-        <span>{quest ? quest.title : "Crear quest"}</span>
+        <strong>{activeCampaigns > 0 ? "CAMPAÑAS" : "CAMPAÑAS"}</strong>
+        <span>{activeCampaigns > 0 ? `${activeCampaigns} ${activeCampaigns === 1 ? "frente abierto" : "frentes abiertos"}` : "Crear quest"}</span>
       </button>
       <button className="realm-hotspot codex-hotspot" onClick={onCodex}>
         <strong>CÓDICE</strong>
         <span>Dungeon Master</span>
       </button>
-      {quest ? (
+      {engaged ? (
         <button className="realm-hotspot battle-hotspot" onClick={onBattle}>
-          <strong>FRENTE DE BATALLA</strong>
-          <span>{snapshot.battle?.progress ?? 0}% avance</span>
+          <strong>BATALLA ACTIVA</strong>
+          <span>{engaged.title} · {snapshot.battle?.progress ?? 0}%</span>
         </button>
       ) : null}
+
+      {/* 🔔 El aviso puede perderse; el registro no. */}
+      <button className="realm-bell" type="button" onClick={onNotifications} aria-label={`Notificaciones${unread ? `, ${unread} sin leer` : ""}`}>
+        🔔{unread > 0 ? <span className="realm-bell-badge">{unread > 99 ? "99+" : unread}</span> : null}
+      </button>
+
+      {/* ⚡ BATALLAS LIBRES + 💰 TESORERÍA: no toda acción real es una Campaña. */}
+      <aside className="realm-dock glass-panel">
+        <div className="realm-dock-head">
+          <span>⚡ BATALLAS LIBRES</span>
+          <button type="button" className="dock-treasury" onClick={onTreasury}>💰 TESORERÍA</button>
+        </div>
+        {quickBattles.length === 0 ? (
+          <p className="dock-empty">Sin Quick Battles. Pídele una a Códice para una tarea real de pocos minutos.</p>
+        ) : (
+          <ul className="dock-list">
+            {quickBattles.slice(0, 6).map((node) => (
+              <li key={node.id}>
+                <button type="button" onClick={() => onOpenQuest(node.id)}>
+                  <strong>{node.financeKind === "expense" ? "💰 " : node.financeKind === "income" ? "💵 " : ""}{node.title}</strong>
+                  <small>{node.durationMinutes} min · {node.status === "draft" ? "sin sellar" : node.status === "waiting_external" ? "espera externa" : node.status === "active" ? "en curso" : "aceptada"}</small>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </aside>
+
       <button className="realm-icon-button settings-hotspot" onClick={() => setConfirmingReset(true)} aria-label="Reiniciar reino">↻</button>
       {/* Reiniciar borra gameplay real: nunca puede dispararse de un solo toque. */}
       {confirmingReset ? (
@@ -175,6 +216,198 @@ function CoreLoop() {
         <li><b>4</b><span>IMPACTO</span></li>
       </ol>
     </article>
+  );
+}
+
+/** Hace «Hace 4 min» sin traer una librería de fechas. */
+function relativeTime(iso: string): string {
+  const delta = Date.now() - new Date(iso).getTime();
+  if (delta < 60_000) return "ahora";
+  if (delta < 3_600_000) return `hace ${Math.floor(delta / 60_000)} min`;
+  if (delta < 86_400_000) return `hace ${Math.floor(delta / 3_600_000)} h`;
+  return `hace ${Math.floor(delta / 86_400_000)} d`;
+}
+
+const NOTICE_ICON: Record<string, string> = {
+  quest_created: "⚔️",
+  campaign_created: "🏰",
+  quest_amendment_proposed: "🗺️",
+  battle_recontract_proposed: "⏳",
+  quest_waiting_external: "🔒",
+  quest_unblocked: "🔓",
+  battle_lost: "💥",
+  recurring_obligation_due: "💰",
+  companion_result: "🤝",
+};
+
+const BUCKET_LABEL: Record<NotificationView["bucket"], string> = { hoy: "HOY", ayer: "AYER", anteriores: "ANTERIORES" };
+
+/**
+ * CENTRO DE NOTIFICACIONES.
+ *
+ * El registro persistente de los golpes en la puerta. Una push perdida no borra
+ * su aviso; agrupación simple por Hoy / Ayer / Anteriores; cada uno abre EXACTO
+ * su entidad por id y no acepta ni inicia nada.
+ */
+function NotificationCenter({
+  notifications,
+  busy,
+  onBack,
+  onOpen,
+  onArchive,
+  onResend,
+}: {
+  notifications: NotificationView[];
+  busy: boolean;
+  onBack: () => void;
+  onOpen: (notice: NotificationView) => void;
+  onArchive: (id: string) => void;
+  onResend: (id: string) => void;
+}) {
+  const buckets: NotificationView["bucket"][] = ["hoy", "ayer", "anteriores"];
+  const unread = notifications.filter((notice) => !notice.read).length;
+  return (
+    <main className="scene notif-scene">
+      <header className="notif-top">
+        <button className="back-button" type="button" onClick={onBack}>← VOLVER</button>
+        <div>
+          <p className="eyebrow">CENTRO DE NOTIFICACIONES</p>
+          <h1>🔔 Avisos {unread > 0 ? <span className="notif-count">{unread}</span> : null}</h1>
+        </div>
+      </header>
+
+      {notifications.length === 0 ? (
+        <p className="notif-empty">No hay avisos. Un pacto nuevo aparecerá aquí y no se perderá aunque llegue otro después.</p>
+      ) : (
+        buckets.map((bucket) => {
+          const group = notifications.filter((notice) => notice.bucket === bucket);
+          if (group.length === 0) return null;
+          return (
+            <section key={bucket} className="notif-group">
+              <p className="notif-bucket">{BUCKET_LABEL[bucket]}</p>
+              {group.map((notice) => (
+                <article key={notice.id} className={`notif-card ${notice.read ? "read" : "unread"} ${notice.priority}`}>
+                  <span className="notif-icon" aria-hidden="true">{NOTICE_ICON[notice.type] ?? "•"}</span>
+                  <div className="notif-body">
+                    <strong>{notice.title}</strong>
+                    <p>{notice.body}</p>
+                    <small>{relativeTime(notice.createdAt)} · entrega {notice.push.lastStatus}</small>
+                  </div>
+                  <div className="notif-actions">
+                    <button className="gold-button" type="button" disabled={busy} onClick={() => onOpen(notice)}>ABRIR</button>
+                    <button className="ghost-button" type="button" disabled={busy} onClick={() => onResend(notice.id)}>REENVIAR</button>
+                    <button className="ghost-button" type="button" disabled={busy} onClick={() => onArchive(notice.id)}>ARCHIVAR</button>
+                  </div>
+                </article>
+              ))}
+            </section>
+          );
+        })
+      )}
+    </main>
+  );
+}
+
+const FREQ_LABEL: Record<ObligationView["frequency"], string> = {
+  weekly: "semanal",
+  biweekly: "quincenal",
+  monthly: "mensual",
+  bimonthly: "bimestral",
+  quarterly: "trimestral",
+  yearly: "anual",
+};
+
+/**
+ * TESORERÍA.
+ *
+ * Dinero real en COP. Nunca un recurso comprable del juego. El monto de una
+ * obligación puede ser desconocido y no se inventa; el estado es del PERÍODO en
+ * curso, no «pagado para siempre».
+ */
+function TreasuryScreen({
+  treasury,
+  currency,
+  onBack,
+}: {
+  treasury: TreasuryView;
+  currency: string;
+  onBack: () => void;
+}) {
+  const statusLabel: Record<ObligationView["periodStatus"], string> = {
+    paid: "PAGADO",
+    pending: "PENDIENTE",
+    upcoming: "PRÓXIMO",
+  };
+  return (
+    <main className="scene treasury-scene">
+      <header className="treasury-top">
+        <button className="back-button" type="button" onClick={onBack}>← VOLVER</button>
+        <div>
+          <p className="eyebrow">TESORERÍA</p>
+          <h1>💰 Dinero real del reino</h1>
+        </div>
+      </header>
+
+      <section className="treasury-grid">
+        <article className="config-card">
+          <p className="eyebrow">BALANCE OBSERVADO</p>
+          <strong>{formatTreasure(treasury.observedBalance, currency)}</strong>
+        </article>
+        <article className="config-card">
+          <p className="eyebrow">INGRESOS ESPERADOS</p>
+          <strong>{formatTreasure(treasury.expectedIncome, currency)}</strong>
+        </article>
+        <article className="config-card">
+          <p className="eyebrow">GASTOS COMPROMETIDOS</p>
+          <strong>{formatTreasure(treasury.committedExpenses, currency)}</strong>
+        </article>
+        <article className="config-card">
+          <p className="eyebrow">MARGEN PROYECTADO</p>
+          <strong className={treasury.projectedMargin < 0 ? "negative" : ""}>{formatTreasure(treasury.projectedMargin, currency)}</strong>
+        </article>
+      </section>
+
+      <section className="treasury-list">
+        <p className="eyebrow">PRÓXIMAS OBLIGACIONES</p>
+        {treasury.upcomingObligations.length === 0 ? (
+          <p className="treasury-empty">Nada pendiente este período.</p>
+        ) : (
+          treasury.upcomingObligations.map((obligation) => (
+            <article key={obligation.id} className={`obligation-card ${obligation.periodStatus}`}>
+              <div>
+                <strong>{obligation.direction === "income" ? "↑" : "↓"} {obligation.name}</strong>
+                <small>{obligation.provider ? `${obligation.provider} · ` : ""}{FREQ_LABEL[obligation.frequency]}</small>
+              </div>
+              <div className="obligation-right">
+                <b>{obligation.expectedAmount != null ? formatTreasure(obligation.expectedAmount, obligation.currency) : "monto sin confirmar"}</b>
+                <em>{statusLabel[obligation.periodStatus]}</em>
+              </div>
+            </article>
+          ))
+        )}
+      </section>
+
+      <section className="treasury-list">
+        <p className="eyebrow">RECURRENTES</p>
+        {treasury.recurring.length === 0 ? (
+          <p className="treasury-empty">Aún no hay obligaciones recurrentes registradas. Pídeselas al Códice.</p>
+        ) : (
+          treasury.recurring.map((obligation) => (
+            <article key={obligation.id} className="obligation-card recurring">
+              <div>
+                <strong>{obligation.direction === "income" ? "↑" : "↓"} {obligation.name}</strong>
+                <small>{FREQ_LABEL[obligation.frequency]}{obligation.lastPaidPeriod ? ` · último: ${obligation.lastPaidPeriod}` : ""}</small>
+              </div>
+              <em>{statusLabel[obligation.periodStatus]}</em>
+            </article>
+          ))
+        )}
+      </section>
+
+      <p className="treasury-note">
+        Pagar una obligación concede XP y Aura, pero el dinero real SALE de aquí. Ninguna quest fabrica monedas por gastar dinero real.
+      </p>
+    </main>
   );
 }
 
@@ -356,6 +589,24 @@ function statsOf(snapshot: RealmSnapshot): CharacterStats {
       treasure: { currency: snapshot.realm.financial.currency, amount: snapshot.realm.financial.availableBalance },
     }
   );
+}
+
+/**
+ * Un servidor viejo todavía no manda la vista de Tesorería. Se arma con lo que
+ * el reino sí sabe —el estado financiero— para que la pantalla nunca quede rota.
+ */
+function fallbackTreasury(snapshot: RealmSnapshot): TreasuryView {
+  const financial = snapshot.realm.financial;
+  return {
+    currency: financial.currency,
+    observedBalance: financial.availableBalance,
+    expectedIncome: financial.expectedIncome,
+    committedExpenses: financial.committedExpenses,
+    reserveTarget: financial.reserveTarget,
+    projectedMargin: snapshot.projectedMargin,
+    upcomingObligations: [],
+    recurring: [],
+  };
 }
 
 /**
@@ -1740,6 +1991,43 @@ function App() {
   };
 
   /**
+   * DEEP LINK EXACTO.
+   *
+   * La notificación trae `deepLink.screen` + `entityId`. Se abre esa entidad por
+   * id; nunca se resuelve por título. Abrir NO acepta y NO inicia nada.
+   */
+  const deepLinkTo = (link: NotificationView["deepLink"]) => {
+    if (link.screen === "treasury") {
+      setScreen("treasury");
+      return;
+    }
+    if (link.screen === "campaign") {
+      setOpenCampaignId(link.entityId);
+      setOpenActId(null);
+      setScreen("campaign");
+      return;
+    }
+    if (link.screen === "act") {
+      setOpenActId(link.entityId);
+      setScreen("act");
+      return;
+    }
+    if (
+      link.screen === "battle" &&
+      link.entityId === quest?.id &&
+      ["active", "waiting_external", "completed"].includes(quest.status)
+    ) {
+      setScreen("battle");
+      return;
+    }
+    openOrder(link.entityId);
+  };
+
+  const openNotification = (notice: NotificationView) => {
+    void act(() => api(`/api/notifications/${notice.id}/read`, { method: "POST" })).then(() => deepLinkTo(notice.deepLink));
+  };
+
+  /**
    * Abre exactamente la entidad del aviso.
    *
    * Nada de heurísticas: el hecho trae `entityType` y `entityId`, y eso es lo
@@ -1788,6 +2076,9 @@ function App() {
           onBattle={() => setScreen("battle")}
           onStats={() => setScreen("stats")}
           onReset={() => void act(() => api("/api/reset", { method: "POST" }))}
+          onNotifications={() => setScreen("notifications")}
+          onTreasury={() => setScreen("treasury")}
+          onOpenQuest={openOrder}
         />
         {composerOpen ? (
           <QuestComposer
@@ -1807,6 +2098,21 @@ function App() {
         </>
       ) : screen === "stats" ? (
         <CharacterSheet snapshot={snapshot} onBack={() => setScreen(quest ? "battle" : "realm")} />
+      ) : screen === "notifications" ? (
+        <NotificationCenter
+          notifications={snapshot.notifications ?? []}
+          busy={busy}
+          onBack={() => setScreen("realm")}
+          onOpen={openNotification}
+          onArchive={(id) => void act(() => api(`/api/notifications/${id}/archive`, { method: "POST" }))}
+          onResend={(id) => void act(() => api(`/api/notifications/${id}/resend`, { method: "POST" }))}
+        />
+      ) : screen === "treasury" ? (
+        <TreasuryScreen
+          treasury={snapshot.treasury ?? fallbackTreasury(snapshot)}
+          currency={snapshot.realm.financial.currency}
+          onBack={() => setScreen("realm")}
+        />
       ) : screen === "campaign" && currentCampaign ? (
         <CampaignMap
           snapshot={snapshot}

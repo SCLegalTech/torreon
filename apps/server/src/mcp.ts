@@ -1,7 +1,26 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { QuestAmendmentChange, QuestPlanInput } from "./domain.js";
+import type { NotificationEntityType, NotificationType, QuestAmendmentChange, QuestPlanInput } from "./domain.js";
 import { QuestService } from "./quest-service.js";
+
+const notificationEntityType = z.enum(["quest", "campaign", "act", "saga", "obligation"]);
+const notificationType = z.enum([
+  "quest_created",
+  "campaign_created",
+  "quest_amendment_proposed",
+  "battle_recontract_proposed",
+  "quest_waiting_external",
+  "quest_unblocked",
+  "battle_lost",
+  "recurring_obligation_due",
+  "companion_result",
+]);
+
+const dueRuleSchema = z.object({
+  type: z.enum(["day_of_month", "day_of_week", "date", "unknown"]),
+  day: z.number().int().min(0).max(31).optional(),
+  date: z.string().max(40).optional(),
+});
 
 const stepShape = {
   title: z.string().min(1).max(120).describe("Nombre breve y accionable del paso."),
@@ -21,7 +40,12 @@ const stepShape = {
 };
 
 const planShape = {
-  campaignTitle: z.string().min(1).max(120),
+  campaignTitle: z
+    .string()
+    .min(1)
+    .max(120)
+    .optional()
+    .describe("Campaña a la que pertenece la Quest. OMÍTELO para una Quest Libre (standalone): no inventes una campaña ficticia sólo para rellenarlo."),
   title: z.string().min(1).max(120),
   intent: z.string().min(1).max(1000),
   outcome: z.string().min(1).max(1000),
@@ -556,7 +580,7 @@ export function createMcpServer(service: QuestService): McpServer {
     {
       title: "Abrir un acto",
       description:
-        "Crea un Acto: una fase jugable de una jornada, de 2 a 8 Battles y como máximo 8 horas de trabajo activo. Un Acto puede vivir sin Campaña si el objetivo cabe en un día.",
+        "Crea un Acto: una fase jugable de una jornada, de 2 a 8 Battles y como máximo 8 horas de trabajo activo. Un Acto puede vivir sin Campaña si el objetivo cabe en un día. Los Actos de una misma Campaña son PARALELOS por defecto: un Acto sólo se bloquea si declara `dependsOnActIds` y esos Actos aún no están cerrados.",
       inputSchema: {
         title: z.string().min(3).max(120),
         subtitle: z.string().max(200).optional().describe("Subtítulo del acto: «La comunicación bloqueada»."),
@@ -564,6 +588,11 @@ export function createMcpServer(service: QuestService): McpServer {
         campaignId: z.string().uuid().optional(),
         scenario: z.string().max(120).optional(),
         estimatedActiveMinutes: z.number().int().min(0).max(100000).optional(),
+        dependsOnActIds: z
+          .array(z.string().uuid())
+          .max(7)
+          .optional()
+          .describe("Actos que deben cerrarse antes que este. Omítelo para un Acto en paralelo, que es lo normal."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
@@ -788,6 +817,251 @@ export function createMcpServer(service: QuestService): McpServer {
     async ({ questId, stepId, reason, damage }) => {
       const result = await service.recordUnexpectedRequirement(questId, { stepId, reason, damage });
       return toolResult(`La Horda contraatacó por una complicación real: -${damage} HP. El Marqués conserva ${result.battle.playerHealth} HP.`, result);
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // FOCO Y CICLO DE VIDA DEL BORRADOR
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "focus_quest",
+    {
+      title: "Poner una Quest en foco",
+      description:
+        "Cambia la Quest que el jugador mira ahora. Sólo mueve `focusedQuestId`: NO la acepta, NO la inicia y NO toca `engagedQuestId` ni ninguna Battle. Crear un borrador nunca enfoca solo; para mirarlo hay que llamar aquí. Usa null para soltar el foco. BACKLOG NO ES FOCO.",
+      inputSchema: { questId: z.string().uuid().nullable().describe("Quest a enfocar, o null para soltar el foco.") },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId }) => {
+      const snapshot = await service.focusQuest(questId);
+      return toolResult(
+        snapshot.focusedQuest ? `Quest en foco: «${snapshot.focusedQuest.title}». No se inició ninguna batalla.` : "El reino quedó sin Quest en foco.",
+        { focusedQuest: snapshot.focusedQuest, engagedQuest: snapshot.engagedQuest, hierarchy: snapshot.hierarchy },
+      );
+    },
+  );
+
+  server.registerTool(
+    "focus_act",
+    {
+      title: "Poner un Acto en foco",
+      description:
+        "Cambia el Acto que el jugador mira. Navegación pura: los Actos de una misma Campaña son PARALELOS por defecto y enfocar uno no bloquea, cierra ni desbloquea a los demás. Usa null para soltar el foco.",
+      inputSchema: { actId: z.string().uuid().nullable() },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ actId }) => {
+      const snapshot = await service.focusAct(actId);
+      return toolResult(
+        snapshot.hierarchy.focusedActId ? "Acto en foco actualizado." : "El reino quedó sin Acto en foco.",
+        { hierarchy: snapshot.hierarchy },
+      );
+    },
+  );
+
+  server.registerTool(
+    "delete_quest_draft",
+    {
+      title: "Eliminar un borrador de Quest",
+      description:
+        "Borra de raíz un borrador que el jugador NUNCA aceptó y que no tiene evidencia validada. Sirve para limpiar drafts irrelevantes sin borrar historia real. Una Quest aceptada, iniciada o completada NO se borra: para eso está abandon_quest, y lo completado es inmutable.",
+      inputSchema: { questId: z.string().uuid() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async ({ questId }) => {
+      await service.deleteQuestDraft(questId);
+      return toolResult("Borrador eliminado. Ningún estado real fue tocado.", { questId, deleted: true });
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // CENTRO DE NOTIFICACIONES
+  //
+  // A PUSH IS A KNOCK ON THE GATE. THE NOTIFICATION CENTER IS THE RECORD.
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "get_notifications",
+    {
+      title: "Listar el Centro de Notificaciones",
+      description:
+        "Devuelve las notificaciones persistentes del jugador (pactos que aguardan sello, frentes bloqueados, replanes disponibles, obligaciones vencidas). Cada una lleva un deep link por entityId exacto, nunca por título. Úsala para responder «¿cuántos pactos pendientes tengo?» sin leer todo el Realm. Una push perdida NO borra su notificación.",
+      inputSchema: {
+        unreadOnly: z.boolean().optional().describe("Sólo las no leídas."),
+        limit: z.number().int().min(1).max(200).optional(),
+        entityType: notificationEntityType.optional(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ unreadOnly, limit, entityType }) => {
+      const { notifications, unread } = await service.getNotifications({ unreadOnly, limit, entityType: entityType as NotificationEntityType | undefined });
+      return toolResult(`${unread} sin leer · ${notifications.length} en la vista.`, { notifications, unread });
+    },
+  );
+
+  server.registerTool(
+    "resend_notification",
+    {
+      title: "Reenviar una notificación a este dispositivo",
+      description:
+        "Abre un intento de entrega NUEVO sobre una notificación existente. NO recrea la Quest, NO emite otro domain event y NO crea un segundo NotificationRecord: sólo un nuevo delivery attempt cuyo estado queda registrado.",
+      inputSchema: { notificationId: z.string().uuid() },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ notificationId }) => {
+      const record = await service.resendNotification(notificationId);
+      return toolResult(`Reenvío intento ${record.push.attempts} para «${record.title}» (${record.push.lastStatus}).`, { notification: record });
+    },
+  );
+
+  server.registerTool(
+    "resend_entity_notification",
+    {
+      title: "Reenviar la notificación de una entidad",
+      description:
+        "Como resend_notification pero se localiza por entidad: entityType + entityId (+ notificationType opcional). Si no existe ninguna notificación para esa entidad NO se crea una: reenviar nunca fabrica un registro.",
+      inputSchema: {
+        entityType: notificationEntityType,
+        entityId: z.string().uuid(),
+        notificationType: notificationType.optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ entityType, entityId, notificationType: type }) => {
+      const record = await service.resendEntityNotification({
+        entityType: entityType as NotificationEntityType,
+        entityId,
+        notificationType: type as NotificationType | undefined,
+      });
+      return toolResult(`Reenvío intento ${record.push.attempts} para «${record.title}».`, { notification: record });
+    },
+  );
+
+  server.registerTool(
+    "mark_notification_read",
+    {
+      title: "Marcar una notificación como leída",
+      description:
+        "Marca `readAt`. Ocurre también sola cuando el jugador abre el deep link. NO borra: el registro sigue en el Centro como historia.",
+      inputSchema: { notificationId: z.string().uuid() },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ notificationId }) => {
+      const record = await service.markNotificationRead(notificationId);
+      return toolResult(`«${record.title}» quedó marcada como leída.`, { notification: record });
+    },
+  );
+
+  server.registerTool(
+    "archive_notification",
+    {
+      title: "Archivar una notificación",
+      description: "Saca la notificación del Centro sin eliminar la historia. Reversible sólo por el servidor; el registro sigue existiendo.",
+      inputSchema: { notificationId: z.string().uuid() },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ notificationId }) => {
+      const record = await service.archiveNotification(notificationId);
+      return toolResult(`«${record.title}» archivada.`, { notification: record });
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // TESORERÍA VIVA
+  //
+  // REAL MONEY IS NOT GAME CURRENCY. El monto SIEMPRE es explícito: nunca el
+  // `impact` de una Quest.
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "create_recurring_obligation",
+    {
+      title: "Registrar una obligación recurrente",
+      description:
+        "Crea un gasto o ingreso recurrente real (arriendo, Claro, suscripción, cuota, salario…). El monto y la fecha pueden ser desconocidos al inicio y completarse luego con evidencia real. Cerca del vencimiento Torreón PROPONE una Quick Battle; nunca la inicia solo.",
+      inputSchema: {
+        name: z.string().min(2).max(120),
+        direction: z.enum(["expense", "income"]),
+        category: z.string().max(60).optional().describe("housing, utilities, subscription, salary, fees…"),
+        frequency: z.enum(["weekly", "biweekly", "monthly", "bimonthly", "quarterly", "yearly"]),
+        expectedAmount: z.number().min(0).nullable().optional().describe("COP. null u omitido si aún no se conoce."),
+        provider: z.string().max(120).optional(),
+        dueRule: dueRuleSchema.optional(),
+        autoProposeBattle: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const obligation = await service.createRecurringObligation(args);
+      return toolResult(`Obligación «${obligation.name}» registrada (${obligation.frequency}).`, { obligation });
+    },
+  );
+
+  server.registerTool(
+    "update_recurring_obligation",
+    {
+      title: "Actualizar una obligación recurrente",
+      description: "Completa o corrige monto, proveedor, regla de vencimiento, frecuencia o estado activo de una obligación ya registrada.",
+      inputSchema: {
+        obligationId: z.string().uuid(),
+        name: z.string().min(2).max(120).optional(),
+        expectedAmount: z.number().min(0).nullable().optional(),
+        provider: z.string().max(120).optional(),
+        category: z.string().max(60).optional(),
+        frequency: z.enum(["weekly", "biweekly", "monthly", "bimonthly", "quarterly", "yearly"]).optional(),
+        dueRule: dueRuleSchema.optional(),
+        active: z.boolean().optional(),
+        autoProposeBattle: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ obligationId, ...patch }) => {
+      const obligation = await service.updateRecurringObligation(obligationId, patch);
+      return toolResult(`«${obligation.name}» actualizada.`, { obligation });
+    },
+  );
+
+  server.registerTool(
+    "get_financial_obligations",
+    {
+      title: "Ver la Tesorería y sus obligaciones",
+      description:
+        "Devuelve las obligaciones recurrentes con el estado del PERÍODO en curso (pagado / pendiente / próximo) más el balance observado, ingresos esperados y gastos comprometidos. Septiembre puede estar pagado y octubre pendiente sobre la misma obligación.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async () => {
+      const { obligations, treasury } = await service.getFinancialObligations();
+      return toolResult(`${obligations.filter((o) => o.periodStatus === "pending").length} obligación(es) con período pendiente.`, { obligations, treasury });
+    },
+  );
+
+  server.registerTool(
+    "record_financial_transaction",
+    {
+      title: "Registrar un movimiento financiero validado",
+      description:
+        "Registra un pago o ingreso REAL y confirmado. El monto es OBLIGATORIO y explícito: nunca se infiere del impacto de la Quest. Si se cita `recurringObligationId` se marca pagado el período en curso (no «para siempre») y se recalcula el próximo vencimiento. Idempotente por evidencia: la misma prueba sobre el mismo período no crea dos movimientos.",
+      inputSchema: {
+        direction: z.enum(["expense", "income"]),
+        amount: z.number().positive().describe("Monto real en COP. Obligatorio."),
+        occurredAt: z.string().max(40).optional().describe("ISO. Por defecto ahora."),
+        recurringObligationId: z.string().uuid().optional(),
+        questId: z.string().uuid().optional(),
+        evidenceArtifactId: z.string().uuid().optional(),
+        note: z.string().max(500).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const result = await service.recordFinancialTransaction(args);
+      return toolResult(
+        result.duplicate
+          ? "Esa evidencia ya había registrado el movimiento de este período: no se duplicó."
+          : `Movimiento de ${result.transaction.amount.toLocaleString("es-CO")} COP registrado${result.obligation ? ` para «${result.obligation.name}»` : ""}.`,
+        result,
+      );
     },
   );
 

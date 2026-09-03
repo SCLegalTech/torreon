@@ -21,7 +21,13 @@ import type {
   Campaign,
   CompanionAssist,
   CompanionId,
+  FinancialTransaction,
   InventoryItemId,
+  NotificationEntityType,
+  NotificationRecord,
+  NotificationType,
+  NotificationView,
+  ObligationView,
   PartyMemberId,
   EvidenceArtifact,
   EvidenceSource,
@@ -36,9 +42,30 @@ import type {
   RealmEvent,
   RealmSnapshot,
   RealmState,
+  RecurringObligation,
   RewardProfile,
   Saga,
+  TreasuryView,
 } from "./domain.js";
+import {
+  addNotification,
+  attemptPush,
+  notificationViewsFor,
+  notifyFromEvent,
+  unreadCount,
+  type NotificationQuery,
+} from "./notifications.js";
+import {
+  advanceDueDate,
+  buildFinancialTransaction,
+  buildRecurringObligation,
+  obligationViewFor,
+  periodOf,
+  treasuryViewFor,
+  type FinancialTransactionInput,
+  type RecurringObligationInput,
+} from "./finance.js";
+import { battleStartAllowed, rolloverUsage } from "./product.js";
 import {
   applyDamage,
   freshParty,
@@ -81,8 +108,20 @@ type RealmEventInput = Omit<RealmEvent, "id" | "createdAt" | "entityType" | "ent
 function addEvent(state: RealmState, event: RealmEventInput): void {
   const entityType = event.entityType ?? "quest";
   const entityId = event.entityId ?? event.questId ?? "";
-  state.events.unshift({ id: randomUUID(), createdAt: now(), ...event, entityType, entityId });
+  const record: RealmEvent = { id: randomUUID(), createdAt: now(), ...event, entityType, entityId };
+  state.events.unshift(record);
   state.events = state.events.slice(0, 100);
+  // DOMAIN EVENT -> NOTIFICATION RECORD: sólo los hechos que piden acción humana.
+  // El resto (tick de reloj, presión, poll) nunca llega al Centro.
+  notifyFromEvent(state, record);
+}
+
+/** Marca leídas las notificaciones de una entidad de un tipo dado. */
+function markEntityNotificationsRead(state: RealmState, entityId: string, type: NotificationType): void {
+  const timestamp = now();
+  for (const record of state.notifications ?? []) {
+    if (record.entityId === entityId && record.type === type && !record.readAt) record.readAt = timestamp;
+  }
 }
 
 export function battleFor(quest: Quest | null, _gameEvents: GameEvent[] = [], nowMs = Date.now()): BattleState | null {
@@ -228,20 +267,48 @@ function actionableIn(quests: Quest[]): Quest | null {
   );
 }
 
+/** La Quest que el jugador enfocó a mano. NUNCA la mueve crear un borrador. */
+export function focusedQuestOf(state: RealmState): Quest | null {
+  if (!state.focusedQuestId) return null;
+  return (
+    state.quests.find(
+      (quest) => quest.id === state.focusedQuestId && !["completed", "abandoned"].includes(quest.status),
+    ) ?? null
+  );
+}
+
 /**
  * Qué mira el jugador ahora mismo.
  *
- * Primero el frente comprometido —si hay reloj corriendo, eso manda—; después
- * lo accionable de la campaña EN FOCO; y sólo entonces cualquier otra cosa. El
- * foco no cierra ninguna campaña: sólo decide a dónde apunta la mirada.
+ * BACKLOG NO ES FOCO. Primero el frente comprometido —si hay reloj corriendo,
+ * eso manda—; después el foco EXPLÍCITO (`focus_quest`); después lo accionable
+ * de la campaña en foco; y sólo entonces un frente ya vivo. Ya NO se devuelve un
+ * borrador al azar: crear cinco borradores no vuelve «actual» a ninguno.
  */
 function currentQuest(state: RealmState): Quest | null {
   const engaged = engagedQuest(state);
   if (engaged) return engaged;
-  const focused = state.focusedCampaignId
+
+  const focusedQuest = focusedQuestOf(state);
+  if (focusedQuest) return focusedQuest;
+
+  const focusedCampaign = state.focusedCampaignId
     ? actionableIn(state.quests.filter((quest) => quest.campaignId === state.focusedCampaignId))
     : null;
-  return focused ?? actionableIn(state.quests) ?? state.quests[0] ?? null;
+  if (focusedCampaign) return focusedCampaign;
+
+  // Sin compromiso ni foco: un frente ya en marcha manda sobre cualquier borrador.
+  const live = actionableIn(state.quests);
+  if (live && live.status !== "draft") return live;
+
+  // Un único borrador en todo el reino sí es «lo actual». Varios en cola: ninguno
+  // se elige a dedo —para eso están las Quick Battles y el Centro de avisos—.
+  const drafts = state.quests.filter((quest) => quest.status === "draft");
+  if (drafts.length === 1) return drafts[0];
+  if (drafts.length > 1) return null;
+
+  // Ni frentes vivos ni borradores: la última Quest tocada (p. ej. recién ganada).
+  return state.quests.find((quest) => quest.status !== "abandoned") ?? null;
 }
 
 /**
@@ -315,7 +382,7 @@ function requireCampaign(state: RealmState, campaignId: string): Campaign {
 /** Un Acto nace disponible: es planificación, no un pacto aparte. */
 function buildAct(
   campaign: Campaign | undefined,
-  proposal: { title: string; subtitle?: string; outcome?: string; estimatedActiveMinutes?: number },
+  proposal: { title: string; subtitle?: string; outcome?: string; estimatedActiveMinutes?: number; dependsOnActIds?: string[] },
   timestamp: string,
 ): Act {
   return {
@@ -328,6 +395,8 @@ function buildAct(
     status: "available",
     questIds: [],
     estimatedActiveMinutes: Math.max(0, Math.round(proposal.estimatedActiveMinutes ?? 0)),
+    // ACTOS EN PARALELO POR DEFECTO: sin dependencia explícita, disponible.
+    dependsOnActIds: (proposal.dependsOnActIds ?? []).slice(0, 7),
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -462,20 +531,29 @@ export class QuestService {
   async snapshot(): Promise<RealmSnapshot> {
     const realm = await this.tick();
     const quest = currentQuest(realm);
+    const engaged = engagedQuest(realm);
     const { availableBalance, expectedIncome, committedExpenses, reserveTarget } = realm.financial;
     const battle = battleFor(quest, realm.gameEvents);
     return {
       realm,
       currentQuest: quest,
+      // NOTIFICATION IS NOT FOCUS. FOCUS IS NOT ENGAGEMENT.
+      focusedQuest: focusedQuestOf(realm),
+      engagedQuest: engaged,
       progress: progressFor(quest),
       currentStep: currentStepFor(quest),
       battle,
       stats: statsFor(realm, battle),
       inventory: realm.inventory,
-      hierarchy: hierarchyFor(realm, quest, engagedQuest(realm)?.id ?? null),
+      hierarchy: hierarchyFor(realm, quest, engaged?.id ?? null),
       rewardPreview: quest ? previewRewards(quest) : null,
       consistency: consistencyFor(realm, this.instance, quest),
       projectedMargin: availableBalance + expectedIncome - committedExpenses - reserveTarget,
+      notifications: notificationViewsFor(realm),
+      unreadNotifications: unreadCount(realm),
+      treasury: treasuryViewFor(realm),
+      entitlements: realm.entitlements,
+      usage: realm.usage,
     };
   }
 
@@ -507,6 +585,9 @@ export class QuestService {
       const quest: Quest = {
         ...plan,
         id: randomUUID(),
+        // Una Quest Libre (standalone) no tiene campaña: el texto queda vacío y
+        // no se fabrica una campaña ficticia («Vida cotidiana», «Inbox»…).
+        campaignTitle: (plan.campaignTitle ?? (campaign?.title ?? act?.title ?? "")).trim().slice(0, 120),
         status: "draft",
         actId: act?.id,
         campaignId: campaign?.id ?? act?.campaignId,
@@ -592,6 +673,8 @@ export class QuestService {
       quest.status = "accepted";
       quest.acceptedAt = now();
       quest.updatedAt = quest.acceptedAt;
+      // El pacto ya está sellado: su aviso de «aguarda tu sello» deja de pesar.
+      markEntityNotificationsRead(state, quest.id, "quest_created");
       addEvent(state, { type: "quest_accepted", questId, message: `El marqués aceptó «${quest.title}».` });
       return quest;
     });
@@ -612,6 +695,13 @@ export class QuestService {
       if (engaged && engaged.id !== questId) {
         throw new Error(`Ya hay una Battle comprometida: «${engaged.title}». Termínala, o espera a que un bloqueo externo libere el frente, antes de iniciar otra.`);
       }
+      // DAILY BATTLE LIMIT: sólo cuenta inicios iniciales. Un reintento, un
+      // replan o un recontrato del mismo Quest NO consumen cupo. El plan `dev`
+      // no tiene tope: `dailyBattleLimit` es null y esto no bloquea a nadie.
+      rolloverUsage(state.usage);
+      const gate = battleStartAllowed(state.entitlements, state.usage);
+      if (!gate.allowed) throw new Error(gate.reason!);
+      state.usage.battlesStartedToday += 1;
       const startedAtMs = Date.now();
       const duration = clampBattleMinutes(durationMinutes ?? quest.durationMinutes);
       quest.status = "active";
@@ -1663,6 +1753,8 @@ export class QuestService {
     campaignId?: string;
     scenario?: string;
     estimatedActiveMinutes?: number;
+    /** Dependencias EXPLÍCITAS. Sin esto el Acto nace disponible, en paralelo. */
+    dependsOnActIds?: string[];
   }): Promise<Act> {
     if (input.title.trim().length < 3) throw new Error("El acto necesita un título.");
     const { result } = await this.store.mutate((state) => {
@@ -1742,6 +1834,303 @@ export class QuestService {
     return { quest: result.quest, act: result.act! };
   }
 
+  // -------------------------------------------------------------------------
+  // FOCO / NAVEGACIÓN
+  //
+  // BACKLOG NO ES FOCO. FOCO NO ES COMPROMISO. COMPROMISO NO ES ACEPTACIÓN.
+  // Estas herramientas sólo mueven la mirada: no aceptan, no inician y no
+  // desactivan ninguna otra entidad.
+  // -------------------------------------------------------------------------
+
+  /** Cambia la Quest en foco. No la acepta ni la inicia. `null` suelta el foco. */
+  async focusQuest(questId: string | null): Promise<RealmSnapshot> {
+    await this.store.mutate((state) => {
+      if (questId === null) {
+        delete state.focusedQuestId;
+        return null;
+      }
+      const quest = requireQuest(state, questId);
+      if (state.focusedQuestId === quest.id) return quest;
+      state.focusedQuestId = quest.id;
+      addEvent(state, {
+        type: "quest_focused",
+        entityType: "quest",
+        entityId: quest.id,
+        questId: quest.id,
+        message: `El reino mira ahora «${quest.title}». No se inició ninguna batalla.`,
+      });
+      return quest;
+    });
+    return this.snapshot();
+  }
+
+  /** Cambia el Acto en foco. Navegación pura: los demás Actos no se tocan. */
+  async focusAct(actId: string | null): Promise<RealmSnapshot> {
+    await this.store.mutate((state) => {
+      if (actId === null) {
+        delete state.focusedActId;
+        return null;
+      }
+      const act = state.acts.find((candidate) => candidate.id === actId);
+      if (!act) throw new Error(`Acto no encontrado: ${actId}`);
+      if (state.focusedActId === act.id) return act;
+      state.focusedActId = act.id;
+      addEvent(state, {
+        type: "act_focused",
+        entityType: "act",
+        entityId: act.id,
+        message: `El reino mira ahora el acto «${act.title}». Los demás Actos siguen disponibles.`,
+      });
+      return act;
+    });
+    return this.snapshot();
+  }
+
+  /**
+   * DRAFT LIFECYCLE.
+   *
+   * Un borrador NUNCA aceptado y sin evidencia validada puede borrarse de raíz.
+   * Una Quest aceptada, iniciada o completada NO: para eso está `abandon_quest`,
+   * y lo completado es inmutable.
+   */
+  async deleteQuestDraft(questId: string): Promise<{ deleted: true; questId: string }> {
+    const { result } = await this.store.mutate((state) => {
+      const quest = requireQuest(state, questId);
+      if (quest.status !== "draft" || quest.acceptedAt) {
+        throw new Error("Sólo un borrador nunca aceptado puede eliminarse. Usa abandon_quest para una Quest ya iniciada.");
+      }
+      const hasValidatedEvidence = state.evidence.some(
+        (record) => record.questId === questId && record.impactAwarded > 0,
+      );
+      if (hasValidatedEvidence) {
+        throw new Error("Este borrador tiene evidencia validada: es historia real y no se borra.");
+      }
+      state.quests = state.quests.filter((candidate) => candidate.id !== questId);
+      for (const act of state.acts) {
+        act.questIds = act.questIds.filter((candidate) => candidate !== questId);
+      }
+      // La historia real no se toca; un borrador sin aceptar no tiene historia:
+      // se llevan sus hechos y sus avisos, que ya no apuntan a nada.
+      state.events = state.events.filter((event) => event.entityId !== questId && event.questId !== questId);
+      state.notifications = (state.notifications ?? []).filter((record) => record.entityId !== questId);
+      state.artifacts = state.artifacts.filter((artifact) => artifact.questId !== questId);
+      state.evidence = state.evidence.filter((record) => record.questId !== questId);
+      if (state.focusedQuestId === questId) delete state.focusedQuestId;
+      addEvent(state, {
+        type: "quest_deleted",
+        entityType: "quest",
+        entityId: questId,
+        questId,
+        message: `Borrador eliminado: «${quest.title}».`,
+      });
+      // El propio hecho de borrado no merece notificación.
+      state.notifications = (state.notifications ?? []).filter((record) => record.entityId !== questId);
+      return { deleted: true as const, questId };
+    });
+    return result;
+  }
+
+  // -------------------------------------------------------------------------
+  // CENTRO DE NOTIFICACIONES
+  //
+  // Push es entrega efímera; el registro es la verdad. `resend` sólo abre otro
+  // intento de entrega: nunca recrea la Quest ni un segundo NotificationRecord.
+  // -------------------------------------------------------------------------
+
+  async getNotifications(query: NotificationQuery = {}): Promise<{ notifications: NotificationView[]; unread: number }> {
+    const state = await this.tick();
+    return { notifications: notificationViewsFor(state, query), unread: unreadCount(state) };
+  }
+
+  async markNotificationRead(notificationId: string): Promise<NotificationRecord> {
+    const { result } = await this.store.mutate((state) => {
+      const record = (state.notifications ?? []).find((candidate) => candidate.id === notificationId);
+      if (!record) throw new Error(`Notificación no encontrada: ${notificationId}`);
+      record.readAt ??= now();
+      return record;
+    });
+    return result;
+  }
+
+  async archiveNotification(notificationId: string): Promise<NotificationRecord> {
+    const { result } = await this.store.mutate((state) => {
+      const record = (state.notifications ?? []).find((candidate) => candidate.id === notificationId);
+      if (!record) throw new Error(`Notificación no encontrada: ${notificationId}`);
+      record.archivedAt ??= now();
+      record.readAt ??= now();
+      return record;
+    });
+    return result;
+  }
+
+  /** Un intento de entrega NUEVO sobre el registro existente. Nada más. */
+  async resendNotification(notificationId: string): Promise<NotificationRecord> {
+    const { result } = await this.store.mutate((state) => {
+      const record = (state.notifications ?? []).find((candidate) => candidate.id === notificationId);
+      if (!record) throw new Error(`Notificación no encontrada: ${notificationId}`);
+      attemptPush(record);
+      return record;
+    });
+    return result;
+  }
+
+  /** Reenvía la última notificación de una entidad/tipo. No crea una nueva. */
+  async resendEntityNotification(input: {
+    entityType: NotificationEntityType;
+    entityId: string;
+    notificationType?: NotificationType;
+  }): Promise<NotificationRecord> {
+    const { result } = await this.store.mutate((state) => {
+      const record = (state.notifications ?? []).find(
+        (candidate) =>
+          candidate.entityId === input.entityId &&
+          candidate.entityType === input.entityType &&
+          (input.notificationType ? candidate.type === input.notificationType : true),
+      );
+      if (!record) {
+        throw new Error("No existe ninguna notificación para esa entidad. Reenviar no crea una nueva.");
+      }
+      attemptPush(record);
+      return record;
+    });
+    return result;
+  }
+
+  // -------------------------------------------------------------------------
+  // TESORERÍA VIVA
+  //
+  // Sólo hechos financieros reales cambian el dinero. Nunca `impact` como monto,
+  // nunca monedas de juego por gastar dinero real.
+  // -------------------------------------------------------------------------
+
+  async createRecurringObligation(input: RecurringObligationInput): Promise<RecurringObligation> {
+    if (input.name.trim().length < 2) throw new Error("La obligación necesita un nombre.");
+    const { result } = await this.store.mutate((state) => {
+      const obligation = buildRecurringObligation(input);
+      state.recurringObligations.unshift(obligation);
+      addEvent(state, {
+        type: "recurring_obligation_created",
+        entityType: "quest",
+        entityId: obligation.id,
+        message: `${obligation.direction === "income" ? "Ingreso" : "Gasto"} recurrente registrado: «${obligation.name}».`,
+      });
+      return obligation;
+    });
+    return result;
+  }
+
+  async updateRecurringObligation(
+    obligationId: string,
+    patch: Partial<Pick<RecurringObligation, "name" | "expectedAmount" | "provider" | "dueRule" | "frequency" | "category" | "active" | "autoProposeBattle">>,
+  ): Promise<RecurringObligation> {
+    const { result } = await this.store.mutate((state) => {
+      const obligation = state.recurringObligations.find((candidate) => candidate.id === obligationId);
+      if (!obligation) throw new Error(`Obligación no encontrada: ${obligationId}`);
+      if (patch.name !== undefined) obligation.name = patch.name.trim().slice(0, 120);
+      if (patch.expectedAmount !== undefined) {
+        obligation.expectedAmount = patch.expectedAmount === null ? null : Math.max(0, Math.round(patch.expectedAmount));
+      }
+      if (patch.provider !== undefined) obligation.provider = patch.provider?.trim().slice(0, 120) || undefined;
+      if (patch.category !== undefined) obligation.category = patch.category.trim().slice(0, 60);
+      if (patch.frequency !== undefined) obligation.frequency = patch.frequency;
+      if (patch.active !== undefined) obligation.active = patch.active;
+      if (patch.autoProposeBattle !== undefined) obligation.autoProposeBattle = patch.autoProposeBattle;
+      if (patch.dueRule !== undefined) obligation.dueRule = patch.dueRule;
+      if (patch.dueRule !== undefined || patch.frequency !== undefined) {
+        obligation.nextDueDate = advanceDueDate(obligation, new Date());
+      }
+      obligation.updatedAt = now();
+      addEvent(state, {
+        type: "recurring_obligation_updated",
+        entityType: "quest",
+        entityId: obligation.id,
+        message: `Obligación actualizada: «${obligation.name}».`,
+      });
+      return obligation;
+    });
+    return result;
+  }
+
+  async getFinancialObligations(): Promise<{ obligations: ObligationView[]; treasury: TreasuryView }> {
+    const state = await this.tick();
+    return {
+      obligations: state.recurringObligations.map((obligation) => obligationViewFor(obligation)),
+      treasury: treasuryViewFor(state),
+    };
+  }
+
+  /**
+   * Registra un pago/ingreso VALIDADO. El monto es obligatorio y explícito:
+   * nunca se deriva del `impact` de una Quest. Idempotente por evidencia: la
+   * misma prueba no crea dos movimientos.
+   */
+  async recordFinancialTransaction(
+    input: FinancialTransactionInput,
+  ): Promise<{ transaction: FinancialTransaction; obligation: RecurringObligation | null; duplicate: boolean }> {
+    if (!Number.isFinite(input.amount) || input.amount <= 0) {
+      throw new Error("El monto real es obligatorio y debe ser mayor que cero. No se infiere del impacto de la Quest.");
+    }
+    const { result } = await this.store.mutate((state) => {
+      const obligation = input.recurringObligationId
+        ? state.recurringObligations.find((candidate) => candidate.id === input.recurringObligationId) ?? null
+        : null;
+      if (input.recurringObligationId && !obligation) {
+        throw new Error(`Obligación no encontrada: ${input.recurringObligationId}`);
+      }
+
+      const occurredAt = input.occurredAt ? new Date(input.occurredAt).toISOString() : now();
+      const period = periodOf(occurredAt);
+
+      // La misma evidencia —o el mismo pago ya conciliado— no entra dos veces.
+      const amount = Math.max(0, Math.round(input.amount));
+      const existing = state.financialTransactions.find(
+        (candidate) =>
+          candidate.period === period &&
+          candidate.direction === input.direction &&
+          ((input.evidenceArtifactId && candidate.evidenceArtifactId === input.evidenceArtifactId) ||
+            (input.questId && candidate.questId === input.questId) ||
+            (input.recurringObligationId &&
+              candidate.recurringObligationId === input.recurringObligationId &&
+              candidate.amount === amount)),
+      );
+      if (existing) {
+        return { transaction: existing, obligation, duplicate: true };
+      }
+
+      const transaction = buildFinancialTransaction({ ...input, occurredAt });
+      state.financialTransactions.unshift(transaction);
+      state.financialTransactions = state.financialTransactions.slice(0, 500);
+
+      // PERIOD RECONCILIATION: se marca pagado ESTE período, no «para siempre».
+      if (obligation && transaction.status === "confirmed") {
+        obligation.lastPaidPeriod = period;
+        obligation.nextDueDate = advanceDueDate(obligation, new Date(occurredAt));
+        obligation.updatedAt = now();
+        // El aviso de «período pendiente» de esta obligación deja de pesar.
+        markEntityNotificationsRead(state, obligation.id, "recurring_obligation_due");
+      }
+
+      // El dinero real se mueve en la Tesorería. Ninguna moneda de juego nace aquí.
+      if (transaction.status === "confirmed") {
+        if (transaction.direction === "expense") {
+          state.financial.availableBalance = Math.max(0, state.financial.availableBalance - transaction.amount);
+        } else {
+          state.financial.availableBalance += transaction.amount;
+        }
+      }
+
+      addEvent(state, {
+        type: "financial_transaction_recorded",
+        entityType: "quest",
+        entityId: transaction.questId ?? obligation?.id ?? transaction.id,
+        questId: transaction.questId,
+        message: `${transaction.direction === "income" ? "Ingreso" : "Pago"} confirmado por ${transaction.amount.toLocaleString("es-CO")} COP${obligation ? ` (${obligation.name}, ${period})` : ""}.`,
+      });
+      return { transaction, obligation, duplicate: false };
+    });
+    return result;
+  }
+
   async abandon(questId: string, reason: string): Promise<Quest> {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
@@ -1751,6 +2140,7 @@ export class QuestService {
       quest.status = "abandoned";
       quest.abandonedAt = now();
       quest.updatedAt = quest.abandonedAt;
+      if (state.focusedQuestId === quest.id) delete state.focusedQuestId;
       // Retirarse cierra el reloj: una quest abandonada ya no recibe ataques.
       if (quest.battle?.status === "active") {
         // Retirarse cierra el intento; no es un plazo vencido ni una caída.

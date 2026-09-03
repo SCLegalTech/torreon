@@ -52,6 +52,8 @@ function freshSnapshot(): RealmSnapshot {
       campaigns: [],
       activeCampaignIds: [],
       focusedCampaignId: null,
+      focusedQuestId: null,
+      focusedActId: null,
       engagedQuestId: null,
       currentSagaId: null,
       currentCampaignId: null,

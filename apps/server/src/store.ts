@@ -4,7 +4,9 @@ import { dirname } from "node:path";
 import { emptyAgentSlot } from "./companions.js";
 import type { RealmState } from "./domain.js";
 import { backfillEncounter } from "./horde.js";
+import { backfillNotifications } from "./notifications.js";
 import { freshParty } from "./party.js";
+import { DEV_ENTITLEMENTS, freshUsage, rolloverUsage } from "./product.js";
 
 const now = () => new Date().toISOString();
 
@@ -36,6 +38,11 @@ export function createInitialState(): RealmState {
     acts: [],
     quests: [],
     events: [],
+    notifications: [],
+    recurringObligations: [],
+    financialTransactions: [],
+    entitlements: { ...DEV_ENTITLEMENTS },
+    usage: freshUsage(),
     evidence: [],
     artifacts: [],
     lifeEvents: [],
@@ -76,6 +83,10 @@ export class JsonRealmStore {
     for (const campaign of state.campaigns) {
       campaign.status ??= "active";
     }
+    // Actos anteriores a la ejecución en paralelo no declaran dependencias.
+    for (const act of state.acts) {
+      act.dependsOnActIds ??= [];
+    }
     // Un hecho sin entidad no se puede abrir: los históricos apuntan a su quest.
     for (const event of state.events) {
       event.entityType ??= "quest";
@@ -84,6 +95,14 @@ export class JsonRealmStore {
     state.artifacts ??= [];
     state.lifeEvents ??= [];
     state.gameEvents ??= [];
+    // CENTRO DE NOTIFICACIONES y TESORERÍA: reinos anteriores nacen vacíos.
+    state.notifications ??= [];
+    state.recurringObligations ??= [];
+    state.financialTransactions ??= [];
+    // Capa de producto: se completan los campos que falten sin pisar los puestos.
+    state.entitlements = { ...DEV_ENTITLEMENTS, ...(state.entitlements ?? {}) };
+    state.usage ??= freshUsage();
+    rolloverUsage(state.usage);
     // Reinos anteriores a la hoja de personaje empiezan en cero, no en inventado.
     state.character ??= { xp: 0, aura: 0, mastery: {}, rewardedQuestIds: [] };
     state.inventory ??= { items: [] };
@@ -94,6 +113,8 @@ export class JsonRealmStore {
     for (const quest of state.quests) {
       quest.version ??= 1;
       quest.amendments ??= [];
+      // Una Quest Libre no tiene texto de campaña: se normaliza a cadena vacía.
+      quest.campaignTitle ??= "";
       if (quest.battle) {
         const battle = quest.battle;
         battle.attempt ??= 1;
@@ -136,6 +157,10 @@ export class JsonRealmStore {
     for (const artifact of state.artifacts) {
       artifact.stepIds ??= [artifact.stepId];
     }
+    // BACKFILL SEGURO: sólo estado accionable ahora, idempotente por `key`.
+    // Los registros nuevos persisten en la siguiente mutación; mientras tanto
+    // el snapshot ya los ve, así que el jugador nunca «pierde» un pacto.
+    backfillNotifications(state);
     return state;
   }
 

@@ -152,6 +152,10 @@ export interface QuestNode {
   battleStatus: BattleStatus;
   locked: boolean;
   isBoss: boolean;
+  /** `standalone` = Quick Battle sin Campaña ni Acto. */
+  scope: "standalone" | "campaign";
+  /** 💰 GASTO/INGRESO RECURRENTE si la Quick Battle representa dinero real. */
+  financeKind?: "expense" | "income";
 }
 
 export interface ActView {
@@ -209,13 +213,94 @@ export interface RealmHierarchy {
   /** Varias campañas vivas a la vez; ninguna cierra por perder el foco. */
   activeCampaignIds: string[];
   focusedCampaignId: string | null;
+  /** La Quest que el jugador mira. La fija sólo focus_quest. */
+  focusedQuestId: string | null;
+  focusedActId: string | null;
   /** La única Battle con reloj corriendo. */
   engagedQuestId: string | null;
   currentSagaId: string | null;
   currentCampaignId: string | null;
   currentActId: string | null;
   currentQuestId: string | null;
+  /** ⚡ BATALLAS LIBRES: Quests sin padres. */
   standaloneQuests: QuestNode[];
+}
+
+export type NotificationEntityType = "quest" | "campaign" | "act" | "saga" | "obligation";
+export type NotificationType =
+  | "quest_created"
+  | "campaign_created"
+  | "quest_amendment_proposed"
+  | "battle_recontract_proposed"
+  | "quest_waiting_external"
+  | "quest_unblocked"
+  | "battle_lost"
+  | "recurring_obligation_due"
+  | "companion_result";
+
+export interface NotificationView {
+  id: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  entityType: NotificationEntityType;
+  entityId: string;
+  priority: "normal" | "high";
+  deepLink: { screen: "quest" | "campaign" | "act" | "battle" | "treasury"; entityId: string };
+  createdAt: string;
+  read: boolean;
+  archived: boolean;
+  push: { lastAttemptAt: string | null; lastStatus: "sent" | "failed" | "unknown"; attempts: number };
+  bucket: "hoy" | "ayer" | "anteriores";
+}
+
+export type ObligationDirection = "expense" | "income";
+export type ObligationFrequency = "weekly" | "biweekly" | "monthly" | "bimonthly" | "quarterly" | "yearly";
+
+export interface ObligationView {
+  id: string;
+  name: string;
+  direction: ObligationDirection;
+  category: string;
+  frequency: ObligationFrequency;
+  expectedAmount: number | null;
+  currency: "COP";
+  provider?: string;
+  nextDueDate: string | null;
+  periodStatus: "paid" | "pending" | "upcoming";
+  currentPeriod: string;
+  lastPaidPeriod: string | null;
+  active: boolean;
+  autoProposeBattle: boolean;
+}
+
+export interface TreasuryView {
+  currency: "COP";
+  observedBalance: number;
+  expectedIncome: number;
+  committedExpenses: number;
+  reserveTarget: number;
+  projectedMargin: number;
+  upcomingObligations: ObligationView[];
+  recurring: ObligationView[];
+}
+
+export interface Entitlements {
+  plan: "free" | "premium" | "dev";
+  dailyBattleLimit: number | null;
+  dailyCodiceCallLimit: number | null;
+  adsEnabled: boolean;
+  reasoningCallsPerDay: number | null;
+  visionValidationsPerDay: number | null;
+  agentExecutionsPerDay: number | null;
+}
+
+export interface UsageCounters {
+  period: string;
+  battlesStartedToday: number;
+  codiceReasoningCalls: number;
+  visionValidations: number;
+  agentOrchestrations: number;
 }
 
 export interface Quest {
@@ -259,7 +344,9 @@ export interface RealmSnapshot {
         | "evidence_attached" | "step_completed" | "quest_completed" | "reward_granted" | "quest_abandoned"
         | "campaign_created" | "campaign_revised" | "campaign_accepted" | "campaign_focused"
         | "campaign_completed" | "campaign_abandoned"
-        | "act_created" | "act_completed" | "quest_assigned";
+        | "act_created" | "act_completed" | "act_focused" | "quest_assigned"
+        | "quest_deleted" | "quest_focused"
+        | "recurring_obligation_created" | "recurring_obligation_updated" | "financial_transaction_recorded";
       /** A qué entidad se refiere el hecho. La notificación nunca adivina. */
       entityType: EntityType;
       entityId: string;
@@ -321,6 +408,9 @@ export interface RealmSnapshot {
     }>;
   };
   currentQuest: Quest | null;
+  /** NOTIFICATION IS NOT FOCUS. FOCUS IS NOT ENGAGEMENT. */
+  focusedQuest?: Quest | null;
+  engagedQuest?: Quest | null;
   stats: CharacterStats;
   battle: null | {
     questId: string;
@@ -358,4 +448,11 @@ export interface RealmSnapshot {
     currentQuestId: string | null;
   };
   projectedMargin: number;
+  /** Centro de Notificaciones: registro persistente, no la última push. */
+  notifications?: NotificationView[];
+  unreadNotifications?: number;
+  /** Tesorería viva derivada del estado financiero real. */
+  treasury?: TreasuryView;
+  entitlements?: Entitlements;
+  usage?: UsageCounters;
 }
