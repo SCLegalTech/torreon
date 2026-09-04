@@ -507,6 +507,23 @@ function NotificationCenter({
 }) {
   const buckets: NotificationView["bucket"][] = ["hoy", "ayer", "anteriores"];
   const unread = notifications.filter((notice) => !notice.read).length;
+  /*
+    JUBILAR NO ES BORRAR.
+
+    Lo que se cierra con su Battle deja de reclamar atención, pero sigue siendo
+    historia de la partida. El registro se consulta aquí, aparte, para que la
+    bandeja siga significando «esto todavía pide algo».
+  */
+  const [history, setHistory] = useState<NotificationView[] | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const openHistory = () => {
+    if (history) return setHistory(null);
+    setLoadingHistory(true);
+    api<{ notifications: NotificationView[] }>("/api/notifications?includeArchived=true&limit=200")
+      .then((body) => setHistory(body.notifications.filter((notice) => notice.archived)))
+      .catch(() => setHistory([]))
+      .finally(() => setLoadingHistory(false));
+  };
   return (
     <main className="scene notif-scene">
       <header className="notif-top">
@@ -515,6 +532,9 @@ function NotificationCenter({
           <p className="eyebrow">CENTRO DE NOTIFICACIONES</p>
           <h1>🔔 Avisos {unread > 0 ? <span className="notif-count">{unread}</span> : null}</h1>
         </div>
+        <button className="flat-button" type="button" onClick={openHistory} disabled={loadingHistory}>
+          {history ? "VER PENDIENTES" : loadingHistory ? "…" : "VER HISTORIAL"}
+        </button>
       </header>
 
       {/*
@@ -526,7 +546,28 @@ function NotificationCenter({
         botones.
       */}
       <div className="notif-list">
-      {notifications.length === 0 ? (
+      {history ? (
+        <section className="notif-group">
+          <p className="notif-bucket">HISTORIAL · YA NO PIDEN NADA</p>
+          {history.length === 0 ? (
+            <p className="notif-empty">Todavía no se ha jubilado ningún aviso.</p>
+          ) : (
+            history.map((notice) => (
+              <article key={notice.id} className="notif-card read">
+                <span className="notif-icon" aria-hidden="true">{NOTICE_ICON[notice.type] ?? "•"}</span>
+                <div className="notif-body">
+                  <strong>{notice.title}</strong>
+                  <p>{notice.body}</p>
+                  <small>{relativeTime(notice.createdAt)}</small>
+                </div>
+                <div className="notif-actions">
+                  <button className="ghost-button" type="button" disabled={busy} onClick={() => onOpen(notice)}>ABRIR</button>
+                </div>
+              </article>
+            ))
+          )}
+        </section>
+      ) : notifications.length === 0 ? (
         <p className="notif-empty">No hay avisos. Un pacto nuevo aparecerá aquí y no se perderá aunque llegue otro después.</p>
       ) : (
         buckets.map((bucket) => {

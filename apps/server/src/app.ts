@@ -530,6 +530,8 @@ export function createHttpApp(service: QuestService) {
           unreadOnly: req.query.unreadOnly === "true" || req.query.unreadOnly === "1",
           limit: Number.isFinite(limit) ? limit : undefined,
           entityType: req.query.entityType ? (String(req.query.entityType) as never) : undefined,
+          // El historial existe: jubilar un aviso no es borrarlo.
+          includeArchived: req.query.includeArchived === "true" || req.query.includeArchived === "1",
         }),
       );
     } catch (error) {

@@ -948,16 +948,17 @@ export function createMcpServer(service: QuestService): McpServer {
     {
       title: "Listar el Centro de Notificaciones",
       description:
-        "Devuelve las notificaciones persistentes del jugador (pactos que aguardan sello, frentes bloqueados, replanes disponibles, obligaciones vencidas). Cada una lleva un deep link por entityId exacto, nunca por título. Úsala para responder «¿cuántos pactos pendientes tengo?» sin leer todo el Realm. Una push perdida NO borra su notificación.",
+        "Devuelve las notificaciones ACTIVAS del jugador: pactos que aguardan sello, frentes bloqueados, replanes disponibles, obligaciones vencidas. UN AVISO ACTIVO ES UNA COSA QUE TODAVÍA PIDE ALGO: al ganar, abandonar o completar una Quest, todos los suyos se jubilan solos y dejan de salir aquí. Cada uno lleva un deep link por entityId exacto, nunca por título. Con `includeArchived` se ve además el historial ya jubilado. Una push perdida NO borra su notificación.",
       inputSchema: {
         unreadOnly: z.boolean().optional().describe("Sólo las no leídas."),
         limit: z.number().int().min(1).max(200).optional(),
         entityType: notificationEntityType.optional(),
+        includeArchived: z.boolean().optional().describe("Incluye el historial jubilado. Por defecto sólo lo que sigue pendiente."),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
-    async ({ unreadOnly, limit, entityType }) => {
-      const { notifications, unread } = await service.getNotifications({ unreadOnly, limit, entityType: entityType as NotificationEntityType | undefined });
+    async ({ unreadOnly, limit, entityType, includeArchived }) => {
+      const { notifications, unread } = await service.getNotifications({ unreadOnly, limit, includeArchived, entityType: entityType as NotificationEntityType | undefined });
       return toolResult(`${unread} sin leer · ${notifications.length} en la vista.`, { notifications, unread });
     },
   );
