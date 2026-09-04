@@ -8,6 +8,7 @@ import type {
   CurrentStepSummary,
   EvidenceArtifact,
   EvidenceRecord,
+  OpenFrontView,
   Quest,
   QuestDetail,
   QuestNode,
@@ -15,10 +16,12 @@ import type {
   RealmConsistency,
   RealmHierarchy,
   RealmState,
+  RecoveryOffer,
   SagaView,
   WorldSystemView,
 } from "./domain.js";
 import { battleStatusOf } from "./battle.js";
+import { PARTY_MAX_HEALTH, PARTY_ORDER, recoveryHealth } from "./party.js";
 
 /**
  * Modelos de lectura para el Dungeon Master.
@@ -425,7 +428,13 @@ export function hierarchyFor(state: RealmState, currentQuest: Quest | null, enga
 
 export function worldSystemsFor(
   state: RealmState,
-  input: { engagedQuest: Quest | null; quickBattles: number; activeCampaigns: number; unreadNotifications: number },
+  input: {
+    engagedQuest: Quest | null;
+    quickBattles: number;
+    openFronts: number;
+    activeCampaigns: number;
+    unreadNotifications: number;
+  },
 ): WorldSystemView[] {
   const systems: WorldSystemView[] = [];
   if (input.engagedQuest) {
@@ -438,13 +447,24 @@ export function worldSystemsFor(
       entityId: input.engagedQuest.id,
     });
   }
+  // BATALLAS LIBRES ES UNA RUTA REAL, NO UN ANCLA.
+  //
+  // Antes esto declaraba `screen: "realm"`, es decir «ya estás donde tienes que
+  // estar»: el botón del menú quedaba muerto porque no llevaba a ninguna parte.
+  // Ahora nombra su propia pantalla, y esa pantalla abre SIEMPRE —con Battles o
+  // con un estado vacío explícito.
   systems.push({
     id: "quick_battles",
     icon: "⚡",
     label: "BATALLAS LIBRES",
-    detail: input.quickBattles === 0 ? "Sin Quick Battles abiertas" : `${input.quickBattles} abierta(s)`,
-    screen: "realm",
-    badge: input.quickBattles || undefined,
+    detail:
+      input.openFronts > 0
+        ? `${input.openFronts} frente(s) · ${input.quickBattles} libre(s)`
+        : input.quickBattles === 0
+          ? "Sin Battles abiertas"
+          : `${input.quickBattles} abierta(s)`,
+    screen: "quick_battles",
+    badge: input.quickBattles + input.openFronts || undefined,
   });
   systems.push({
     id: "campaigns",
@@ -477,4 +497,88 @@ export function worldSystemsFor(
     badge: input.unreadNotifications || undefined,
   });
   return systems;
+}
+
+// ---------------------------------------------------------------------------
+// FRENTES ABIERTOS
+//
+// UNA BATTLE NO PUEDE VIVIR SÓLO DENTRO DE SU NOTIFICACIÓN.
+//
+// La Battle de una Quest de Campaña estaba a tres pantallas y un cambio de foco
+// de distancia; si el aviso se archivaba, dejaba de existir para el jugador.
+// Esta proyección la devuelve al menú por su id exacto, sin heurísticas de
+// «la última» ni dependencias de `currentQuestId`.
+// ---------------------------------------------------------------------------
+
+export function openFrontsFor(state: RealmState): OpenFrontView[] {
+  return state.quests
+    .filter((quest) => quest.battle && quest.battle.status !== "won")
+    .map((quest) => {
+      const record = quest.battle!;
+      const act = quest.actId ? state.acts.find((candidate) => candidate.id === quest.actId) ?? null : null;
+      const campaignId = act?.campaignId ?? quest.campaignId;
+      const campaign = campaignId ? state.campaigns.find((candidate) => candidate.id === campaignId) ?? null : null;
+      return {
+        questId: quest.id,
+        title: quest.title,
+        campaignTitle: campaign?.title ?? null,
+        actTitle: act?.title ?? null,
+        status: quest.status,
+        battleStatus: record.status,
+        percent: Math.min(100, quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0)),
+        durationMinutes: record.durationMinutes,
+        attempt: record.attempt,
+        engaged: record.status === "active",
+        marquisDown: record.party.marques.health === 0,
+      };
+    })
+    // El frente con reloj primero: es el único que está corriendo el tiempo.
+    .sort((a, b) => Number(b.engaged) - Number(a.engaged));
+}
+
+/**
+ * ¿Hay una retirada táctica sobre la mesa?
+ *
+ * Sólo cuando el frente ya no corre —plazo vencido o Marqués caído— y no hay
+ * ninguna otra Battle comprometida. Con el reloj corriendo NO se ofrece: eso
+ * sería resucitar dentro del intento, y eso no existe.
+ */
+export function recoveryOfferFor(state: RealmState, questId: string | null): RecoveryOffer {
+  const minHealth = recoveryHealth(PARTY_MAX_HEALTH);
+  const quest = questId ? state.quests.find((candidate) => candidate.id === questId) ?? null : null;
+  if (!quest?.battle) {
+    return { questId: null, available: false, minHealth, reason: "No hay ningún frente abierto del que retirarse." };
+  }
+  const record = quest.battle;
+  if (record.status === "active") {
+    return {
+      questId: quest.id,
+      available: false,
+      minHealth,
+      reason: "El reloj sigue corriendo: la retirada es para un frente detenido, no para saltarse el tiempo pactado.",
+    };
+  }
+  if (record.status === "won") {
+    return { questId: quest.id, available: false, minHealth, reason: "Esta Battle ya está ganada." };
+  }
+  if (record.status === "suspended_external") {
+    return {
+      questId: quest.id,
+      available: false,
+      minHealth,
+      reason: "Este frente espera a un tercero real: se reanuda al desbloquearse.",
+    };
+  }
+  if (state.quests.some((candidate) => candidate.id !== quest.id && candidate.battle?.status === "active")) {
+    return {
+      questId: quest.id,
+      available: false,
+      minHealth,
+      reason: "Hay otra Battle con el reloj corriendo. Ciérrala antes de retirar al grupo.",
+    };
+  }
+  if (PARTY_ORDER.every((id) => record.party[id].health > 0)) {
+    return { questId: quest.id, available: false, minHealth, reason: "Nadie está en el suelo: no hay a quién levantar." };
+  }
+  return { questId: quest.id, available: true, minHealth, reason: null };
 }

@@ -76,6 +76,7 @@ import type {
   RealmEvent,
   RealmSnapshot,
   RealmState,
+  RecoveryOffer,
   RecurringObligation,
   RewardProfile,
   Saga,
@@ -107,9 +108,22 @@ import {
   healMember,
   healTarget,
   refreshShield,
+  PARTY_ORDER,
+  recoverFallen,
+  recoveryHealth,
   SHIELD_PER_VALIDATED_IMPACT,
 } from "./party.js";
-import { consistencyFor, currentStepFor, hierarchyFor, progressFor, questDetailFor, statsFor, worldSystemsFor } from "./read-models.js";
+import {
+  consistencyFor,
+  currentStepFor,
+  hierarchyFor,
+  openFrontsFor,
+  progressFor,
+  questDetailFor,
+  recoveryOfferFor,
+  statsFor,
+  worldSystemsFor,
+} from "./read-models.js";
 import {
   classifyScale,
   estimateActiveMinutes,
@@ -888,6 +902,7 @@ export class QuestService {
     const battleQuest = battleQuestOf(realm);
     const battle = battleFor(battleQuest, realm.gameEvents);
     const hierarchy = hierarchyFor(realm, quest, engaged?.id ?? null);
+    const openFronts = openFrontsFor(realm);
     const unread = unreadCount(realm);
     return {
       realm,
@@ -917,9 +932,14 @@ export class QuestService {
       worldSystems: worldSystemsFor(realm, {
         engagedQuest: engaged,
         quickBattles: hierarchy.standaloneQuests.length,
+        openFronts: openFronts.length,
         activeCampaigns: hierarchy.activeCampaignIds.length,
         unreadNotifications: unread,
       }),
+      // Toda Battle viva, con su id exacto: la ruta normal a un frente que
+      // nació dentro de una Campaña y sólo asomaba por su notificación.
+      openFronts,
+      recovery: recoveryOfferFor(realm, battleQuest?.id ?? null),
       afterActionReport: quest
         ? (realm.afterActionReports ?? []).find((report) => report.questId === quest.id) ?? null
         : null,
@@ -1087,6 +1107,16 @@ export class QuestService {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (quest.status !== "accepted") throw new Error("La quest debe estar aceptada antes de comenzar.");
+      // PREFLIGHT: NADIE ENTRA A UN FRENTE NUEVO DESDE EL SUELO.
+      //
+      // Una Battle nueva estrena grupo entero, así que aquí el caso real es
+      // reabrir una que ya tiene registro con el Marqués caído: eso no es
+      // empezar, es reintentar, y reintentar exige levantarlo primero.
+      if (quest.battle && quest.battle.party.marques.health === 0) {
+        throw new Error(
+          "El Marqués está KO en este frente. Levántalo con un Tónico de Retorno o retira al grupo a las Barracas antes de volver a entrar.",
+        );
+      }
       const engaged = engagedQuest(state);
       if (engaged && engaged.id !== questId) {
         throw new Error(`Ya hay una Battle comprometida: «${engaged.title}». Termínala, o espera a que un bloqueo externo libere el frente, antes de iniciar otra.`);
@@ -1185,6 +1215,73 @@ export class QuestService {
   }
 
   /**
+   * RETIRADA TÁCTICA — LA ÚLTIMA RUTA LEGAL.
+   *
+   * UN JUGADOR PUEDE PERDER UNA BATALLA. NO PUEDE PERDER EL ACCESO AL JUEGO.
+   *
+   * El Marqués cae, el zurrón se queda sin Tónico y `retryBattle` —con razón—
+   * se niega a levantarlo gratis. Sin esta salida el frente quedaba clavado
+   * para siempre: un estado terminal involuntario que ninguna regla del juego
+   * pidió. Retirarse cierra el intento y devuelve al grupo con el mínimo de
+   * reentrada que declara el Core.
+   *
+   * LO QUE ESTO NO HACE, Y NO PUEDE HACER:
+   *   - no concede progreso de Quest ni crea evidencia;
+   *   - no cura a la Horda ni le quita el daño recibido;
+   *   - no devuelve consumibles gastados;
+   *   - no borra heridas, historial ni intentos anteriores;
+   *   - no revive dentro del intento: el intento se cierra como `withdrawn`.
+   */
+  async recoverParty(questId: string): Promise<{ battle: BattleState; raised: PartyMemberId[]; minHealth: number }> {
+    // Primero se liquida el tiempo pendiente: si el plazo venció mientras la
+    // app estaba cerrada, la salida legal depende del estado YA resuelto, no
+    // del que quedó escrito antes de que la Horda cobrara lo suyo.
+    await this.tick();
+    const { result } = await this.store.mutate((state) => {
+      const offer = recoveryOfferFor(state, questId);
+      if (!offer.available) throw new Error(offer.reason ?? "La retirada táctica no está disponible ahora.");
+      const quest = requireQuest(state, questId);
+      const record = quest.battle!;
+      const raised = recoverFallen(record.party);
+      const timestamp = now();
+      // El intento se cierra: volver del suelo NUNCA ocurre dentro del mismo.
+      const current = record.attempts.find((attempt) => attempt.attempt === record.attempt);
+      if (current && !current.endedAt) {
+        current.endedAt = timestamp;
+        current.endReason = "timeout";
+      }
+      // El frente sigue esperando un pacto nuevo: retirarse no lo reabre solo.
+      record.status = "awaiting_replan";
+      quest.updatedAt = timestamp;
+      const names = raised.map((id) => record.party[id].name).join(", ");
+      state.gameEvents.unshift({
+        id: randomUUID(),
+        type: "party_member_revived",
+        questId,
+        damage: 0,
+        battleAttempt: record.attempt,
+        message: `Retirada táctica: ${names} vuelve(n) de las Barracas con ${offer.minHealth} HP.`,
+        createdAt: timestamp,
+      });
+      state.gameEvents = state.gameEvents.slice(0, 200);
+      addEvent(state, {
+        type: "battle_restarted",
+        questId,
+        message:
+          `Retirada táctica de «${quest.title}»: ${names} se recupera(n) en las Barracas hasta ${offer.minHealth} HP. ` +
+          "El progreso validado, la Horda, las heridas del resto y el zurrón siguen exactamente como estaban.",
+      });
+      return { battle: battleFor(quest, state.gameEvents)!, raised, minHealth: offer.minHealth };
+    });
+    return result;
+  }
+
+  /** Lo que el Core concedería fuera de Battle, sin conceder nada todavía. */
+  async recoveryOffer(questId: string): Promise<RecoveryOffer> {
+    return recoveryOfferFor(await this.tick(), questId);
+  }
+
+  /**
    * Códice propone repactar el tiempo cuando la realidad exige más.
    *
    * No es una derrota: el intento se cierra como `recontracted`, no como
@@ -1253,11 +1350,21 @@ export class QuestService {
 
   /**
    * Usa un objeto del zurrón. El Core valida y decrementa; el renderer no.
+   *
+   * EL FRENTE SE NOMBRA, NO SE ADIVINA. Con dos Battles esperando auxilio,
+   * `engagedOrRecoverable` elegía la primera del archivo: el jugador gastaba su
+   * único Tónico en la pantalla de Bigle y levantaba a otro Marqués. Cuando el
+   * cliente dice sobre qué frente actúa, es ese y no otro.
    */
-  async useInventoryItem(itemId: InventoryItemId, target: PartyMemberId): Promise<{ battle: BattleState | null; remaining: number; message: string }> {
+  async useInventoryItem(
+    itemId: InventoryItemId,
+    target: PartyMemberId,
+    questId?: string,
+  ): Promise<{ battle: BattleState | null; remaining: number; message: string }> {
     const { result } = await this.store.mutate((state) => {
-      const quest = engagedOrRecoverable(state);
+      const quest = questId ? requireQuest(state, questId) : engagedOrRecoverable(state);
       if (!quest?.battle) throw new Error("No hay ningún frente abierto donde usar objetos.");
+      if (quest.battle.status === "won") throw new Error("Esta Battle ya está ganada: no hay a quién curar.");
       const applied = useItem(state.inventory, quest.battle.party, itemId, target);
       const timestamp = now();
       const member = quest.battle.party[target];

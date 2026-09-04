@@ -112,7 +112,29 @@ export function createHttpApp(service: QuestService) {
 
   app.post("/api/inventory/use", async (req, res, next) => {
     try {
-      res.json(await service.useInventoryItem(req.body?.itemId, req.body?.target));
+      // El frente se nombra: con dos Battles esperando auxilio, adivinar
+      // significaba gastar el Tónico en la que no era.
+      const questId = req.body?.questId ? String(req.body.questId) : undefined;
+      res.json(await service.useInventoryItem(req.body?.itemId, req.body?.target, questId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // RETIRADA TÁCTICA: la última ruta legal cuando ya no queda ninguna dentro.
+  // No concede progreso, no crea evidencia, no devuelve objetos y no revive
+  // dentro del intento: lo cierra y deja al grupo con el mínimo de reentrada.
+  app.post("/api/quests/:questId/battle/recover", async (req, res, next) => {
+    try {
+      res.json(await service.recoverParty(req.params.questId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/quests/:questId/battle/recovery", async (req, res, next) => {
+    try {
+      res.json({ recovery: await service.recoveryOffer(req.params.questId) });
     } catch (error) {
       next(error);
     }

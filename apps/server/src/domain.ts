@@ -1287,6 +1287,51 @@ export interface QuestNode {
   financeKind?: ObligationDirection;
 }
 
+/**
+ * UN FRENTE ABIERTO.
+ *
+ * Toda Quest con una Battle que todavía no terminó, venga de donde venga: una
+ * Quick Battle sin padres o la tercera Quest del segundo Acto de una Campaña.
+ * Es la lista que hace que una Battle sea alcanzable POR NAVEGACIÓN NORMAL y no
+ * sólo por la notificación que la anunció.
+ *
+ * POSITION IS NOT AUTHORIZATION: aquí no hay orden que autorice nada. Es una
+ * proyección de lectura; abrir una entrada sólo mira, nunca acepta ni inicia.
+ */
+export interface OpenFrontView {
+  questId: string;
+  title: string;
+  /** Dónde vive de verdad, para que el jugador sepa a qué frente vuelve. */
+  campaignTitle: string | null;
+  actTitle: string | null;
+  status: QuestStatus;
+  battleStatus: BattleStatus;
+  percent: number;
+  durationMinutes: number;
+  attempt: number;
+  /** `true` si el reloj corre ahora mismo. FOCUS IS NOT ENGAGEMENT. */
+  engaged: boolean;
+  /** `true` si el Marqués está en el suelo en ese frente. */
+  marquisDown: boolean;
+}
+
+/**
+ * ANTI-SOFTLOCK.
+ *
+ * Lo que el Core está dispuesto a conceder FUERA de una Battle cuando ya no
+ * queda ninguna ruta legal dentro de ella. La pantalla no calcula nada de esto:
+ * pregunta, y si `available` es falso muestra `reason` tal cual.
+ */
+export interface RecoveryOffer {
+  /** Frente sobre el que se ofrece la retirada, si existe alguno. */
+  questId: string | null;
+  available: boolean;
+  /** HP de reentrada que concedería. Config del Core, nunca de la UI. */
+  minHealth: number;
+  /** Motivo exacto cuando no está disponible. Nunca un botón mudo. */
+  reason: string | null;
+}
+
 export interface ActView {
   id: string;
   position: number;
@@ -1466,6 +1511,15 @@ export interface RealmSnapshot {
   barracks: BarracksView;
   /** Navegación autoritativa del mundo. Tesorería no cuelga de Batallas Libres. */
   worldSystems: WorldSystemView[];
+  /**
+   * Todas las Battles vivas del reino, con su id exacto.
+   *
+   * Sin esto, una Battle que nació dentro de una Campaña sólo era alcanzable
+   * por la notificación que la anunció: perdida la push, perdida la Battle.
+   */
+  openFronts: OpenFrontView[];
+  /** La retirada táctica: la única salida cuando ya no queda ruta dentro. */
+  recovery: RecoveryOffer;
   /** Informe determinista de la última Battle ganada de esta Quest, si existe. */
   afterActionReport: AfterActionReport | null;
   /** Lo que el reino aprendió sobre duraciones, lecciones y playbooks. */

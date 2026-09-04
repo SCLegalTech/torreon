@@ -105,3 +105,41 @@ export function refreshPartyDisplay(party: PartyState): void {
     party[id].role = PROFILE[id].role;
   }
 }
+
+/**
+ * RECUPERACIÓN FUERA DE BATTLE.
+ *
+ * UN JUGADOR PUEDE PERDER UNA BATALLA. NO PUEDE PERDER EL ACCESO AL JUEGO.
+ *
+ * Con el Marqués en el suelo y el zurrón vacío no queda ninguna ruta legal:
+ * `retryBattle` exige levantarlo y no hay tónico con el que hacerlo. Esa es la
+ * única salida, y por eso vive aquí y no en la pantalla: es la fracción de vida
+ * con la que el grupo vuelve al frente tras una retirada.
+ *
+ * NO ES UNA RESURRECCIÓN GRATIS DENTRO DEL INTENTO: el intento se cierra, la
+ * evidencia, la Horda, el progreso y el zurrón siguen exactamente como estaban.
+ */
+export const RECOVERY_HEALTH_RATIO = 0.25;
+
+/** Vida mínima de reentrada. Configuración del Core, nunca de la UI. */
+export function recoveryHealth(maxHealth: number): number {
+  return Math.max(1, Math.round(maxHealth * RECOVERY_HEALTH_RATIO));
+}
+
+/**
+ * Levanta del suelo a quien haya caído, hasta el mínimo de reentrada.
+ *
+ * Sólo toca a los caídos: quien sigue en pie conserva sus heridas. Devuelve a
+ * quién levantó, para que el evento de mundo pueda decirlo con nombre propio.
+ */
+export function recoverFallen(party: PartyState): PartyMemberId[] {
+  const raised: PartyMemberId[] = [];
+  for (const id of PARTY_ORDER) {
+    const member = party[id];
+    if (member.health > 0) continue;
+    member.health = recoveryHealth(member.maxHealth);
+    member.status = "active";
+    raised.push(id);
+  }
+  return raised;
+}

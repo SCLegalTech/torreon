@@ -79,6 +79,87 @@ describe("Layout móvil de las pantallas con lista", () => {
     expect(tsx).toContain("lockedByDependency");
     expect(tsx).toContain("node?.lockedBy");
   });
+
+  /*
+    NINGÚN CONTROL PRINCIPAL PUEDE FALLAR EN SILENCIO.
+
+    Las cuatro pruebas que siguen defienden los cuatro no-ops del reporte P0.
+    Ninguno era un error de lógica de juego: los cuatro eran la pantalla
+    prometiendo una acción que no podía ocurrir.
+  */
+
+  it("UX-004: «Batallas libres» lleva a una pantalla, no a un desplazamiento imaginario", async () => {
+    const tsx = await readFile(view, "utf8");
+    // El no-op original: pedirle al navegador que desplazara un panel anclado en
+    // absoluto que YA estaba en pantalla. Tocar el botón no producía nada.
+    expect(tsx).not.toContain("querySelector(\".realm-dock\")");
+    expect(tsx).not.toMatch(/\?\.scrollIntoView\(/);
+    // Ahora existe una pantalla de verdad, y abre con Battles o con un vacío dicho.
+    expect(tsx).toContain("function BattlesScreen");
+    expect(tsx).toContain("No hay Batallas libres disponibles");
+    // Y una Battle de Campaña es alcanzable sin depender de su notificación.
+    expect(tsx).toContain("openFronts");
+  });
+
+  it("UX-005: el zurrón se dibuja por ENCIMA del velo de derrota", async () => {
+    const css = await readFile(stylesheet, "utf8");
+    const zIndexOf = (selector: string) => {
+      // Gana la última declaración, igual que en la cascada.
+      const matches = [...css.matchAll(new RegExp(`\n${selector.replace(".", "\.")} \{([^}]*)\}`, "g"))];
+      const values = matches.map((match) => match[1].match(/z-index:\s*(\d+)/)).filter(Boolean);
+      return Number(values[values.length - 1]![1]);
+    };
+    // El bug: mismo z-index y el modal pintado después. El panel se abría y no se veía.
+    expect(zIndexOf(".inventory-drawer")).toBeGreaterThan(zIndexOf(".battle-defeat"));
+
+    const tsx = await readFile(view, "utf8");
+    // Y además se monta después del diálogo, para que ni un empate lo entierre.
+    expect(tsx.indexOf("<InventoryDrawer")).toBeGreaterThan(tsx.indexOf("battle-defeat"));
+  });
+
+  it("UX-006: las acciones de Battle apuntan al frente que se está pintando", async () => {
+    const tsx = await readFile(view, "utf8");
+    const battleProps = tsx.slice(tsx.indexOf("<Battle"));
+    // Replanificar, iniciar, aceptar y entregar evidencia iban contra la
+    // proyección legada mientras la pantalla dibujaba `battleQuest`. Con las dos
+    // apuntando a Quests distintas, el botón no hacía nada visible.
+    expect(battleProps).toContain("battleQuestId");
+    expect(battleProps).not.toMatch(/quest && void act\(\) =>/);
+    expect(battleProps).toContain("battle/recover");
+  });
+
+  it("UX-007: ninguna tipografía de la interfaz baja de ~10 px", async () => {
+    const css = await readFile(stylesheet, "utf8");
+    const tiny = [...css.matchAll(/font(?:-size)?\s*:[^;{}]*?(?<![\d.])(0?\.(\d+)rem)/g)]
+      .map((match) => match[1])
+      .filter((value) => Number(`0${value.replace("rem", "")}`) < 0.62);
+    // Había ochenta y cuatro `clamp()` con mínimos de cuatro y cinco píxeles:
+    // eso no es interfaz densa, es texto que el jugador no puede leer.
+    expect(tiny).toEqual([]);
+  });
+
+  it("UX-008: Campaña, Acto y Orden dejaron de clavar sus paneles en % del arte", async () => {
+    const tsx = await readFile(view, "utf8");
+    const css = await readFile(stylesheet, "utf8");
+    // Cabecera quieta, barra de acción quieta, y el resto en un cuerpo que se desplaza.
+    expect(tsx.match(/className="scene-body"/g)?.length).toBeGreaterThanOrEqual(4);
+    const body = ruleFor(css, ".scene-body");
+    expect(body).toContain("overflow-y: auto");
+    expect(body).toContain("min-height: 0");
+    expect(body).toContain("touch-action: pan-y");
+    /*
+      Y se reparte con FLEX. Con una rejilla de filas automáticas dentro de un
+      contenedor de altura definida y scroll, Chrome dejaba todas las filas en
+      ~55 px y los paneles se derramaban unos sobre otros: el mismo apilamiento,
+      mudado al sitio nuevo. Cada fila tiene que medir lo que mide su panel más
+      alto, y lo que no cabe se desplaza.
+    */
+    expect(css).toContain("flex-wrap: wrap;");
+    expect(css).toContain(".scene-body > * { flex: 1 1 15rem; min-width: 0; }");
+    // Y los paneles vuelven al flujo: la calca en porcentajes queda desactivada.
+    expect(css).toContain("position: static;");
+    expect(css).toContain("inset: auto;");
+  });
 });
 
 /**

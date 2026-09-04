@@ -476,8 +476,41 @@ export interface RealmSnapshot {
   barracks?: BarracksView;
   /** Navegación autoritativa. Tesorería NO cuelga de Batallas Libres. */
   worldSystems?: WorldSystemView[];
+  /** Toda Battle viva del reino con su id exacto, venga de donde venga. */
+  openFronts?: OpenFrontView[];
+  /** La retirada táctica: qué concedería el Core fuera de Battle, y por qué no. */
+  recovery?: RecoveryOffer;
   afterActionReport?: AfterActionReport | null;
   battleMemory?: BattleMemoryView;
+}
+
+/**
+ * UN FRENTE ABIERTO.
+ *
+ * Una Battle no puede vivir sólo dentro de su notificación: archivado el aviso,
+ * la Battle dejaba de existir para el jugador. Aquí están todas, con su id.
+ */
+export interface OpenFrontView {
+  questId: string;
+  title: string;
+  campaignTitle: string | null;
+  actTitle: string | null;
+  status: Quest["status"];
+  battleStatus: BattleStatus;
+  percent: number;
+  durationMinutes: number;
+  attempt: number;
+  /** `true` si el reloj corre ahora mismo. FOCUS IS NOT ENGAGEMENT. */
+  engaged: boolean;
+  marquisDown: boolean;
+}
+
+/** Lo que el Core concede fuera de Battle. La pantalla pregunta, no calcula. */
+export interface RecoveryOffer {
+  questId: string | null;
+  available: boolean;
+  minHealth: number;
+  reason: string | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -272,12 +272,35 @@ export function createMcpServer(service: QuestService): McpServer {
       inputSchema: {
         itemId: z.enum(["revive_tonic", "health_potion"]),
         target: z.enum(["roko", "marques", "cordera"]),
+        questId: z
+          .string()
+          .uuid()
+          .optional()
+          .describe("Frente sobre el que se usa. Con dos Battles esperando auxilio, omitirlo elige la primera y puede no ser la que el jugador mira."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async ({ itemId, target }) => {
-      const result = await service.useInventoryItem(itemId, target);
+    async ({ itemId, target, questId }) => {
+      const result = await service.useInventoryItem(itemId, target, questId);
       return toolResult(`${result.message} Quedan ${result.remaining}.`, result);
+    },
+  );
+
+  server.registerTool(
+    "recover_party",
+    {
+      title: "Retirar al grupo a las Barracas",
+      description:
+        "LA ÚLTIMA RUTA LEGAL. Sólo cuando el frente ya NO corre —plazo vencido o Marqués caído—, alguien está en el suelo y no queda ninguna otra salida: sin Tónico de Retorno, `retry_battle` se niega con razón y el frente quedaría clavado para siempre. Retirarse cierra el intento y devuelve a los caídos con el MÍNIMO de reentrada que declara el Core. NO concede progreso de Quest, NO crea evidencia, NO cura a la Horda ni le quita el daño recibido, NO devuelve consumibles gastados y NO borra heridas ni historial. No es una resurrección dentro del intento: el intento se cierra.",
+      inputSchema: { questId: z.string().uuid() },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ questId }) => {
+      const result = await service.recoverParty(questId);
+      return toolResult(
+        `El grupo se retira a las Barracas: vuelve(n) con ${result.minHealth} HP. El frente sigue abierto y hay que repactar el tiempo.`,
+        result,
+      );
     },
   );
 
