@@ -512,6 +512,9 @@ export function worldSystemsFor(
 
 export function openFrontsFor(state: RealmState): OpenFrontView[] {
   return state.quests
+    // Una Quest cerrada no es un frente abierto, aunque su Battle haya quedado
+    // detenida a medias: descartarla la saca de aquí sin borrar su historia.
+    .filter((quest) => !["completed", "abandoned"].includes(quest.status))
     .filter((quest) => quest.battle && quest.battle.status !== "won")
     .map((quest) => {
       const record = quest.battle!;

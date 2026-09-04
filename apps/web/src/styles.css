@@ -2384,3 +2384,304 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 .map-scene::after, .act-scene::after, .order-scene::after {
   background: linear-gradient(180deg, rgba(3,4,5,.9), rgba(3,4,5,.74) 26% 74%, rgba(3,4,5,.92));
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LAYOUT v4 — LA CALCA VUELVE AL MOCKUP, Y LOS BOTONES SE CALLAN
+
+   Dos decisiones:
+
+   1. EL SISTEMA QUE EL ARTE DIBUJA VIVE SOBRE SU DIBUJO. El Torreón Principal
+      son las Barracas; la casa de la Tesorería es la Tesorería. Bajarlos a una
+      barra inferior era inventar una navegación paralela a la que el escenario
+      ya cuenta. Sólo lo que no tiene edificio se queda en la barra.
+
+   2. ESTO ES UN MOCKUP FUNCIONAL. La interfaz definitiva se hará en Unity, así
+      que aquí no se gasta en cromo: un borde, un fondo plano y el texto. Lo que
+      importa es DÓNDE está cada cosa y QUÉ hace, no cómo brilla.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ---------------------------------------------------------------------------
+   BOTONES MINIMALISTAS — un borde, un fondo plano, nada más.
+   --------------------------------------------------------------------------- */
+.flat-button {
+  min-height: 32px;
+  padding: .3rem .6rem;
+  cursor: pointer;
+  border: 1px solid #5c4a2a;
+  color: #d8c9a8;
+  background: #0b0d0e;
+  font: 900 var(--fs-3xs) ui-monospace, "Cascadia Mono", monospace;
+  letter-spacing: .08em;
+  text-align: center;
+}
+.flat-button.primary { color: #8dffc0; border-color: #2f8f68; }
+.flat-button.danger { color: #ff9d84; border-color: #8c3a2e; }
+.flat-button:disabled { cursor: default; opacity: .4; }
+.flat-button:not(:disabled):active { filter: brightness(1.35); }
+
+.gold-button, .expedition-button, .banner-button, .destructive-button,
+.back-button, .map-nav-button, .orders-button, .ghost-button, .codex-submit,
+.world-system, .realm-chip, .realm-icon-button, .front-list button,
+.stage-hotspot, .map-node, .act-node, .notif-card button, .hero-card button,
+.campaign-switch button, .inventory-list button, .inventory-targets button,
+.revive-button, .bag-button {
+  border-radius: 0;
+  background-image: none;
+  box-shadow: none;
+  text-shadow: none;
+}
+.gold-button, .expedition-button, .banner-button.primary {
+  color: #8dffc0;
+  border: 1px solid #2f8f68;
+  background: #07130f;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+.back-button, .map-nav-button, .orders-button, .banner-button, .codex-submit,
+.world-system, .realm-chip, .realm-icon-button, .front-list button, .stage-hotspot,
+.map-node, .act-node, .campaign-switch button, .inventory-list button {
+  border: 1px solid #5c4a2a;
+  color: #d8c9a8;
+  background: #0b0d0e;
+}
+.ghost-button, .inventory-targets button { border: 1px solid #2f8f68; color: #8dffc0; background: #07130f; }
+.destructive-button, .revive-button { border: 1px solid #8c3a2e; color: #ff9d84; background: #150907; }
+.map-node.current, .campaign-switch button.current, .inventory-list button.current { border-color: #2f8f68; color: #8dffc0; }
+.map-node.completed, .act-node.completed { border-color: #4f7d46; }
+.glass-panel, .parchment { box-shadow: none; }
+
+/* La decisión de cada misión: JUGAR o ELIMINAR, en la misma fila. */
+.quest-decision { display: flex; gap: .3rem; align-items: center; margin-top: .3rem; }
+.quest-decision > span { color: #ffb08d; font: 900 var(--fs-3xs) ui-monospace, monospace; letter-spacing: .06em; }
+.quest-decision .flat-button { flex: 1 1 auto; }
+.quest-decision.confirming { flex-wrap: wrap; }
+
+/* ---------------------------------------------------------------------------
+   EL REINO — hotspots calcados sobre los edificios del arte.
+
+   Van en % del ARTE, dentro de una caja gemela del escenario, así que se quedan
+   sobre su edificio en cualquier proporción de pantalla. La caja no recibe
+   toques; sólo los botones.
+   --------------------------------------------------------------------------- */
+.realm-stage.realm-hotspots { z-index: 1; }
+.stage-hotspot {
+  position: absolute;
+  display: grid;
+  gap: .05rem;
+  width: max-content;
+  max-width: 30%;
+  min-height: 34px;
+  padding: .3rem .55rem;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  pointer-events: auto;
+  text-align: center;
+}
+.stage-hotspot strong {
+  overflow: hidden;
+  color: #e9d19b;
+  font: 900 var(--fs-3xs) ui-monospace, "Cascadia Mono", monospace;
+  letter-spacing: .08em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage-hotspot small {
+  overflow: hidden;
+  color: #a2957d;
+  font-size: var(--fs-3xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage-hotspot:active { filter: brightness(1.35); }
+/* Coordenadas leídas del mockup (lienzo 1673 × 941), en centro de cada rótulo. */
+.spot-codex { top: 21%; left: 94%; }
+.spot-keep { top: 50.5%; left: 34.3%; }
+.spot-treasury { top: 60%; left: 49.4%; }
+.spot-front { top: 78%; left: 64%; max-width: 38%; border-color: #2f8f68; }
+.spot-front strong { color: #8dffc0; }
+
+/* La franja de arriba: la campaña en foco y los avisos. Nada más. */
+.realm-chip.campaign { max-width: min(26rem, 52%); }
+.realm-chip.campaign > span { color: #a3947a; font: 900 var(--fs-3xs) ui-monospace, monospace; letter-spacing: .12em; }
+.realm-chip.campaign strong {
+  overflow: hidden;
+  color: #f3d79a;
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.realm-chip.campaign small { color: #b8ab93; }
+
+/* La barra de abajo sólo lleva lo que no tiene edificio propio. */
+.realm-scene .world-systems { grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); }
+.realm-scene .world-system { min-height: 44px; }
+.world-system.character { border-color: #4b86a2; }
+
+/* ---------------------------------------------------------------------------
+   LA BATALLA — el campo se mira, no se tapa.
+
+   Cuatro cuadros en la esquina inferior izquierda y cuatro en la derecha. Entre
+   ellos, la decisión. Encima, el campo entero libre: ni barras agregadas ni
+   paneles flotando sobre lo que el jugador está mirando.
+   --------------------------------------------------------------------------- */
+.battle-scene {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "header header timer"
+    "field  field  field"
+    "party  center horde";
+}
+.battle-scene .battle-header {
+  grid-area: header;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto auto;
+  gap: .45rem;
+  align-items: center;
+  min-height: 34px;
+  padding: .25rem .45rem;
+  border: 1px solid #3d3323;
+  background: rgba(6,8,9,.9);
+}
+.battle-header .back { width: 28px; height: 28px; border: 1px solid #5c4a2a; background: #0b0d0e; font-size: 1.1rem; }
+.battle-header h1 { overflow: hidden; font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.battle-header .eyebrow { margin: 0; }
+.battle-state { color: #8ff0d5; font: 900 var(--fs-3xs) ui-monospace, monospace; letter-spacing: .08em; white-space: nowrap; }
+
+.battle-scene .battle-timer {
+  grid-area: timer;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0 .45rem;
+  align-content: center;
+  width: auto;
+  padding: .25rem .55rem;
+  border: 1px solid #3d3323;
+  background: rgba(6,8,9,.9);
+  text-align: left;
+}
+.battle-timer strong { color: #f7e2ac; font: var(--fs-md) ui-monospace, "Cascadia Mono", monospace; }
+.battle-timer span { align-self: center; color: #a3947a; font: 900 var(--fs-3xs) ui-monospace, monospace; letter-spacing: .1em; }
+.battle-timer .timer-track { grid-column: 1 / -1; height: 3px; margin-top: .2rem; border: 0; background: #1a1610; }
+.battle-timer.danger { border-color: #8c3a2e; }
+.battle-timer.danger strong { color: #ffb08d; }
+.battle-timer.suspended { border-color: #4b86a2; }
+
+/* Dos bloques de 2×2, uno por bando, anclados a sus esquinas. */
+.battle-scene .party-hud {
+  grid-area: party;
+  align-self: end;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .3rem;
+}
+.battle-scene .enemy-row {
+  grid-area: horde;
+  align-self: end;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .3rem;
+}
+.battle-scene .party-member, .battle-scene .enemy-card {
+  min-height: 38px;
+  padding: .28rem .4rem;
+  border-width: 1px;
+  box-shadow: none;
+}
+
+/* Entre los dos bandos, lo único accionable. */
+.battle-scene .quest-contract {
+  grid-area: center;
+  align-self: end;
+  max-height: min(42dvh, 10rem);
+  padding: .4rem .5rem;
+  border: 1px solid #5c4a2a;
+  background: rgba(6,8,9,.94);
+  text-align: left;
+}
+.battle-scene .contract-actions { display: grid; grid-auto-flow: row; gap: .25rem; margin-top: .3rem; }
+.battle-scene .contract-actions .gold-button,
+.battle-scene .contract-actions .flat-button { width: 100%; min-height: 30px; padding: .25rem .4rem; }
+.battle-scene .orders-button { margin-top: .25rem; }
+
+@media (orientation: portrait) {
+  .battle-scene {
+    display: flex;
+    flex-direction: column;
+  }
+  .battle-scene .party-hud, .battle-scene .enemy-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .battle-scene .quest-contract { max-height: none; }
+  .stage-hotspot { max-width: 44%; }
+}
+
+/* Ajuste fino sobre el arte real: cada hotspot tapa su rótulo pintado entero. */
+.spot-codex { top: 25%; left: 94.7%; min-height: 46px; }
+.spot-castle { top: 39%; left: 10%; }
+/*
+  La franja pintada de arriba es una HUD entera del mockup —campaña, mapa de
+  guerra, oro, gemas, energía— que este reino no sostiene. Se apaga: la que
+  manda es la real, y no puede competir con una falsa a su lado.
+*/
+.realm-scene::after {
+  background:
+    linear-gradient(180deg, rgba(2,3,4,.9) 0 13%, rgba(2,3,4,.2) 30% 64%, rgba(2,3,4,.8) 92%);
+}
+
+/* Las acciones del frente caben en dos columnas: el campo no cede más sitio. */
+.battle-scene .contract-actions {
+  grid-auto-flow: row;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .25rem;
+}
+.battle-scene .contract-actions > *:only-child { grid-column: 1 / -1; }
+.battle-scene .quest-contract .eyebrow { margin: 0 0 .15rem; }
+.battle-scene .quest-contract h2 { margin: 0 0 .25rem; }
+
+/*
+  Con el frente EN CURSO, el rótulo del contrato repite lo que ya dice el reloj
+  («45 MIN») y ocupa una línea que hace falta para los botones. Fuera.
+*/
+.battle-scene .quest-contract.active .eyebrow { display: none; }
+.battle-scene .quest-contract { max-height: min(46dvh, 11rem); }
+
+/* El zurrón dejó de flotar: es un botón más de la fila, sin sitio reservado. */
+.battle-scene .contract-actions .bag-button {
+  position: static;
+  inset: auto;
+  grid-area: auto;
+  width: auto;
+  min-width: 0;
+}
+
+/* El frente sube al trazo de la barra pintada: abajo empieza la franja de sistemas. */
+.spot-front { top: 72%; }
+
+/*
+  EN VERTICAL EL MAPA NO EXISTE.
+
+  El escenario se dibuja con la geometría de `cover`: en un teléfono de pie, el
+  arte mide casi cuatro veces el ancho de la pantalla y los edificios quedan
+  fuera del recorte. Un hotspot clavado sobre un edificio invisible es un botón
+  inalcanzable. La APK va bloqueada en horizontal, pero la web no: ahí los
+  sistemas bajan a una franja normal y siguen siendo alcanzables todos.
+*/
+@media (orientation: portrait) {
+  .realm-stage.realm-hotspots {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .3rem;
+    align-content: end;
+    grid-row: 2;
+    align-self: end;
+    width: auto;
+    height: auto;
+    transform: none;
+  }
+  .stage-hotspot {
+    position: static;
+    flex: 1 1 8rem;
+    max-width: none;
+    transform: none;
+  }
+}

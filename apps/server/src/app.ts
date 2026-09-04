@@ -124,6 +124,17 @@ export function createHttpApp(service: QuestService) {
   // RETIRADA TÁCTICA: la última ruta legal cuando ya no queda ninguna dentro.
   // No concede progreso, no crea evidencia, no devuelve objetos y no revive
   // dentro del intento: lo cierra y deja al grupo con el mínimo de reentrada.
+  // ELIMINAR: la misión deja de estar entre los asuntos pendientes y deja de
+  // generar avisos. El Core decide si eso es borrar un borrador virgen o
+  // abandonar una Quest con historia; la pantalla sólo ofrece la decisión.
+  app.post("/api/quests/:questId/discard", async (req, res, next) => {
+    try {
+      res.json(await service.discardQuest(req.params.questId, String(req.body?.reason ?? "")));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/quests/:questId/battle/recover", async (req, res, next) => {
     try {
       res.json(await service.recoverParty(req.params.questId));

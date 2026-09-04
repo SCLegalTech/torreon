@@ -160,6 +160,61 @@ describe("Layout móvil de las pantallas con lista", () => {
     expect(css).toContain("position: static;");
     expect(css).toContain("inset: auto;");
   });
+
+  it("UX-009: borrar la partida entera no vive a un toque del juego", async () => {
+    const tsx = await readFile(view, "utf8");
+    // El botón del engranaje reiniciaba el reino desde la pantalla principal.
+    expect(tsx).not.toContain("/api/reset");
+    expect(tsx).not.toContain("settings-hotspot");
+    expect(tsx).not.toContain("REINICIAR REINO");
+  });
+
+  it("UX-010: los avisos están arriba, y sólo arriba", async () => {
+    const tsx = await readFile(view, "utf8");
+    // La barra inferior sólo lleva lo que no tiene edificio ni franja propia:
+    // Notificaciones y Batalla activa salían dos veces en la misma pantalla.
+    const placed = tsx.slice(tsx.indexOf("const PLACED = new Set("), tsx.indexOf("const PLACED = new Set(") + 140);
+    expect(placed).toContain("notifications");
+    expect(placed).toContain("barracks");
+    expect(placed).toContain("treasury");
+    expect(placed).toContain("battle");
+  });
+
+  it("UX-011: Tesorería y Barracas viven sobre su edificio del mapa, no en una barra", async () => {
+    const tsx = await readFile(view, "utf8");
+    const css = await readFile(stylesheet, "utf8");
+    // El Torreón Principal ES las Barracas; la casa de la Tesorería, la Tesorería.
+    expect(tsx).toContain("spot-keep");
+    expect(tsx).toContain("spot-treasury");
+    // Y se colocan en % del ARTE, dentro de la caja del escenario, para que no
+    // se despeguen de su edificio en una pantalla que no sea 16:9.
+    expect(ruleFor(css, ".stage-hotspot")).toContain("position: absolute");
+    expect(css).toMatch(/\.spot-keep \{[^}]*top: [\d.]+%/);
+    expect(css).toMatch(/\.spot-treasury \{[^}]*top: [\d.]+%/);
+  });
+
+  it("UX-012: el campo de batalla no lleva nada encima, y los ocho cuadros van a las esquinas", async () => {
+    const tsx = await readFile(view, "utf8");
+    const css = await readFile(stylesheet, "utf8");
+    // Las dos barras agregadas —Horda y Marqués— repetían lo que ya dice cada
+    // cuadro y tapaban justo lo que el jugador está mirando.
+    expect(tsx).not.toContain("enemy-health");
+    expect(tsx).not.toContain("player-health");
+    expect(tsx).not.toContain("battle-hud");
+    // Cuatro abajo a la izquierda, cuatro abajo a la derecha, campo libre en medio.
+    expect(css).toContain('"party  center horde"');
+    expect(css).toContain('"field  field  field"');
+    expect(css).toContain("grid-area: party;");
+    expect(css).toContain("grid-area: horde;");
+  });
+
+  it("UX-013: toda misión ofrece las dos decisiones: JUGAR y ELIMINAR", async () => {
+    const tsx = await readFile(view, "utf8");
+    expect(tsx).toContain(">JUGAR<");
+    expect(tsx).toContain(">ELIMINAR<");
+    // Y eliminar pasa por el Core, que decide si eso es borrar o abandonar.
+    expect(tsx).toContain("/discard");
+  });
 });
 
 /**

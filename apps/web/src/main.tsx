@@ -129,13 +129,26 @@ function LoadingGate({ onStart }: { onStart: () => void }) {
   );
 }
 
+/**
+ * EL REINO.
+ *
+ * CALCA SOBRE EL MOCKUP, NO SOBRE LA PANTALLA.
+ *
+ * Los sistemas del mundo que el arte YA dibuja viven encima de su dibujo: el
+ * Torreón Principal es las Barracas —ahí viven el grupo y los agentes—, la casa
+ * de la Tesorería es la Tesorería, y el valle de en medio es el frente. Cada
+ * hotspot va en % del ARTE, dentro de la misma caja que los sprites, así que se
+ * queda clavado sobre su edificio aunque el teléfono no sea 16:9.
+ *
+ * Arriba sólo dos cosas: la campaña en foco y los avisos. Abajo sólo lo que no
+ * tiene edificio propio. No hay botón de reinicio: borrar la partida entera no
+ * puede vivir a un toque de distancia del juego.
+ */
 function RealmMenu({
   snapshot,
   onCampaign,
   onCodex,
-  onBattle,
   onStats,
-  onReset,
   onNotifications,
   onTreasury,
   onBarracks,
@@ -145,67 +158,44 @@ function RealmMenu({
   snapshot: RealmSnapshot;
   onCampaign: () => void;
   onCodex: () => void;
-  onBattle: () => void;
   onStats: () => void;
-  onReset: () => void;
   onNotifications: () => void;
   onTreasury: () => void;
   onBarracks: () => void;
   onBattles: () => void;
   onOpenBattle: (questId: string) => void;
 }) {
-  const stats = statsOf(snapshot);
-  const [confirmingReset, setConfirmingReset] = useState(false);
-  // FOCO NO ES COMPROMISO: sólo hay «batalla activa» si el reloj corre de verdad.
-  const engaged = snapshot.engagedQuest ?? (snapshot.hierarchy.engagedQuestId ? snapshot.currentQuest : null);
-  const activeCampaigns = snapshot.hierarchy.campaigns.filter((campaign) => campaign.status === "active").length;
-  // ⚡ BATALLAS LIBRES: Quick Battles que no se pierden dentro del mapa de Campañas.
-  const quickBattles: QuestNode[] = (snapshot.hierarchy.standaloneQuests ?? []).filter(
-    (node) => node.status === "draft" || node.status === "accepted" || node.status === "waiting_external" || node.status === "active",
+  const hierarchy = snapshot.hierarchy;
+  const quickBattles: QuestNode[] = (hierarchy.standaloneQuests ?? []).filter(
+    (node) => !["completed", "abandoned"].includes(node.status),
   );
   const openFronts = snapshot.openFronts ?? fallbackOpenFronts(snapshot);
+  const front = openFronts[0] ?? null;
   const unread = snapshot.unreadNotifications ?? 0;
-  // La navegación del mundo la declara el Core. Si algún día falta, se cae a
-  // una lista mínima equivalente: nunca a Tesorería colgando de otra cosa.
-  const worldSystems: WorldSystemView[] =
-    snapshot.worldSystems && snapshot.worldSystems.length > 0
-      ? snapshot.worldSystems
-      : [
-          { id: "quick_battles", icon: "⚡", label: "BATALLAS LIBRES", detail: `${quickBattles.length} abierta(s)`, screen: "quick_battles" },
-          { id: "campaigns", icon: "🏰", label: "CAMPAÑAS", detail: `${activeCampaigns} frente(s)`, screen: "campaign" },
-          { id: "barracks", icon: "🛡️", label: "BARRACAS", detail: "El grupo y los agentes", screen: "barracks" },
-          { id: "treasury", icon: "💰", label: "TESORERÍA", detail: "Dinero real del reino", screen: "treasury" },
-          { id: "notifications", icon: "🔔", label: "NOTIFICACIONES", detail: `${unread} sin leer`, screen: "notifications" },
-        ];
-  const openSystem = (system: WorldSystemView) => {
-    if (system.id === "treasury") return onTreasury();
-    if (system.id === "barracks") return onBarracks();
-    if (system.id === "notifications") return onNotifications();
-    if (system.id === "campaigns") return onCampaign();
-    // El sistema «batalla activa» trae la entidad exacta: se abre por id.
-    if (system.id === "battle") return system.entityId ? onOpenBattle(system.entityId) : onBattle();
-    /*
-      NINGÚN CONTROL PRINCIPAL PUEDE FALLAR EN SILENCIO.
+  // La campaña que el jugador mira. Las demás siguen vivas y no atacan.
+  const campaign =
+    hierarchy.campaigns.find((candidate) => candidate.id === hierarchy.focusedCampaignId) ??
+    hierarchy.campaigns.find((candidate) => candidate.status === "active") ??
+    hierarchy.campaigns.find((candidate) => candidate.status === "draft") ??
+    null;
 
-      «Batallas libres» hacía `scrollIntoView` sobre un panel que ya estaba en
-      pantalla y anclado en absoluto: el navegador no tenía nada que desplazar,
-      así que tocar el botón no producía absolutamente nada. Ahora lleva a una
-      pantalla real que abre SIEMPRE, con Battles o con un vacío explicado.
-    */
+  /*
+    LA LISTA LA DECLARA EL CORE; EL SITIO LO DECIDE LA PANTALLA.
+
+    `worldSystems` sigue siendo autoritativo —Tesorería no cuelga de Batallas
+    Libres—, pero dónde se pinta cada uno es asunto del escenario: los que el
+    arte dibuja van sobre su edificio y sólo el resto baja a la barra.
+    Notificaciones estaba arriba Y abajo; ahora sólo arriba.
+  */
+  const PLACED = new Set(["barracks", "treasury", "notifications", "battle"]);
+  const docked: WorldSystemView[] = (snapshot.worldSystems ?? []).filter((system) => !PLACED.has(system.id));
+  const openSystem = (system: WorldSystemView) => {
+    if (system.id === "campaigns") return onCampaign();
     return onBattles();
   };
+
   return (
     <main className="scene realm-scene">
-      {/*
-        EL ESCENARIO.
-
-        El arte se dibuja con `cover`, así que en una pantalla que no sea 16:9
-        se recorta. Si el grupo se colocara en % de la PANTALLA, se despegaría
-        del suelo pintado en cuanto cambiara la proporción. Por eso el fondo y
-        los sprites viven dentro de la misma caja, que reproduce exactamente la
-        geometría de `cover`: todo lo de dentro va en % del ARTE, no de la
-        pantalla, y el grupo queda clavado donde el mockup lo puso.
-      */}
       <div className="realm-stage">
         <img className="realm-mockup" src="/assets/art/realm-menu-mockup.png" alt="" aria-hidden="true" />
         <div className="stage-party" aria-label="El grupo del Marqués">
@@ -221,108 +211,73 @@ function RealmMenu({
           ))}
         </div>
       </div>
-      {/*
-        UNA SOLA FRANJA ARRIBA, UNA SOLA ABAJO.
-
-        Antes había cinco botones flotando en porcentajes del ARTE: identidad,
-        Campañas, Códice, Batalla activa y campana. En un teléfono apaisado esos
-        porcentajes se cruzaban entre sí y encima de los rótulos que el mockup ya
-        trae pintados, así que se leían dos veces las mismas palabras y ninguna
-        se podía tocar con seguridad. Campañas y Batalla activa NO desaparecen:
-        viven en la barra de sistemas, que es donde el Core las declara.
-      */}
-      <header className="realm-bar top">
-        <button className="realm-chip identity" type="button" onClick={onStats}>
-          <strong>{stats.displayName.toUpperCase()}</strong>
-          <span>{stats.hp}/{stats.maxHp} HP · {stats.xp} XP · {stats.aura} Aura</span>
-        </button>
-        <div className="realm-bar-actions">
-          <button
-            className="realm-icon-button"
-            type="button"
-            onClick={onNotifications}
-            aria-label={`Notificaciones${unread ? `, ${unread} sin leer` : ""}`}
-          >
-            <span aria-hidden="true">AVISOS</span>
-            {unread > 0 ? <span className="realm-bell-badge">{unread > 99 ? "99+" : unread}</span> : null}
-          </button>
-          <button className="realm-icon-button" type="button" onClick={() => setConfirmingReset(true)} aria-label="Reiniciar reino">
-            <span aria-hidden="true">↻</span>
-          </button>
-        </div>
-      </header>
 
       {/*
-        SISTEMAS DEL MUNDO.
-
-        TREASURY IS NOT A QUICK BATTLE. Barracas y Tesorería son HERMANAS de
-        Batallas Libres, no botones dentro de su cabecera. La lista la fija el
-        Core en `worldSystems`; aquí sólo se pinta.
+        Los hotspots viven en una caja gemela del escenario —misma geometría,
+        delante— para que reciban el toque sin depender del orden de pintado de
+        una capa con z-index negativo.
       */}
-      <nav className="world-systems glass-panel" aria-label="Sistemas del reino">
-        {/* El Dungeon Master no es un sistema del Core, pero sí una puerta. */}
-        <button type="button" className="world-system codex" onClick={onCodex}>
-          <span className="world-icon" aria-hidden="true">Φ</span>
+      <div className="realm-stage realm-hotspots" aria-label="Sistemas del reino sobre el mapa">
+        <button className="stage-hotspot spot-codex" type="button" onClick={onCodex}>
           <strong>CÓDICE</strong>
           <small>Dungeon Master</small>
         </button>
-        {worldSystems.map((system) => (
-          <button
-            key={system.id}
-            type="button"
-            className={`world-system ${system.id}`}
-            onClick={() => openSystem(system)}
-          >
-            <span className="world-icon" aria-hidden="true">{system.icon}</span>
+        {/* El Castillo es «tu patrimonio»: la hoja del propio Marqués. */}
+        <button className="stage-hotspot spot-castle" type="button" onClick={onStats}>
+          <strong>CASTILLO</strong>
+          <small>Hoja del Marqués</small>
+        </button>
+        <button className="stage-hotspot spot-keep" type="button" onClick={onBarracks}>
+          <strong>TORREÓN PRINCIPAL</strong>
+          <small>El grupo y los agentes</small>
+        </button>
+        <button className="stage-hotspot spot-treasury" type="button" onClick={onTreasury}>
+          <strong>TESORERÍA</strong>
+          <small>Recursos y finanzas</small>
+        </button>
+        {front ? (
+          <button className="stage-hotspot spot-front" type="button" onClick={() => onOpenBattle(front.questId)}>
+            <strong>FRENTE DE BATALLA</strong>
+            <small>
+              {front.title} · {front.percent}/100
+              {front.marquisDown ? " · MARQUÉS EN EL SUELO" : ""}
+            </small>
+          </button>
+        ) : null}
+      </div>
+
+      <header className="realm-bar top">
+        <button className="realm-chip campaign" type="button" onClick={onCampaign}>
+          <span>CAMPAÑA ACTIVA</span>
+          <strong>{campaign ? campaign.title : "SIN CAMPAÑA"}</strong>
+          <small>{campaign ? `Quests ${campaign.completedQuests} / ${campaign.totalQuests}` : "Pídele una a Códice"}</small>
+        </button>
+        <button
+          className="realm-icon-button"
+          type="button"
+          onClick={onNotifications}
+          aria-label={`Notificaciones${unread ? `, ${unread} sin leer` : ""}`}
+        >
+          <span aria-hidden="true">AVISOS</span>
+          {unread > 0 ? <span className="realm-bell-badge">{unread > 99 ? "99+" : unread}</span> : null}
+        </button>
+      </header>
+
+      <nav className="world-systems" aria-label="Sistemas sin edificio propio">
+        {docked.map((system) => (
+          <button key={system.id} type="button" className={`world-system ${system.id}`} onClick={() => openSystem(system)}>
             <strong>{system.label}</strong>
             <small>{system.detail}</small>
             {system.badge ? <em className="world-badge">{system.badge > 99 ? "99+" : system.badge}</em> : null}
           </button>
         ))}
+        {docked.length === 0 ? (
+          <button type="button" className="world-system quick_battles" onClick={onBattles}>
+            <strong>BATALLAS</strong>
+            <small>{quickBattles.length} libre(s)</small>
+          </button>
+        ) : null}
       </nav>
-
-      {/*
-        ⚡ EL FRENTE VIVO, EN UNA LÍNEA.
-
-        La lista entera ya no se apila sobre el reino: vive en su propia
-        pantalla. Aquí sólo queda el atajo al frente que de verdad está
-        esperando —el que corre el reloj o el que dejó a alguien en el suelo—,
-        que es la única urgencia que justifica ocupar el escenario.
-      */}
-      {openFronts.length > 0 ? (
-        <button className="realm-front glass-panel" type="button" onClick={() => onOpenBattle(openFronts[0].questId)}>
-          <span className="realm-front-tag">{openFronts[0].engaged ? "⚔ RELOJ CORRIENDO" : "⚑ FRENTE ABIERTO"}</span>
-          <strong>{openFronts[0].title}</strong>
-          <small>
-            {openFronts[0].percent}/100
-            {openFronts[0].marquisDown ? " · EL MARQUÉS ESTÁ EN EL SUELO" : ""}
-            {openFronts.length > 1 ? ` · +${openFronts.length - 1} más` : ""}
-          </small>
-        </button>
-      ) : null}
-
-      {/* Reiniciar borra gameplay real: nunca puede dispararse de un solo toque. */}
-      {confirmingReset ? (
-        <div className="reset-confirm" role="dialog" aria-modal="true" aria-label="Confirmar reinicio del reino">
-          <article>
-            <strong>¿Reiniciar el reino?</strong>
-            <p>Esto eliminará las quests activas y el progreso actual. Esta acción no se puede deshacer.</p>
-            <div className="reset-actions">
-              <button className="back-button" type="button" onClick={() => setConfirmingReset(false)}>CANCELAR</button>
-              <button
-                className="destructive-button"
-                type="button"
-                onClick={() => {
-                  setConfirmingReset(false);
-                  onReset();
-                }}
-              >
-                REINICIAR REINO
-              </button>
-            </div>
-          </article>
-        </div>
-      ) : null}
     </main>
   );
 }
@@ -405,16 +360,53 @@ const QUEST_STATE_LABEL: Record<Quest["status"], string> = {
 function BattlesScreen({
   openFronts,
   quickBattles,
+  busy,
   onBack,
   onOpenBattle,
   onOpenOrder,
+  onDiscard,
 }: {
   openFronts: OpenFrontView[];
   quickBattles: QuestNode[];
+  busy: boolean;
   onBack: () => void;
   onOpenBattle: (questId: string) => void;
   onOpenOrder: (questId: string) => void;
+  onDiscard: (questId: string) => void;
 }) {
+  /*
+    JUGAR O ELIMINAR.
+
+    No toda oportunidad que el reino detecta hay que jugarla. Eliminar pide una
+    confirmación en la misma fila —sin modal— porque descarta gameplay real: el
+    Core borra un borrador virgen y ABANDONA cualquier cosa con historia, pero
+    en los dos casos deja de reclamar atención.
+  */
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const decision = (questId: string, play: () => void) =>
+    confirming === questId ? (
+      <div className="quest-decision confirming">
+        <span>¿Eliminar?</span>
+        <button className="flat-button" type="button" disabled={busy} onClick={() => setConfirming(null)}>NO</button>
+        <button
+          className="flat-button danger"
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setConfirming(null);
+            onDiscard(questId);
+          }}
+        >
+          SÍ, ELIMINAR
+        </button>
+      </div>
+    ) : (
+      <div className="quest-decision">
+        <button className="flat-button primary" type="button" disabled={busy} onClick={play}>JUGAR</button>
+        <button className="flat-button" type="button" disabled={busy} onClick={() => setConfirming(questId)}>ELIMINAR</button>
+      </div>
+    );
+
   return (
     <main className="scene list-scene battles-scene">
       <header className="list-top">
@@ -449,6 +441,7 @@ function BattlesScreen({
                     {front.marquisDown ? " · MARQUÉS EN EL SUELO" : ""}
                   </em>
                 </button>
+                {decision(front.questId, () => onOpenBattle(front.questId))}
               </li>
             ))}
           </ul>
@@ -476,6 +469,7 @@ function BattlesScreen({
                     {node.locked ? ` · 🔒 ${node.lockedBy ?? "depende de otra quest"}` : ""}
                   </em>
                 </button>
+                {decision(node.id, () => onOpenOrder(node.id))}
               </li>
             ))}
           </ul>
@@ -1226,28 +1220,28 @@ function BattleTimer({ clock, status, receivedAt }: { clock: BattleClock; status
   const totalMs = clock.durationMinutes * 60_000;
   const spent = totalMs > 0 ? Math.min(100, ((totalMs - remaining) / totalMs) * 100) : 100;
   const danger = running && remaining <= 5 * 60_000;
+  /*
+    EL RELOJ, MINIMALISTA.
+
+    Ocupaba un panel con título, cifra grande, barra y un párrafo explicando la
+    mecánica de la presión. Esa explicación es de manual, no de HUD: aquí sólo
+    va lo que cambia segundo a segundo —la cifra— y una línea de progreso.
+  */
   return (
-    <section className={`battle-timer glass-panel ${danger ? "danger" : ""} ${clock.suspended ? "suspended" : ""}`} aria-live="off">
-      <div>
-        <span>
-          {clock.suspended
-            ? "PRESIÓN SUSPENDIDA"
-            : status === "awaiting_replan"
-              ? "PLAZO VENCIDO"
-              : status === "awaiting_recovery"
-                ? "EL MARQUÉS CAYÓ"
-                : status === "won"
-                  ? "MARGEN RESTANTE"
-                  : "TIEMPO RESTANTE"}
-        </span>
-        <strong>{formatClock(remaining)}</strong>
-      </div>
-      <div className="timer-track"><span style={{ width: `${spent}%` }} /></div>
-      <small>
+    <section className={`battle-timer ${danger ? "danger" : ""} ${clock.suspended ? "suspended" : ""}`} aria-live="off">
+      <strong>{formatClock(remaining)}</strong>
+      <span>
         {clock.suspended
-          ? "Un bloqueo externo real detuvo el reloj. No hay acción del Marqués."
-          : `La Horda golpea al 25%, 50%, 75% y 100% de los ${clock.durationMinutes} min pactados.`}
-      </small>
+          ? "EN PAUSA"
+          : status === "awaiting_replan"
+            ? "VENCIDO"
+            : status === "awaiting_recovery"
+              ? "CAÍDO"
+              : status === "won"
+                ? "MARGEN"
+                : `${clock.durationMinutes} MIN`}
+      </span>
+      <div className="timer-track"><span style={{ width: `${spent}%` }} /></div>
     </section>
   );
 }
@@ -1836,6 +1830,7 @@ function QuestOrder({
   onStart,
   onEnterBattle,
   onOpenStats,
+  onDiscard,
 }: {
   snapshot: RealmSnapshot;
   questId: string | null;
@@ -1846,8 +1841,11 @@ function QuestOrder({
   onStart: (questId: string) => void;
   onEnterBattle: (questId: string) => void;
   onOpenStats: () => void;
+  onDiscard: (questId: string) => void;
 }) {
   const current = snapshot.currentQuest;
+  // ELIMINAR también desde el detalle: es donde el jugador termina de decidir.
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const isCurrent = Boolean(questId) && current?.id === questId;
   const [fetched, setFetched] = useState<QuestOrderView | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -2055,6 +2053,34 @@ function QuestOrder({
 
       <div className="order-actions">
         <button className="back-button" type="button" onClick={onBack}>← ATRÁS</button>
+        {/*
+          La misión que no se quiere jugar no tiene por qué quedarse abierta.
+          El Core decide si eso es borrar un borrador virgen o abandonar algo
+          con historia; aquí sólo se ofrece la decisión, con confirmación.
+        */}
+        {quest.status !== "completed" ? (
+          confirmingDiscard ? (
+            <span className="quest-decision confirming">
+              <span>¿Eliminar esta misión?</span>
+              <button className="flat-button" type="button" onClick={() => setConfirmingDiscard(false)}>NO</button>
+              <button
+                className="flat-button danger"
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setConfirmingDiscard(false);
+                  onDiscard(quest.id);
+                }}
+              >
+                SÍ, ELIMINAR
+              </button>
+            </span>
+          ) : (
+            <button className="flat-button" type="button" disabled={busy} onClick={() => setConfirmingDiscard(true)}>
+              ELIMINAR
+            </button>
+          )
+        ) : null}
         {lockedByDependency ? (
           // El ÚNICO bloqueo legítimo, y dice exactamente quién lo causa.
           <button className="expedition-button" type="button" disabled title={node?.lockedBy}>
@@ -2175,7 +2201,7 @@ function Battle({
     );
   }
   const battle = snapshot.battle;
-  const health = battle?.enemyHealth ?? 100;
+  // La vida agregada de la Horda ya no se dibuja: cada enemigo trae la suya.
   const playerHealth = battle?.playerHealth ?? 100;
   // El estado que decide qué rutas existen. Lo dice el Core, no la pantalla.
   const marquisDown = battle?.party.marques.health === 0;
@@ -2258,25 +2284,46 @@ function Battle({
           </>
         ) : null}
       </div>
-      <header className="battle-header glass-panel">
-        <button className="back" onClick={onBack}>‹</button>
-        <div><p className="eyebrow">{quest.campaignTitle}</p><h1>{quest.title}</h1></div>
-        <StatusBadge status={quest.status} />
-      </header>
+      {/*
+        LA CABECERA ES TODO EL ESTADO QUE HACE FALTA.
 
-      <section className="enemy-health glass-panel">
-        <div><span>HORDA SUBTERRÁNEA</span><strong>{health} / 100</strong></div>
-        <div className="health-track"><span style={{ width: `${health}%` }} /></div>
-      </section>
+        Antes había además una barra de la Horda y otra del Marqués sobre el
+        campo. Ya no significan nada: cada enemigo trae su propia vida en su
+        cuadro y cada miembro del grupo la suya. Dos barras agregadas encima del
+        escenario sólo tapaban la batalla para repetir lo que ya estaba dicho.
+      */}
+      <header className="battle-header">
+        <button className="back" type="button" onClick={onBack} aria-label="Volver">‹</button>
+        <div>
+          <p className="eyebrow">{quest.campaignTitle}</p>
+          <h1>{quest.title}</h1>
+        </div>
+        <span className="battle-state">
+          {battle
+            ? battle.status === "awaiting_recovery"
+              ? "SIN MARQUÉS"
+              : battle.status === "awaiting_replan"
+                ? "PLAZO VENCIDO"
+                : battle.status === "won"
+                  ? "GANADA"
+                  : battle.clock?.suspended
+                    ? "SUSPENDIDA"
+                    : "EN CURSO"
+            : "SIN INICIAR"}
+          {battle ? ` · ${battle.attempt}` : ""}
+        </span>
+        <button className="flat-button" type="button" onClick={onOpenStats}>PERSONAJE</button>
+      </header>
 
       {battle?.clock ? <BattleTimer clock={battle.clock} status={battle.status} receivedAt={receivedAt} /> : null}
 
       {/*
-        Tira de estado calcada sobre el HUD pintado del arte de batalla: donde
-        el escenario dibuja un reloj y un «modo enfoque» que no existen, el
-        renderer pone el estado real del frente.
+        CUATRO CUADROS ABAJO A LA IZQUIERDA, CUATRO ABAJO A LA DERECHA.
+
+        El grupo y la Horda enmarcan el campo por sus esquinas inferiores en vez
+        de flotar sobre él: la ventana de la batalla queda libre, que es lo que
+        el jugador está mirando.
       */}
-      {battle ? <EnemyRow enemies={battle.enemies} /> : null}
       {battle ? (
         <PartyHud
           party={battle.party}
@@ -2289,39 +2336,7 @@ function Battle({
           }}
         />
       ) : null}
-      {battle ? (
-        <button className="bag-button" type="button" onClick={() => setBagOpen((open) => !open)}>
-          🎒 {snapshot.inventory?.items.reduce((sum, entry) => sum + entry.quantity, 0) ?? 0}
-        </button>
-      ) : null}
-      {battle ? (
-        <section className="battle-hud glass-panel" aria-label="Estado del frente">
-          <div>
-            <span>ESTADO</span>
-            <strong>
-              {battle.status === "awaiting_recovery"
-                ? "SIN MARQUÉS"
-                : battle.status === "awaiting_replan"
-                  ? "PLAZO VENCIDO"
-                  : battle.status === "won"
-                    ? "GANADA"
-                    : battle.clock?.suspended
-                      ? "SUSPENDIDA"
-                      : battle.clock
-                        ? "EN CURSO"
-                        : "SIN INICIAR"}
-            </strong>
-          </div>
-          <div><span>INTENTO</span><strong>{battle.attempt}</strong></div>
-          <div className="hud-step"><span>PASO ACTUAL</span><strong>{currentStep?.title ?? "—"}</strong></div>
-        </section>
-      ) : null}
-
-      <button className="player-health glass-panel" type="button" onClick={onOpenStats} aria-label="Abrir hoja de personaje">
-        <div><span>MARQUÉS</span><strong>{playerHealth} / 100 HP</strong></div>
-        <div className="player-health-track"><span style={{ width: `${playerHealth}%` }} /></div>
-        <small className="stats-hint">VER PERSONAJE ›</small>
-      </button>
+      {battle ? <EnemyRow enemies={battle.enemies} /> : null}
 
       <section className="battlefield" aria-label="Campo de batalla">
         <span className="battle-pulse ally" aria-hidden="true" />
@@ -2468,24 +2483,30 @@ function Battle({
 
         {quest.status === "active" ? (
           <button className="orders-button" type="button" onClick={() => setOrdersOpen((open) => !open)}>
-            {ordersOpen ? "CERRAR ÓRDENES" : `ABRIR ÓRDENES · ${battle?.completedSteps ?? 0}/${quest.steps.length}`}
+            {ordersOpen ? "CERRAR ÓRDENES" : `ÓRDENES ${battle?.completedSteps ?? 0}/${quest.steps.length}`}
           </button>
         ) : null}
 
         {/* Un solo CTA principal, y dice exactamente qué toca ahora. */}
         <div className="contract-actions">
-          {quest.status === "draft" ? <button className="gold-button" disabled={busy} onClick={onAccept}>ACEPTAR CONTRATO</button> : null}
-          {quest.status === "accepted" ? <button className="gold-button" disabled={busy} onClick={onStart}>INICIAR BATALLA</button> : null}
+          {quest.status === "draft" ? <button className="gold-button" disabled={busy} onClick={onAccept}>ACEPTAR</button> : null}
+          {quest.status === "accepted" ? <button className="gold-button" disabled={busy} onClick={onStart}>INICIAR</button> : null}
           {quest.status === "active" && currentStep && battle?.status === "active" ? (
             <button className="gold-button" type="button" onClick={focusCurrentStep}>
-              {currentStep.evidenceKind === "photo" ? "📷 TOMAR EVIDENCIA" : "⚔️ ENTREGAR EVIDENCIA"}
+              {currentStep.evidenceKind === "photo" ? "FOTO" : "EVIDENCIA"}
             </button>
           ) : null}
-          {quest.status === "waiting_external" ? <button className="gold-button" type="button" disabled>SIN ACCIÓN REQUERIDA</button> : null}
-          {quest.status === "completed" ? <button className="gold-button" onClick={onBack}>VOLVER AL REINO</button> : null}
+          {quest.status === "waiting_external" ? <button className="gold-button" type="button" disabled>SIN ACCIÓN</button> : null}
+          {quest.status === "completed" ? <button className="gold-button" onClick={onBack}>AL REINO</button> : null}
+          {/* El zurrón deja de flotar sobre el campo: es una acción más. */}
+          {battle ? (
+            <button className="flat-button bag-button" type="button" onClick={() => setBagOpen((open) => !open)}>
+              ZURRÓN {snapshot.inventory?.items.reduce((sum, entry) => sum + entry.quantity, 0) ?? 0}
+            </button>
+          ) : null}
+          <button className="flat-button" type="button" onClick={onOpenOrder}>VER ORDEN</button>
         </div>
         {quest.status === "active" && currentStep ? <small className="contract-step">PASO ACTUAL · {currentStep.title}</small> : null}
-        <button className="orders-button" type="button" onClick={onOpenOrder}>VER ORDEN DE MISIÓN</button>
       </aside>
 
       <section className={`steps-panel glass-panel ${ordersOpen ? "open" : "closed"}`}>
@@ -2806,6 +2827,26 @@ function App() {
   };
 
   /**
+   * ELIMINAR.
+   *
+   * La pantalla no decide si eso es borrar o abandonar: eso depende de si la
+   * misión tiene historia, y sólo el Core lo sabe. Aquí sólo se pide, y si el
+   * jugador estaba mirando esa Quest se le devuelve a la lista en vez de
+   * dejarlo frente a una entidad que ya no existe.
+   */
+  const discardQuest = (questId: string) => {
+    void act(() =>
+      api(`/api/quests/${questId}/discard`, { method: "POST", body: JSON.stringify({ reason: "Descartada por el jugador." }) }),
+    ).then(() => {
+      setNotice(null);
+      if (openQuestId === questId) {
+        setOpenQuestId(null);
+        setScreen("battles");
+      }
+    });
+  };
+
+  /**
    * ENTRAR A UNA BATTLE ES MIRARLA.
    *
    * `focus_quest` es navegación pura —no acepta, no inicia, no cambia nada del
@@ -2921,9 +2962,7 @@ function App() {
           snapshot={snapshot}
           onCampaign={openCampaignOrOrder}
           onCodex={() => setComposerOpen(true)}
-          onBattle={() => (snapshot.hierarchy.engagedQuestId ? openBattle(snapshot.hierarchy.engagedQuestId) : setScreen("battle"))}
           onStats={() => setScreen("stats")}
-          onReset={() => void act(() => api("/api/reset", { method: "POST" }))}
           onNotifications={() => setScreen("notifications")}
           onTreasury={() => setScreen("treasury")}
           onBarracks={() => setScreen("barracks")}
@@ -2970,9 +3009,11 @@ function App() {
           quickBattles={(snapshot.hierarchy.standaloneQuests ?? []).filter(
             (node) => !["completed", "abandoned"].includes(node.status),
           )}
+          busy={busy}
           onBack={() => setScreen("realm")}
           onOpenBattle={openBattle}
           onOpenOrder={openOrder}
+          onDiscard={discardQuest}
         />
       ) : screen === "barracks" ? (
         <BarracksScreen
@@ -3034,6 +3075,7 @@ function App() {
           }
           onEnterBattle={(questId) => openBattle(questId)}
           onOpenStats={() => setScreen("stats")}
+          onDiscard={discardQuest}
         />
       ) : (
         // Aceptar el contrato NO cambia de pantalla: la batalla es el centro

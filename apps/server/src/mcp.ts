@@ -914,6 +914,29 @@ export function createMcpServer(service: QuestService): McpServer {
     },
   );
 
+  server.registerTool(
+    "discard_quest",
+    {
+      title: "Descartar una misión",
+      description:
+        "El otro lado de JUGAR. No toda oportunidad detectada hay que jugarla: esto saca la misión de los asuntos pendientes y JUBILA todos sus avisos, para que deje de reclamar atención. El Core elige la vía honesta: un borrador nunca sellado y sin evidencia validada se borra de raíz; cualquier cosa con historia —sellada, iniciada, con evidencia— se abandona y su registro se conserva. Una Quest completada NO se descarta: su historia es inmutable.",
+      inputSchema: {
+        questId: z.string().uuid(),
+        reason: z.string().min(3).max(300).describe("Por qué el jugador no la quiere. Queda en el registro."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async ({ questId, reason }) => {
+      const result = await service.discardQuest(questId, reason);
+      return toolResult(
+        result.outcome === "deleted"
+          ? `«${result.title}» era un borrador sin historia: se eliminó de raíz con sus avisos.`
+          : `«${result.title}» queda abandonada. Su historia se conserva y sus avisos dejaron de estar activos.`,
+        result,
+      );
+    },
+  );
+
   // -------------------------------------------------------------------------
   // CENTRO DE NOTIFICACIONES
   //

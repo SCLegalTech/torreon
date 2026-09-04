@@ -26,6 +26,9 @@ import { obligationPeriodStatus, periodOf } from "./finance.js";
 
 const now = () => new Date().toISOString();
 
+/** Una Quest en estos estados ya no pide nada: ni avisos, ni atención. */
+const CLOSED_QUEST_STATUS = new Set(["completed", "abandoned"]);
+
 export function notificationKey(
   type: NotificationType,
   entityType: NotificationEntityType,
@@ -225,6 +228,12 @@ export function backfillNotifications(state: RealmState, nowMs = Date.now()): bo
   const before = state.notifications.length;
 
   for (const quest of state.quests) {
+    // UNA QUEST CERRADA NO VUELVE A LLAMAR A LA PUERTA.
+    //
+    // Sin esta guarda, el backfill resucitaba en cada lectura el aviso «el
+    // frente sigue abierto» de una Quest abandonada, porque miraba el estado de
+    // la Battle y nunca el de la Quest.
+    if (CLOSED_QUEST_STATUS.has(quest.status)) continue;
     if (quest.status === "draft") {
       addNotification(state, {
         type: "quest_created",
@@ -365,4 +374,49 @@ export function notificationViewsFor(state: RealmState, query: NotificationQuery
 
 export function unreadCount(state: RealmState): number {
   return (state.notifications ?? []).filter((record) => !record.readAt && !record.archivedAt).length;
+}
+
+
+// ---------------------------------------------------------------------------
+// LOS AVISOS DE UNA BATTLE MUEREN CON LA BATTLE
+//
+// «La puerta de Bigle sigue abierta» seguía en la bandeja DESPUÉS de ganarla.
+// El aviso nacía correcto —el plazo había vencido de verdad— pero nada lo
+// cerraba cuando el frente se cerró: el Centro de Notificaciones sabía crear
+// registros y no sabía jubilarlos.
+//
+// UN AVISO ACTIVO ES UNA COSA QUE TODAVÍA PIDE ALGO. Cuando la Quest termina,
+// se abandona, o su Battle se gana, todo lo suyo pasa a historial: sigue
+// consultable con `includeArchived`, pero deja de reclamar atención.
+// ---------------------------------------------------------------------------
+
+/** Archiva todo aviso activo de una entidad. Devuelve cuántos jubiló. */
+export function settleNotificationsFor(state: RealmState, entityId: string): number {
+  const timestamp = now();
+  let settled = 0;
+  for (const record of state.notifications ?? []) {
+    if (record.entityId !== entityId || record.archivedAt) continue;
+    record.archivedAt = timestamp;
+    record.readAt ??= timestamp;
+    settled += 1;
+  }
+  return settled;
+}
+
+/**
+ * Reconciliación de lectura: ningún aviso activo puede pertenecer a una Quest
+ * cerrada ni a una Battle ganada.
+ *
+ * Vive aquí, en la normalización, y no sólo en el momento de cerrar la Quest,
+ * porque los reinos que YA tienen el ruido acumulado —el de Bigle, sin ir más
+ * lejos— tienen que limpiarse solos sin migración ni intervención del jugador.
+ */
+export function settleClosedNotifications(state: RealmState): boolean {
+  let settled = 0;
+  for (const quest of state.quests) {
+    const closed = CLOSED_QUEST_STATUS.has(quest.status) || quest.battle?.status === "won";
+    if (!closed) continue;
+    settled += settleNotificationsFor(state, quest.id);
+  }
+  return settled > 0;
 }

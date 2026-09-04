@@ -87,6 +87,7 @@ import {
   attemptPush,
   notificationViewsFor,
   notifyFromEvent,
+  settleNotificationsFor,
   unreadCount,
   type NotificationQuery,
 } from "./notifications.js";
@@ -509,6 +510,11 @@ function completeQuest(state: RealmState, quest: Quest, timestamp: string): void
   quest.status = "completed";
   quest.completedAt = timestamp;
   quest.updatedAt = timestamp;
+  // LOS AVISOS DE UNA BATTLE MUEREN CON LA BATTLE. Ganar el contrato jubila
+  // todo lo que este frente tenía pendiente: el plazo vencido que se replanificó,
+  // la espera externa que se desbloqueó, la enmienda que se aceptó. Nada de eso
+  // sigue reclamando atención, y el jugador no tiene que cerrarlo a mano.
+  settleNotificationsFor(state, quest.id);
 
   const record = quest.battle;
   if (record) {
@@ -2828,6 +2834,42 @@ export class QuestService {
     return result;
   }
 
+  /**
+   * DESCARTAR UNA MISIÓN — el otro lado de JUGAR.
+   *
+   * No toda oportunidad que el reino detecta hay que jugarla. Torreón no puede
+   * obligar a sostener una misión abierta sólo porque alguna vez fue creada.
+   *
+   * Escoge la vía honesta según lo que esa misión YA sea:
+   *
+   *   - Un borrador nunca sellado y sin evidencia validada no tiene historia
+   *     que proteger: se borra de raíz y se lleva sus avisos.
+   *   - Cualquier otra cosa —sellada, iniciada, con evidencia— SÍ tiene
+   *     historia: se abandona. El registro se queda, el intento queda cerrado
+   *     con su motivo, y deja de aparecer entre lo pendiente.
+   *
+   * Lo completado no se descarta: eso ya no pide nada.
+   */
+  async discardQuest(questId: string, reason: string): Promise<{ questId: string; title: string; outcome: "deleted" | "abandoned" }> {
+    const state = await this.tick();
+    const quest = state.quests.find((candidate) => candidate.id === questId);
+    if (!quest) throw new Error(`Quest no encontrada: ${questId}`);
+    if (quest.status === "completed") throw new Error("Esta Quest ya está completada: su historia no se descarta.");
+    if (quest.status === "abandoned") return { questId, title: quest.title, outcome: "abandoned" };
+
+    const pristineDraft =
+      quest.status === "draft" &&
+      !quest.acceptedAt &&
+      !state.evidence.some((record) => record.questId === questId && record.impactAwarded > 0);
+
+    if (pristineDraft) {
+      await this.deleteQuestDraft(questId);
+      return { questId, title: quest.title, outcome: "deleted" };
+    }
+    const abandoned = await this.abandon(questId, reason || "Descartada por el jugador.");
+    return { questId, title: abandoned.title, outcome: "abandoned" };
+  }
+
   async abandon(questId: string, reason: string): Promise<Quest> {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
@@ -2845,6 +2887,9 @@ export class QuestService {
         resolveBattle(state, quest, quest.battle, "awaiting_replan", Date.now());
         if (attempt) attempt.endReason = "abandoned";
       }
+      // Descartar una misión la saca de los asuntos pendientes DE VERDAD:
+      // con sus avisos dentro, no sólo con su tarjeta fuera de la lista.
+      settleNotificationsFor(state, quest.id);
       addEvent(state, { type: "quest_abandoned", questId, message: `Retirada: ${reason.trim() || "sin motivo registrado"}.` });
       return quest;
     });

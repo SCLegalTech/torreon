@@ -6,7 +6,7 @@ import { reconcileBattleProjection } from "./battle.js";
 import { emptyAgentSlot } from "./companions.js";
 import type { RealmState } from "./domain.js";
 import { backfillEncounter } from "./horde.js";
-import { backfillNotifications } from "./notifications.js";
+import { backfillNotifications, settleClosedNotifications } from "./notifications.js";
 import { freshParty, refreshPartyDisplay } from "./party.js";
 import { DEV_ENTITLEMENTS, freshUsage, rolloverUsage } from "./product.js";
 
@@ -189,6 +189,9 @@ export class JsonRealmStore {
     // Los registros nuevos persisten en la siguiente mutación; mientras tanto
     // el snapshot ya los ve, así que el jugador nunca «pierde» un pacto.
     backfillNotifications(state);
+    // Y lo contrario del backfill: lo que ya no pide nada se jubila. Un frente
+    // ganado o abandonado no puede seguir llamando a la puerta.
+    settleClosedNotifications(state);
     return state;
   }
 
