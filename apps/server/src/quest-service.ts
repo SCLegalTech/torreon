@@ -609,12 +609,36 @@ export function focusedQuestOf(state: RealmState): Quest | null {
 }
 
 /**
- * Qué mira el jugador ahora mismo.
+ * LA QUEST CUYA BATTLE SE PROYECTA. AUTORIDAD ÚNICA.
  *
- * BACKLOG NO ES FOCO. Primero el frente comprometido —si hay reloj corriendo,
- * eso manda—; después el foco EXPLÍCITO (`focus_quest`); después lo accionable
- * de la campaña en foco; y sólo entonces un frente ya vivo. Ya NO se devuelve un
- * borrador al azar: crear cinco borradores no vuelve «actual» a ninguno.
+ * Primero el frente COMPROMETIDO —si hay reloj corriendo, eso manda—; si no, la
+ * Quest que el jugador enfocó A MANO, sea cual sea su estado (también una ya
+ * ganada, para poder mirar el resultado). Y si no hay ninguna de las dos, null.
+ *
+ * NADA MÁS puede elegir aquí: ni la campaña en foco, ni el último borrador, ni
+ * la Quest que quedó primera en la lista. Un frente que el jugador dejó atrás
+ * NO puede reabrirse solo en cada poll.
+ */
+export function battleQuestOf(state: RealmState): Quest | null {
+  const engaged = engagedQuest(state);
+  if (engaged) return engaged;
+  if (!state.focusedQuestId) return null;
+  return state.quests.find((quest) => quest.id === state.focusedQuestId) ?? null;
+}
+
+/**
+ * Qué mira el jugador ahora mismo. LEGACY COMPAT.
+ *
+ * BACKLOG NO ES FOCO. Primero el frente comprometido, después el foco
+ * EXPLÍCITO, y sólo entonces conveniencias para lectores antiguos.
+ *
+ * LA CAMPAÑA EN FOCO YA NO ELIGE BATTLE. Enfocar una campaña es navegación:
+ * cuando también elegía «la quest accionable de esa campaña», un frente que el
+ * jugador había dejado en pausa volvía a presentarse como la batalla vigente en
+ * cada lectura, y bloqueaba abrir otro. Eso se acabó.
+ *
+ * Y pase lo que pase aquí, esta función NO decide la Battle: eso lo hace
+ * `battleQuestOf`.
  */
 function currentQuest(state: RealmState): Quest | null {
   const engaged = engagedQuest(state);
@@ -622,11 +646,6 @@ function currentQuest(state: RealmState): Quest | null {
 
   const focusedQuest = focusedQuestOf(state);
   if (focusedQuest) return focusedQuest;
-
-  const focusedCampaign = state.focusedCampaignId
-    ? actionableIn(state.quests.filter((quest) => quest.campaignId === state.focusedCampaignId))
-    : null;
-  if (focusedCampaign) return focusedCampaign;
 
   // Sin compromiso ni foco: un frente ya en marcha manda sobre cualquier borrador.
   const live = actionableIn(state.quests);
@@ -864,7 +883,10 @@ export class QuestService {
     const quest = currentQuest(realm);
     const engaged = engagedQuest(realm);
     const { availableBalance, expectedIncome, committedExpenses, reserveTarget } = realm.financial;
-    const battle = battleFor(quest, realm.gameEvents);
+    // UNA SOLA AUTORIDAD: la Battle visible es la del frente comprometido o la
+    // del que el jugador enfocó. Nunca la que una proyección legada eligió.
+    const battleQuest = battleQuestOf(realm);
+    const battle = battleFor(battleQuest, realm.gameEvents);
     const hierarchy = hierarchyFor(realm, quest, engaged?.id ?? null);
     const unread = unreadCount(realm);
     return {
@@ -873,6 +895,8 @@ export class QuestService {
       // NOTIFICATION IS NOT FOCUS. FOCUS IS NOT ENGAGEMENT.
       focusedQuest: focusedQuestOf(realm),
       engagedQuest: engaged,
+      battleQuest,
+      battleQuestId: battleQuest?.id ?? null,
       progress: progressFor(quest),
       currentStep: currentStepFor(quest),
       battle,
@@ -1080,6 +1104,9 @@ export class QuestService {
       quest.startedAt = new Date(startedAtMs).toISOString();
       quest.updatedAt = quest.startedAt;
       quest.battle = createBattleRecord(startedAtMs, duration);
+      // Comprometer un frente es también mirarlo: así la Battle visible sigue
+      // siendo ésta cuando el reloj termine, sin que nadie tenga que adivinarlo.
+      state.focusedQuestId = quest.id;
       state.gameEvents.unshift({
         id: randomUUID(),
         type: "battle_started",
@@ -1136,6 +1163,7 @@ export class QuestService {
       openAttempt(record, startedAtMs, durationMinutes ?? record.durationMinutes, "timeout");
       quest.status = "active";
       quest.updatedAt = record.startedAt;
+      state.focusedQuestId = quest.id;
       state.gameEvents.unshift({
         id: randomUUID(),
         type: "battle_started",

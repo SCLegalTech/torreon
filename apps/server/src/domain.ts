@@ -1425,6 +1425,16 @@ export interface RealmSnapshot {
   focusedQuest: Quest | null;
   /** La Quest cuya Battle corre. FOCUS IS NOT ENGAGEMENT. */
   engagedQuest: Quest | null;
+  /**
+   * LA ÚNICA AUTORIDAD DE LA BATTLE VISIBLE.
+   *
+   * `engagedQuest` si hay reloj corriendo; si no, la Quest que el jugador
+   * enfocó a mano. Y si no hay ninguna de las dos, NADA: el frente que el
+   * jugador dejó atrás no vuelve solo a la pantalla porque una proyección
+   * legada siga apuntándole. `battle` deriva SIEMPRE de esta Quest.
+   */
+  battleQuest: Quest | null;
+  battleQuestId: string | null;
   /** Progreso derivado del impacto validado, para que Códice no lo recalcule. */
   progress: QuestProgress | null;
   /** Paso accionable derivado en la lectura; nunca un puntero guardado. */

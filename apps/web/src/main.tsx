@@ -2,6 +2,7 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 import { Sprite } from "./Sprite";
+import { AGENT_CELL, cellCenter, IsoBoard, PARTY_CELLS, PartySprite } from "./PartySprite";
 import type { ActView, AfterActionReport, AgentSlot, BarracksView, BattleClock, BattleStatus, CampaignView, CharacterStats, EnemyCombatant, EntityType, HeroProfileView, InventoryItemId, InventoryState, NotificationView, ObligationView, PartyMemberId, PartyState, Quest, QuestNode, RealmSnapshot, TreasuryView, WorldSystemView } from "./types";
 import "./styles.css";
 
@@ -220,6 +221,20 @@ function RealmMenu({
           </button>
         ))}
       </nav>
+
+      {/*
+        EL GRUPO EN EL REINO.
+
+        Presencia persistente del mundo, no tres imágenes sueltas: el Marqués lo
+        más a la izquierda que permite el borde, Cordera enfrente mirándolo, y
+        Roku en medio de los dos. Una sola línea de suelo y las proporciones
+        reales del grupo —Roku al 30% del Marqués— en cualquier pantalla.
+      */}
+      <div className="realm-party" aria-label="El grupo del Marqués">
+        <PartySprite id="marques" heroHeight="var(--party-hero-h)" facing="right" />
+        <PartySprite id="roku" heroHeight="var(--party-hero-h)" facing="right" />
+        <PartySprite id="cordera" heroHeight="var(--party-hero-h)" facing="left" />
+      </div>
 
       {/* ⚡ BATALLAS LIBRES: la vida cotidiana no necesita ceremonia. */}
       <aside className="realm-dock glass-panel">
@@ -1632,8 +1647,15 @@ function QuestOrder({
   const report = (snapshot.battleMemory?.reports ?? []).find((candidate) => candidate.questId === quest.id) ?? null;
   const node = questNodeOf(snapshot, quest.id);
   const lockedByDependency = node?.locked ?? false;
-  // Sólo se puede entrar a la Battle de la Quest que el Core está proyectando.
-  const battleViewable = quest.id === (engagedQuestId ?? current?.id ?? null);
+  /*
+    UNA BATTLE SE PUEDE ABRIR SI EXISTE, NO SI ES «LA ACTUAL».
+
+    Antes esto comparaba contra la proyección legada `currentQuest`: una Quest
+    con su frente abierto —plazo vencido, Marqués caído— quedaba con el botón
+    apagado en «FRENTE ABIERTO» sólo porque el legado apuntaba a otra. Ahora
+    basta con que el Core diga que esta Quest tiene Battle.
+  */
+  const battleViewable = node ? node.battleStatus !== "pending" : Boolean(battle);
   const campaign = snapshot.hierarchy?.campaigns.find((candidate) => candidate.id === snapshot.hierarchy.currentCampaignId) ?? null;
 
   return (
@@ -1814,7 +1836,14 @@ function Battle({
   onRetry: () => void;
   onDeliverEvidence: (stepId: string, note: string, link: string, files: PendingFile[]) => void;
 }) {
-  const quest = snapshot.currentQuest;
+  /*
+    LA BATTLE QUE SE PINTA ES LA QUE EL CORE DECLARA.
+
+    Antes esta pantalla leía `currentQuest`, la proyección legada. Con un frente
+    en pausa dentro de la campaña en foco, esa proyección lo volvía a elegir en
+    cada poll y la pantalla mostraba una batalla que el jugador había dejado.
+  */
+  const quest = snapshot.battleQuest ?? snapshot.currentQuest;
   const [openStepId, setOpenStepId] = useState<string | null>(quest?.steps[0]?.id ?? null);
   const [evidenceNote, setEvidenceNote] = useState("");
   const [evidenceLink, setEvidenceLink] = useState("");
@@ -1940,6 +1969,54 @@ function Battle({
         <div className="player-health-track"><span style={{ width: `${playerHealth}%` }} /></div>
         <small className="stats-hint">VER PERSONAJE ›</small>
       </button>
+
+      {/*
+        EL TABLERO.
+
+        Un ajedrez de 4×4 visto en isométrico: Marqués y Cordera en las casillas
+        del rey y la reina de nuestra fila de fondo, y Roku en la casilla de peón
+        que hay DELANTE del Marqués, que es su oficio. El enemigo queda arriba a
+        la derecha, hacia la Horda. El plano se dibuja tenue a propósito: es la
+        misma rejilla con la que se calculan las casillas, así que enseña
+        literalmente el suelo donde están parados.
+      */}
+      {battle ? (
+        <div className="battle-board" aria-hidden="true">
+          <IsoBoard />
+          {(["marques", "cordera", "roku"] as const).map((id) => {
+            const memberId = id === "marques" ? "marques" : id === "cordera" ? "cordera" : "roko";
+            const member = battle.party[memberId];
+            const cell = PARTY_CELLS[id];
+            const center = cellCenter(cell);
+            return (
+              <PartySprite
+                key={id}
+                id={id}
+                decorative
+                heroHeight="var(--board-hero-h)"
+                facing="right"
+                ko={member.status === "ko"}
+                className="board-piece"
+                style={{
+                  left: `${center.left}%`,
+                  top: `${center.top}%`,
+                  // Pintor: quien está más cerca del jugador tapa al de atrás.
+                  zIndex: Math.round(center.top),
+                }}
+              />
+            );
+          })}
+          {/* El cuarto slot sólo se dibuja si un compañero real ejecutó algo. */}
+          {battle.agent.deployed ? (
+            <span
+              className="board-agent"
+              style={{ left: `${cellCenter(AGENT_CELL).left}%`, top: `${cellCenter(AGENT_CELL).top}%`, zIndex: Math.round(cellCenter(AGENT_CELL).top) }}
+            >
+              <b>{(battle.agent.name ?? "AGENTE").toUpperCase()}</b>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       <section className="battlefield" aria-label="Campo de batalla">
         <span className="battle-pulse ally" aria-hidden="true" />
@@ -2357,6 +2434,22 @@ function App() {
   };
 
   /**
+   * ENTRAR A UNA BATTLE ES MIRARLA.
+   *
+   * `focus_quest` es navegación pura —no acepta, no inicia, no cambia nada del
+   * contrato— y es lo que le dice al Core qué frente proyectar. Así la pantalla
+   * y el servidor derivan de la MISMA autoridad, y no hay ningún instante en el
+   * que el Realm diga una Quest y la pantalla pinte otra.
+   */
+  const openBattle = (questId: string) => {
+    if (snapshot?.battleQuestId === questId) {
+      setScreen("battle");
+      return;
+    }
+    void act(() => api(`/api/quests/${questId}/focus`, { method: "POST" })).then(() => setScreen("battle"));
+  };
+
+  /**
    * DEEP LINK EXACTO.
    *
    * La notificación trae `deepLink.screen` + `entityId`. Se abre esa entidad por
@@ -2378,12 +2471,9 @@ function App() {
       setScreen("act");
       return;
     }
-    if (
-      link.screen === "battle" &&
-      link.entityId === quest?.id &&
-      ["active", "waiting_external", "completed"].includes(quest.status)
-    ) {
-      setScreen("battle");
+    // El aviso trae la entidad exacta: se enfoca esa Quest y se abre SU Battle.
+    if (link.screen === "battle") {
+      openBattle(link.entityId);
       return;
     }
     openOrder(link.entityId);
@@ -2416,8 +2506,10 @@ function App() {
       setScreen("act");
       return;
     }
-    if (notice.entityId === quest?.id && ["active", "waiting_external", "completed"].includes(quest.status)) {
-      setScreen("battle");
+    // Un frente ya abierto se abre en su Battle; un borrador, en su Orden.
+    const target = questNodeOf(snapshot, notice.entityId);
+    if (target && ["active", "waiting_external", "completed"].includes(target.status)) {
+      openBattle(target.id);
       return;
     }
     openOrder(notice.entityId);
@@ -2443,7 +2535,7 @@ function App() {
           snapshot={snapshot}
           onCampaign={openCampaignOrOrder}
           onCodex={() => setComposerOpen(true)}
-          onBattle={() => setScreen("battle")}
+          onBattle={() => (snapshot.hierarchy.engagedQuestId ? openBattle(snapshot.hierarchy.engagedQuestId) : setScreen("battle"))}
           onStats={() => setScreen("stats")}
           onReset={() => void act(() => api("/api/reset", { method: "POST" }))}
           onNotifications={() => setScreen("notifications")}
@@ -2458,10 +2550,17 @@ function App() {
             onSubmit={(intent) => {
               setPendingIntent(intent);
               setScreen("thinking");
-              void act(() => api("/api/quests/from-intent", { method: "POST", body: JSON.stringify({ intent }) })).then(() => {
+              // Un borrador recién trazado necesita SELLO, no un campo de
+              // batalla: se abre su Orden de Misión, que es donde se acepta.
+              void act(async () => {
+                const created = await api<{ quest: { id: string } }>("/api/quests/from-intent", {
+                  method: "POST",
+                  body: JSON.stringify({ intent }),
+                });
                 setComposerOpen(false);
                 setNotice(null);
-                window.setTimeout(() => setScreen("battle"), 520);
+                window.setTimeout(() => openOrder(created.quest.id), 420);
+                return created;
               });
             }}
           />
@@ -2536,7 +2635,7 @@ function App() {
               setScreen("battle");
             })
           }
-          onEnterBattle={() => setScreen("battle")}
+          onEnterBattle={() => openBattle(openQuestId ?? quest?.id ?? "")}
           onOpenStats={() => setScreen("stats")}
         />
       ) : (

@@ -420,6 +420,14 @@ export interface RealmSnapshot {
   /** NOTIFICATION IS NOT FOCUS. FOCUS IS NOT ENGAGEMENT. */
   focusedQuest?: Quest | null;
   engagedQuest?: Quest | null;
+  /**
+   * LA ÚNICA AUTORIDAD DE LA BATTLE VISIBLE.
+   *
+   * El frente comprometido, o el que el jugador enfocó a mano. Nunca lo elige
+   * `currentQuest`: un frente que quedó en pausa no puede reabrirse solo.
+   */
+  battleQuest?: Quest | null;
+  battleQuestId?: string | null;
   stats: CharacterStats;
   battle: null | {
     questId: string;

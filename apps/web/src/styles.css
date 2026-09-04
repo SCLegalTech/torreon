@@ -1434,3 +1434,112 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
   .hero-grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
   .aar-facts { grid-template-columns: 1fr; }
 }
+
+/* =====================================================================
+   SPRITES IDLE DEL GRUPO
+
+   THE PARTY MUST LOOK LIKE ONE PARTY, NOT THREE UNRELATED IMAGES.
+
+   Cada `.party-sprite` es una VENTANA del tamaño exacto de la caja visible
+   del personaje; dentro, el GIF entero se posiciona con desplazamiento
+   negativo. El archivo no se toca —mismos frames, mismo timing— y aun así
+   los tres se pueden juntar sin que el aire transparente de cada lienzo
+   abra huecos distintos.
+
+   La escala la fija una sola variable, `--party-hero-h` / `--board-hero-h`:
+   la altura visible del Marqués. Cordera y Roku derivan de ella, así que
+   ningún breakpoint puede romper las proporciones internas del grupo.
+   ===================================================================== */
+.party-sprite {
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  overflow: hidden;
+  pointer-events: none;
+}
+.party-sprite img {
+  position: absolute;
+  max-width: none;
+  /* Pixel art nítido: nada de suavizado al escalar. */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+/* Un caído no se anima distinto —todavía no hay sprite de KO—: se apaga. */
+.party-sprite.is-ko { opacity: .45; filter: grayscale(.85) brightness(.7); }
+
+/* ---------------------------------------------------------------------
+   EL GRUPO EN EL REINO
+
+   Marqués lo más a la izquierda que permite el borde seguro, Cordera
+   enfrente mirándolo, y Roku en medio de los dos. Una sola línea de suelo:
+   `align-items: flex-end` alinea las ventanas por su borde inferior, que
+   es justo donde están los pies de cada uno.
+   --------------------------------------------------------------------- */
+.realm-party {
+  position: absolute;
+  z-index: 4;
+  bottom: 15%;
+  left: max(1.2%, env(safe-area-inset-left));
+  display: flex;
+  align-items: flex-end;
+  gap: clamp(.4rem, 1.6vw, 1.6rem);
+  pointer-events: none;
+  /* Altura visible del Marqués. Todo el grupo escala con ella. */
+  --party-hero-h: clamp(96px, 21vh, 230px);
+}
+/* Roku va al suelo del grupo, no flotando a media altura. */
+.realm-party .party-sprite-roku { align-self: flex-end; }
+
+/* ---------------------------------------------------------------------
+   EL TABLERO DE LA BATTLE
+
+   Un ajedrez de 4×4 en isométrico. La caja va en proporción 2:1 para que
+   cada casilla sea un rombo del doble de ancho que de alto: eso es lo que
+   hace que el plano se lea como isométrico verdadero y no como un rombo
+   cualquiera. El enemigo queda arriba a la derecha, hacia la Horda.
+   --------------------------------------------------------------------- */
+.battle-board {
+  position: absolute;
+  z-index: 2;
+  bottom: 14%;
+  left: 2%;
+  width: min(37%, 600px);
+  aspect-ratio: 2 / 1;
+  pointer-events: none;
+  /* Altura visible del Marqués sobre el tablero, atada al ancho del propio
+     tablero: así el grupo nunca queda gigante ni diminuto sobre sus casillas.
+     Poco menos de dos casillas de alto, que es lo que deja ver el damero. */
+  --board-hero-h: calc(min(37vw, 600px) * .26);
+}
+.iso-board { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+/* Sutil, pero se ve: el jugador tiene que reconocer el tablero bajo sus pies. */
+.iso-floor { fill: rgba(8, 12, 16, .42); }
+.iso-cell { fill: rgba(222, 182, 104, .07); }
+.iso-line { stroke: rgba(232, 194, 112, .34); stroke-width: 1; }
+.iso-outline { fill: none; stroke: rgba(246, 209, 128, .58); stroke-width: 1.5; }
+
+/* Cada pieza se planta con los PIES en el centro de su casilla. */
+.board-piece { position: absolute; transform: translate(-50%, -100%); }
+
+/* El cuarto slot: sólo aparece cuando un compañero real ejecutó algo. */
+.board-agent {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  min-width: 54px;
+  padding: .18rem .4rem;
+  transform: translate(-50%, -100%);
+  border: 1px solid #36e9a9;
+  background: rgba(4, 18, 14, .86);
+  box-shadow: 0 0 16px rgba(54, 233, 169, .35);
+}
+.board-agent b { color: #8ef7d0; font: 900 .44rem/1.3 ui-monospace, "Cascadia Mono", monospace; letter-spacing: .08em; }
+
+@media (max-width: 720px) {
+  .realm-party { bottom: 15%; --party-hero-h: clamp(78px, 17vh, 150px); }
+  .battle-board { width: 52%; bottom: 17%; --board-hero-h: calc(52vw * .26); }
+}
+@media (orientation: portrait) {
+  /* En vertical el dock ocupa el ancho: el grupo sube para no quedar debajo. */
+  .realm-party { bottom: 20%; }
+}

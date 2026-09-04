@@ -73,12 +73,17 @@ describe("Multicampaña y frente único", () => {
 
     const focused = await service.focusCampaign(firma.campaign.id);
     expect(focused.hierarchy.focusedCampaignId).toBe(firma.campaign.id);
-    expect(focused.currentQuest?.id).toBe(firma.quest.id);
     expect(focused.hierarchy.activeCampaignIds).toHaveLength(2);
     expect(focused.realm.campaigns.every((campaign) => campaign.status === "active")).toBe(true);
+    // ENFOCAR UNA CAMPAÑA ES MOVER LA MIRADA, NO ELEGIR UN FRENTE.
+    // Cuando además elegía «la quest accionable de esa campaña», un frente que
+    // el jugador había dejado en pausa volvía a presentarse como la batalla
+    // vigente en cada lectura y bloqueaba abrir otro.
+    expect(focused.battleQuestId).toBeNull();
+    expect(focused.battle).toBeNull();
 
     const back = await service.focusCampaign(trabajo.campaign.id);
-    expect(back.currentQuest?.id).toBe(trabajo.quest.id);
+    expect(back.battleQuestId).toBeNull();
     expect(back.realm.quests.find((quest) => quest.id === firma.quest.id)?.status).toBe("draft");
   });
 

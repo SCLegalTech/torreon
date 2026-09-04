@@ -97,7 +97,11 @@ describe("Battle con tiempo real", () => {
 
     const accepted = await service.accept(draft.id, true);
     expect(accepted.battle).toBeUndefined();
-    expect((await service.snapshot()).battle?.clock).toBeNull();
+    // Sin compromiso y sin foco explícito no hay ningún frente que proyectar:
+    // el reino no elige una Battle por su cuenta.
+    expect((await service.snapshot()).battle).toBeNull();
+    // Y mirándola a propósito, el contrato ya se ve pero el reloj sigue quieto.
+    expect((await service.focusQuest(draft.id)).battle?.clock).toBeNull();
 
     const active = await service.start(draft.id, 45);
     expect(active.battle?.durationMinutes).toBe(45);
