@@ -24,6 +24,8 @@ interface SpriteMetrics {
   box: { x: number; y: number; w: number; h: number };
   /** Altura visible objetivo, relativa al Marqués. */
   scale: number;
+  /** Hacia dónde mira el asset tal cual viene. Cordera mira a su izquierda. */
+  nativeFacing: "left" | "right";
   alt: string;
 }
 
@@ -34,9 +36,15 @@ interface SpriteMetrics {
  *   cordera-idle.gif  500×350   visible 292×332  en (23, 6)   4 frames
  *   roku-idle.gif     500×200   visible 139×132  en (33,60)  12 frames
  *
- * ROKU IS SMALL: ~30% OF THE MARQUÉS. Cordera conserva estatura humana, algo
- * por debajo del Marqués. Estas proporciones son la identidad del grupo y no
- * cambian con el breakpoint: lo único que cambia es la escala del grupo entero.
+ * Las proporciones NO salen de una tabla: salen de medir los mockups que el
+ * jugador compuso a mano. En `MAIN MOCKUP.png` el Marqués mide 306 px de alto,
+ * Cordera 300 y Roku 136; en `battle stage mockup.png`, 356 / 370 / 140. De ahí
+ * estos números, que sustituyen al 0.90 / 0.30 del documento anterior: Cordera
+ * es prácticamente tan alta como el Marqués, y Roku es un perro grande, no un
+ * cachorro.
+ *
+ * Son la identidad del grupo y no cambian con el breakpoint: lo único que
+ * cambia es la escala del grupo entero.
  */
 export const PARTY_SPRITES: Record<PartySpriteId, SpriteMetrics> = {
   marques: {
@@ -44,20 +52,23 @@ export const PARTY_SPRITES: Record<PartySpriteId, SpriteMetrics> = {
     canvas: { w: 500, h: 400 },
     box: { x: 27, y: 15, w: 277, h: 371 },
     scale: 1,
+    nativeFacing: "right",
     alt: "Marqués, arquero de la Marca",
   },
   cordera: {
     src: "/assets/sprites/party/cordera-idle.gif",
     canvas: { w: 500, h: 350 },
     box: { x: 23, y: 6, w: 292, h: 332 },
-    scale: 0.9,
+    scale: 0.98,
+    nativeFacing: "left",
     alt: "Cordera, sanadora del grupo",
   },
   roku: {
     src: "/assets/sprites/party/roku-idle.gif",
     canvas: { w: 500, h: 200 },
     box: { x: 33, y: 60, w: 139, h: 132 },
-    scale: 0.3,
+    scale: 0.42,
+    nativeFacing: "right",
     alt: "Roku, guardia del grupo",
   },
 };
@@ -74,7 +85,7 @@ export function PartySprite({
   id,
   /** Altura visible del Marqués, en cualquier unidad CSS. El resto deriva. */
   heroHeight,
-  facing = "right",
+  facing,
   ko = false,
   decorative = false,
   className = "",
@@ -82,6 +93,7 @@ export function PartySprite({
 }: {
   id: PartySpriteId;
   heroHeight: string;
+  /** Hacia dónde debe mirar. Por defecto, como viene el asset. */
   facing?: "left" | "right";
   ko?: boolean;
   decorative?: boolean;
@@ -91,9 +103,12 @@ export function PartySprite({
   const metrics = PARTY_SPRITES[id];
   // Cuánto hay que escalar el lienzo para que la caja visible mida lo pedido.
   const factor = `calc(${heroHeight} * ${metrics.scale} / ${metrics.box.h})`;
+  // Sólo se espeja cuando lo pedido NO coincide con cómo viene el asset.
+  // Cordera ya mira a su izquierda: pedirle que mire a la izquierda no la voltea.
+  const mirrored = Boolean(facing) && facing !== metrics.nativeFacing;
   // Al espejar, el personaje pasa a ocupar el hueco simétrico del lienzo: la
   // ventana tiene que moverse al otro lado o enseñaría transparencia vacía.
-  const offsetX = facing === "left" ? -(metrics.canvas.w - metrics.box.x - metrics.box.w) : -metrics.box.x;
+  const offsetX = mirrored ? -(metrics.canvas.w - metrics.box.x - metrics.box.w) : -metrics.box.x;
   return (
     <span
       className={`party-sprite party-sprite-${id} ${ko ? "is-ko" : ""} ${className}`}
@@ -115,7 +130,7 @@ export function PartySprite({
           top: `calc(${factor} * ${-metrics.box.y})`,
           // No se espeja el asset por capricho: sólo cuando la composición pide
           // que un personaje mire al otro o al enemigo.
-          transform: facing === "left" ? "scaleX(-1)" : undefined,
+          transform: mirrored ? "scaleX(-1)" : undefined,
         }}
       />
     </span>
@@ -123,102 +138,164 @@ export function PartySprite({
 }
 
 // ---------------------------------------------------------------------------
-// EL TABLERO
+// EL REINO
 //
-// La Battle se lee como un tablero de ajedrez de 4×4 visto en isométrico. El
-// Marqués y Cordera ocupan las casillas del rey y la reina en la fila propia;
-// Roku ocupa la casilla de peón que hay DELANTE del Marqués, porque su oficio
-// es interponerse. El enemigo queda arriba a la derecha, hacia la Horda.
+// Copiado del mockup, no inventado: el Marqués lo más a la izquierda, Cordera
+// enfrente mirándolo y Roku EN MEDIO de los dos, a sus pies. Los tres se pisan
+// a propósito —son un grupo, no tres figuras en fila— y el orden de dibujo es
+// Cordera detrás, el Marqués encima de ella y Roku delante de ambos.
 //
-// Proyección: un vértice de rejilla (i, j) —i = columna hacia el enemigo, j =
-// fila a lo ancho— cae en
-//
-//     x = (i + j) * a
-//     y = (j - i) * b + 4b
-//
-// con a = ancho/8 y b = alto/8. Con la caja en proporción 2:1 sale un
-// isométrico verdadero: cada casilla es un rombo del doble de ancho que de alto.
+// Coordenadas en % del lienzo del arte (1672×941), tomadas de `MAIN MOCKUP.png`.
 // ---------------------------------------------------------------------------
 
-export const BOARD_SIZE = 4;
-
-export interface BoardCell {
-  /** 0 = nuestra fila de fondo; 3 = la del enemigo. */
-  file: number;
-  /** 0..3 a lo ancho del tablero. */
-  rank: number;
+export interface RealmSpot {
+  id: PartySpriteId;
+  /** Centro horizontal, en % del ancho del arte. */
+  centerX: number;
+  /** Quién tapa a quién. Mayor = más cerca del jugador. */
+  depth: number;
 }
 
-/** Centro de una casilla, en porcentaje de la caja del tablero. */
-export function cellCenter({ file, rank }: BoardCell): { left: number; top: number } {
-  return {
-    left: ((file + rank + 1) * 100) / (BOARD_SIZE * 2),
-    top: ((rank - file + BOARD_SIZE) * 100) / (BOARD_SIZE * 2),
-  };
+/** Los pies de los tres, sobre la misma línea de suelo del arte. */
+export const REALM_GROUND = 78.1;
+/** Altura visible del Marqués, en % del alto del arte. */
+export const REALM_HERO_HEIGHT = 32.5;
+
+export const REALM_SPOTS: RealmSpot[] = [
+  { id: "cordera", centerX: 17.2, depth: 1 },
+  { id: "marques", centerX: 7.6, depth: 2 },
+  { id: "roku", centerX: 10.6, depth: 3 },
+];
+
+/** Altura visible del Marqués sobre el tablero, en % del alto del arte. */
+export const BATTLE_HERO_HEIGHT = 37;
+
+// ---------------------------------------------------------------------------
+// LAS DOS CUADRÍCULAS DE LA BATTLE
+//
+// No es un tablero de 4×4: son DOS cuadrículas INDEPENDIENTES de 2×2, una para
+// el grupo y otra para la Horda, enfrentadas a través del valle. Cada una es un
+// cuadrilátero en perspectiva —el borde lejano más corto que el cercano, y el
+// lateral inclinado— calcado del mockup, y las dos se inclinan en sentidos
+// opuestos porque se miran de frente.
+//
+// Los cuatro vértices están en % del lienzo del arte, medidos sobre el trazo
+// rojo de `battle stage mockup.png`. La posición de cada casilla se interpola
+// bilinealmente entre ellos, así que las piezas caen exactamente sobre el suelo
+// que el arte tiene pintado.
+// ---------------------------------------------------------------------------
+
+export interface Quad {
+  tl: [number, number];
+  tr: [number, number];
+  br: [number, number];
+  bl: [number, number];
 }
 
-/** Dónde se planta cada uno. Rey, reina y el peón que los cubre. */
-export const PARTY_CELLS: Record<PartySpriteId, BoardCell> = {
-  marques: { file: 0, rank: 1 },
-  cordera: { file: 0, rank: 2 },
-  roku: { file: 1, rank: 1 },
+/** Cuadrícula del grupo. `col` 0→1 avanza hacia la Horda; `row` 0→1 se acerca. */
+export const ALLY_QUAD: Quad = {
+  tl: [13.64, 56.64],
+  tr: [41.63, 56.64],
+  br: [34.39, 72.9],
+  bl: [3.59, 72.16],
 };
 
-/** La casilla que ocupa el cuarto slot cuando un agente pelea de verdad. */
-export const AGENT_CELL: BoardCell = { file: 1, rank: 2 };
+/** Cuadrícula de la Horda. Su `col` 0 es la más cercana a nosotros. */
+export const HORDE_QUAD: Quad = {
+  tl: [58.25, 55.79],
+  tr: [83.13, 56.0],
+  br: [93.36, 72.05],
+  bl: [65.43, 71.73],
+};
 
-function gridPoint(i: number, j: number): { x: number; y: number } {
-  return { x: ((i + j) * 100) / (BOARD_SIZE * 2), y: ((j - i + BOARD_SIZE) * 100) / (BOARD_SIZE * 2) };
+export const GRID_COLS = 2;
+export const GRID_ROWS = 2;
+
+/** Punto interior del cuadrilátero por interpolación bilineal. */
+export function quadPoint(quad: Quad, u: number, v: number): { left: number; top: number } {
+  const top = [quad.tl[0] + (quad.tr[0] - quad.tl[0]) * u, quad.tl[1] + (quad.tr[1] - quad.tl[1]) * u];
+  const bottom = [quad.bl[0] + (quad.br[0] - quad.bl[0]) * u, quad.bl[1] + (quad.br[1] - quad.bl[1]) * u];
+  return { left: top[0] + (bottom[0] - top[0]) * v, top: top[1] + (bottom[1] - top[1]) * v };
 }
+
+/** Centro de una casilla. Ahí se plantan los pies de quien la ocupa. */
+export function cellCenter(quad: Quad, col: number, row: number): { left: number; top: number } {
+  return quadPoint(quad, (col + 0.5) / GRID_COLS, (row + 0.5) / GRID_ROWS);
+}
+
+/**
+ * QUIÉN OCUPA CADA CASILLA.
+ *
+ * La columna 1 es la que da a la Horda: ahí van Roku, que se interpone, y el
+ * cuarto slot cuando un agente real entra en combate. Detrás quedan el Marqués
+ * y Cordera, que es la que más lejos está del enemigo.
+ */
+export const ALLY_CELLS: Record<PartySpriteId | "agent", { col: number; row: number }> = {
+  cordera: { col: 0, row: 0 },
+  marques: { col: 0, row: 1 },
+  agent: { col: 1, row: 0 },
+  roku: { col: 1, row: 1 },
+};
 
 /**
  * EL PLANO, MUY SUTIL.
  *
- * No es decoración suelta: es la rejilla EXACTA con la que se calculan las
+ * No es decoración suelta: es la misma rejilla con la que se calculan las
  * casillas, así que lo que se ve es literalmente el suelo donde están parados.
- * Se dibuja tenue para no competir con el arte del escenario, pero se ve.
+ * Se dibuja tenue para no competir con el arte, pero se ve.
  */
-export function IsoBoard({ className = "" }: { className?: string }) {
-  const lines: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
-  for (let i = 0; i <= BOARD_SIZE; i += 1) {
-    const fileA = gridPoint(i, 0);
-    const fileB = gridPoint(i, BOARD_SIZE);
-    lines.push({ x1: fileA.x, y1: fileA.y, x2: fileB.x, y2: fileB.y });
-    const rankA = gridPoint(0, i);
-    const rankB = gridPoint(BOARD_SIZE, i);
-    lines.push({ x1: rankA.x, y1: rankA.y, x2: rankB.x, y2: rankB.y });
-  }
-
-  // Casillas oscuras del damero, como en un tablero real.
-  const shaded: string[] = [];
-  for (let file = 0; file < BOARD_SIZE; file += 1) {
-    for (let rank = 0; rank < BOARD_SIZE; rank += 1) {
-      if ((file + rank) % 2 === 0) continue;
-      shaded.push(
-        [gridPoint(file, rank), gridPoint(file + 1, rank), gridPoint(file + 1, rank + 1), gridPoint(file, rank + 1)]
-          .map((point) => `${point.x},${point.y}`)
-          .join(" "),
-      );
+export function BattleGrid({
+  quad,
+  className = "",
+  /** Casillas a marcar como caídas. Clave `col,row`. */
+  fallen = [],
+}: {
+  quad: Quad;
+  className?: string;
+  fallen?: string[];
+}) {
+  const point = (u: number, v: number) => quadPoint(quad, u, v);
+  const cells: Array<{ key: string; points: string; down: boolean }> = [];
+  for (let col = 0; col < GRID_COLS; col += 1) {
+    for (let row = 0; row < GRID_ROWS; row += 1) {
+      const corners = [
+        point(col / GRID_COLS, row / GRID_ROWS),
+        point((col + 1) / GRID_COLS, row / GRID_ROWS),
+        point((col + 1) / GRID_COLS, (row + 1) / GRID_ROWS),
+        point(col / GRID_COLS, (row + 1) / GRID_ROWS),
+      ];
+      cells.push({
+        key: `${col},${row}`,
+        points: corners.map((corner) => `${corner.left},${corner.top}`).join(" "),
+        down: fallen.includes(`${col},${row}`),
+      });
     }
   }
 
-  const outline = [gridPoint(0, 0), gridPoint(BOARD_SIZE, 0), gridPoint(BOARD_SIZE, BOARD_SIZE), gridPoint(0, BOARD_SIZE)]
-    .map((point) => `${point.x},${point.y}`)
-    .join(" ");
+  const lines: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+  for (let i = 0; i <= GRID_COLS; i += 1) {
+    const a = point(i / GRID_COLS, 0);
+    const b = point(i / GRID_COLS, 1);
+    lines.push({ x1: a.left, y1: a.top, x2: b.left, y2: b.top });
+  }
+  for (let i = 0; i <= GRID_ROWS; i += 1) {
+    const a = point(0, i / GRID_ROWS);
+    const b = point(1, i / GRID_ROWS);
+    lines.push({ x1: a.left, y1: a.top, x2: b.left, y2: b.top });
+  }
 
+  const outline = [quad.tl, quad.tr, quad.br, quad.bl].map((corner) => `${corner[0]},${corner[1]}`).join(" ");
 
   return (
-    <svg className={`iso-board ${className}`} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-      {/* El suelo entero, apenas insinuado: sin él las líneas se pierden
-          contra el arte del escenario y el plano deja de leerse. */}
-      <polygon className="iso-floor" points={outline} />
-      {shaded.map((points) => (
-        <polygon key={points} className="iso-cell" points={points} />
+    <svg className={`battle-grid ${className}`} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <polygon className="grid-floor" points={outline} />
+      {cells.map((cell) => (
+        <polygon key={cell.key} className={`grid-cell ${cell.down ? "is-down" : ""}`} points={cell.points} />
       ))}
       {lines.map((line) => (
         <line
           key={`${line.x1}:${line.y1}:${line.x2}:${line.y2}`}
-          className="iso-line"
+          className="grid-line"
           x1={line.x1}
           y1={line.y1}
           x2={line.x2}
@@ -226,7 +303,7 @@ export function IsoBoard({ className = "" }: { className?: string }) {
           vectorEffect="non-scaling-stroke"
         />
       ))}
-      <polygon className="iso-outline" points={outline} vectorEffect="non-scaling-stroke" />
+      <polygon className="grid-outline" points={outline} vectorEffect="non-scaling-stroke" />
     </svg>
   );
 }

@@ -41,7 +41,7 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 
 /* Menú del reino: la maqueta guía la pantalla y solo se activan los puntos del MVP. */
 .realm-scene { width: 100%; max-width: none; height: 100dvh; background: #07080a; }
-.realm-mockup { position: absolute; z-index: -2; inset: 0; width: 100%; height: 100%; object-fit: cover; image-rendering: pixelated; }
+/* El arte vive dentro de .realm-stage, que ya reproduce la geometria de cover. */
 .realm-hotspot, .realm-icon-button { position: absolute; cursor: pointer; border: 1px solid rgba(127,100,58,.86); color: #e9d19b; background: rgba(8,10,10,.72); box-shadow: inset 0 0 0 1px rgba(231,185,94,.12), 0 0 18px rgba(0,0,0,.72); text-shadow: 0 2px #000; }
 .realm-hotspot { display: grid; gap: .15rem; min-width: 156px; padding: .55rem .75rem; text-align: left; }
 .realm-hotspot strong, .realm-hotspot span { display: block; font-family: ui-monospace, "Cascadia Mono", monospace; }
@@ -357,15 +357,7 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
   background: #050608;
   isolation: isolate;
 }
-.battle-art {
-  position: absolute;
-  z-index: -3;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  image-rendering: pixelated;
-}
+/* Idem para el arte de Battle: lo posiciona .battle-stage. */
 .battle-scene::after {
   content: "";
   position: absolute;
@@ -1436,24 +1428,59 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 }
 
 /* =====================================================================
+   EL ESCENARIO
+
+   El arte se dibuja con `cover`: en una pantalla que no sea 16:9 se
+   recorta. Si los personajes se colocaran en % de la PANTALLA, se
+   despegarían del suelo pintado en cuanto cambiara la proporción.
+
+   Por eso existe esta caja: reproduce exactamente la geometría de
+   `cover` con dos longitudes concretas, y todo lo que va dentro se
+   coloca en % del ARTE. `--stage-h` sirve además para escalar a los
+   personajes, así que el grupo crece y encoge con el escenario sin que
+   ningún breakpoint toque sus proporciones internas.
+   ===================================================================== */
+.realm-scene, .battle-scene {
+  /* Lienzo del arte: 1672 × 941. */
+  --stage-w: max(100vw, 100dvh * 1672 / 941);
+  --stage-h: max(100dvh, 100vw * 941 / 1672);
+}
+.realm-stage, .battle-stage {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--stage-w);
+  height: var(--stage-h);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.realm-stage { z-index: -2; }
+.battle-stage { z-index: -3; }
+.realm-stage > img, .battle-stage > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* La caja ya tiene la proporción del arte: aquí `fill` es exacto. */
+  object-fit: fill;
+  image-rendering: pixelated;
+}
+.stage-party { position: absolute; inset: 0; }
+
+/* =====================================================================
    SPRITES IDLE DEL GRUPO
 
    THE PARTY MUST LOOK LIKE ONE PARTY, NOT THREE UNRELATED IMAGES.
 
-   Cada `.party-sprite` es una VENTANA del tamaño exacto de la caja visible
-   del personaje; dentro, el GIF entero se posiciona con desplazamiento
-   negativo. El archivo no se toca —mismos frames, mismo timing— y aun así
-   los tres se pueden juntar sin que el aire transparente de cada lienzo
-   abra huecos distintos.
-
-   La escala la fija una sola variable, `--party-hero-h` / `--board-hero-h`:
-   la altura visible del Marqués. Cordera y Roku derivan de ella, así que
-   ningún breakpoint puede romper las proporciones internas del grupo.
+   Cada `.party-sprite` es una VENTANA del tamaño exacto de la caja
+   visible del personaje; dentro, el GIF entero se posiciona con
+   desplazamiento negativo. El archivo no se toca —mismos frames, mismo
+   timing— y aun así los tres se pueden juntar sin que el aire
+   transparente de cada lienzo abra huecos distintos.
    ===================================================================== */
 .party-sprite {
   position: relative;
   display: block;
-  flex: 0 0 auto;
   overflow: hidden;
   pointer-events: none;
 }
@@ -1467,79 +1494,58 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 /* Un caído no se anima distinto —todavía no hay sprite de KO—: se apaga. */
 .party-sprite.is-ko { opacity: .45; filter: grayscale(.85) brightness(.7); }
 
-/* ---------------------------------------------------------------------
-   EL GRUPO EN EL REINO
+/* Los pies caen en el punto indicado; el resto del cuerpo crece hacia arriba. */
+.stage-piece { position: absolute; transform: translate(-50%, -100%); }
 
-   Marqués lo más a la izquierda que permite el borde seguro, Cordera
-   enfrente mirándolo, y Roku en medio de los dos. Una sola línea de suelo:
-   `align-items: flex-end` alinea las ventanas por su borde inferior, que
-   es justo donde están los pies de cada uno.
-   --------------------------------------------------------------------- */
-.realm-party {
-  position: absolute;
-  z-index: 4;
-  bottom: 15%;
-  left: max(1.2%, env(safe-area-inset-left));
-  display: flex;
-  align-items: flex-end;
-  gap: clamp(.4rem, 1.6vw, 1.6rem);
-  pointer-events: none;
-  /* Altura visible del Marqués. Todo el grupo escala con ella. */
-  --party-hero-h: clamp(96px, 21vh, 230px);
-}
-/* Roku va al suelo del grupo, no flotando a media altura. */
-.realm-party .party-sprite-roku { align-self: flex-end; }
+/* =====================================================================
+   LAS DOS CUADRÍCULAS
 
-/* ---------------------------------------------------------------------
-   EL TABLERO DE LA BATTLE
+   Sutiles, pero se ven: el jugador tiene que reconocer el suelo bajo sus
+   pies y el de la Horda enfrente. El SVG cubre el escenario entero y sus
+   coordenadas son las mismas que las de las casillas, así que el plano
+   dibujado y el sitio donde se planta cada pieza son el mismo cálculo.
+   ===================================================================== */
+.battle-grid { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.grid-floor { fill: rgba(8, 12, 16, .34); }
+.grid-cell { fill: rgba(222, 182, 104, .06); }
+.grid-line { stroke: rgba(232, 194, 112, .3); stroke-width: 1; }
+.grid-outline { fill: none; stroke: rgba(246, 209, 128, .52); stroke-width: 1.5; }
+/* La cuadrícula enemiga se lee en su propio color; no es nuestro suelo. */
+.horde-grid .grid-cell { fill: rgba(190, 96, 224, .07); }
+.horde-grid .grid-line { stroke: rgba(206, 130, 240, .28); }
+.horde-grid .grid-outline { stroke: rgba(221, 115, 240, .48); }
+/* Una casilla se apaga cuando SU enemigo cae. El plano dice quién sigue. */
+.horde-grid .grid-cell.is-down { fill: rgba(10, 8, 12, .55); }
 
-   Un ajedrez de 4×4 en isométrico. La caja va en proporción 2:1 para que
-   cada casilla sea un rombo del doble de ancho que de alto: eso es lo que
-   hace que el plano se lea como isométrico verdadero y no como un rombo
-   cualquiera. El enemigo queda arriba a la derecha, hacia la Horda.
-   --------------------------------------------------------------------- */
-.battle-board {
-  position: absolute;
-  z-index: 2;
-  bottom: 14%;
-  left: 2%;
-  width: min(37%, 600px);
-  aspect-ratio: 2 / 1;
-  pointer-events: none;
-  /* Altura visible del Marqués sobre el tablero, atada al ancho del propio
-     tablero: así el grupo nunca queda gigante ni diminuto sobre sus casillas.
-     Poco menos de dos casillas de alto, que es lo que deja ver el damero. */
-  --board-hero-h: calc(min(37vw, 600px) * .26);
-}
-.iso-board { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-/* Sutil, pero se ve: el jugador tiene que reconocer el tablero bajo sus pies. */
-.iso-floor { fill: rgba(8, 12, 16, .42); }
-.iso-cell { fill: rgba(222, 182, 104, .07); }
-.iso-line { stroke: rgba(232, 194, 112, .34); stroke-width: 1; }
-.iso-outline { fill: none; stroke: rgba(246, 209, 128, .58); stroke-width: 1.5; }
-
-/* Cada pieza se planta con los PIES en el centro de su casilla. */
-.board-piece { position: absolute; transform: translate(-50%, -100%); }
-
-/* El cuarto slot: sólo aparece cuando un compañero real ejecutó algo. */
-.board-agent {
+.stage-agent {
   position: absolute;
   display: grid;
   place-items: center;
-  min-width: 54px;
-  padding: .18rem .4rem;
+  min-width: 58px;
+  padding: .2rem .45rem;
   transform: translate(-50%, -100%);
   border: 1px solid #36e9a9;
   background: rgba(4, 18, 14, .86);
   box-shadow: 0 0 16px rgba(54, 233, 169, .35);
 }
-.board-agent b { color: #8ef7d0; font: 900 .44rem/1.3 ui-monospace, "Cascadia Mono", monospace; letter-spacing: .08em; }
+.stage-agent b { color: #8ef7d0; font: 900 .46rem/1.3 ui-monospace, "Cascadia Mono", monospace; letter-spacing: .08em; }
 
-@media (max-width: 720px) {
-  .realm-party { bottom: 15%; --party-hero-h: clamp(78px, 17vh, 150px); }
-  .battle-board { width: 52%; bottom: 17%; --board-hero-h: calc(52vw * .26); }
-}
-@media (orientation: portrait) {
-  /* En vertical el dock ocupa el ancho: el grupo sube para no quedar debajo. */
-  .realm-party { bottom: 20%; }
+/* Tap compacto sobre un aliado durante la Battle: nunca un modal gigante. */
+.party-member { cursor: pointer; }
+.party-member.peeking { box-shadow: inset 0 0 0 1px var(--gold-bright); }
+.party-peek { margin: .22rem 0 0; color: #e7d3aa; font-size: .42rem; line-height: 1.35; }
+
+/* Informe de acción: hechos, no relato. */
+.after-action { padding: .7rem .8rem; margin-top: .6rem; }
+.after-action h3 { margin: .1rem 0 .4rem; color: #f3d79a; font-size: .8rem; }
+.aar-facts { display: grid; grid-template-columns: repeat(2, 1fr); gap: .2rem .6rem; margin: 0 0 .4rem; padding: 0; list-style: none; }
+.aar-facts li { display: flex; justify-content: space-between; color: #bcae95; font-size: .52rem; }
+.aar-facts b { color: #f3d79a; }
+.aar-party, .aar-agent { margin: .12rem 0; color: #cbbda5; font-size: .54rem; }
+.aar-lessons { margin: .4rem 0 0; padding: 0; list-style: none; }
+.aar-lessons li { color: #9d9078; font-size: .52rem; line-height: 1.5; }
+
+@media (max-width: 520px) {
+  .hero-grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
+  .aar-facts { grid-template-columns: 1fr; }
 }

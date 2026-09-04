@@ -2,7 +2,18 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 import { Sprite } from "./Sprite";
-import { AGENT_CELL, cellCenter, IsoBoard, PARTY_CELLS, PartySprite } from "./PartySprite";
+import {
+  ALLY_CELLS,
+  ALLY_QUAD,
+  BATTLE_HERO_HEIGHT,
+  BattleGrid,
+  cellCenter,
+  HORDE_QUAD,
+  PartySprite,
+  REALM_GROUND,
+  REALM_HERO_HEIGHT,
+  REALM_SPOTS,
+} from "./PartySprite";
 import type { ActView, AfterActionReport, AgentSlot, BarracksView, BattleClock, BattleStatus, CampaignView, CharacterStats, EnemyCombatant, EntityType, HeroProfileView, InventoryItemId, InventoryState, NotificationView, ObligationView, PartyMemberId, PartyState, Quest, QuestNode, RealmSnapshot, TreasuryView, WorldSystemView } from "./types";
 import "./styles.css";
 
@@ -174,7 +185,31 @@ function RealmMenu({
   };
   return (
     <main className="scene realm-scene">
-      <img className="realm-mockup" src="/assets/art/realm-menu-mockup.png" alt="" aria-hidden="true" />
+      {/*
+        EL ESCENARIO.
+
+        El arte se dibuja con `cover`, así que en una pantalla que no sea 16:9
+        se recorta. Si el grupo se colocara en % de la PANTALLA, se despegaría
+        del suelo pintado en cuanto cambiara la proporción. Por eso el fondo y
+        los sprites viven dentro de la misma caja, que reproduce exactamente la
+        geometría de `cover`: todo lo de dentro va en % del ARTE, no de la
+        pantalla, y el grupo queda clavado donde el mockup lo puso.
+      */}
+      <div className="realm-stage">
+        <img className="realm-mockup" src="/assets/art/realm-menu-mockup.png" alt="" aria-hidden="true" />
+        <div className="stage-party" aria-label="El grupo del Marqués">
+          {REALM_SPOTS.map((spot) => (
+            <PartySprite
+              key={spot.id}
+              id={spot.id}
+              decorative
+              heroHeight={`calc(var(--stage-h) * ${REALM_HERO_HEIGHT / 100})`}
+              className="stage-piece"
+              style={{ left: `${spot.centerX}%`, top: `${REALM_GROUND}%`, zIndex: spot.depth }}
+            />
+          ))}
+        </div>
+      </div>
       <button className="realm-hotspot character-hotspot" onClick={onStats}>
         <strong>{stats.displayName.toUpperCase()}</strong>
         <span>{stats.hp} HP · {stats.xp} XP · {stats.aura} Aura</span>
@@ -221,20 +256,6 @@ function RealmMenu({
           </button>
         ))}
       </nav>
-
-      {/*
-        EL GRUPO EN EL REINO.
-
-        Presencia persistente del mundo, no tres imágenes sueltas: el Marqués lo
-        más a la izquierda que permite el borde, Cordera enfrente mirándolo, y
-        Roku en medio de los dos. Una sola línea de suelo y las proporciones
-        reales del grupo —Roku al 30% del Marqués— en cualquier pantalla.
-      */}
-      <div className="realm-party" aria-label="El grupo del Marqués">
-        <PartySprite id="marques" heroHeight="var(--party-hero-h)" facing="right" />
-        <PartySprite id="roku" heroHeight="var(--party-hero-h)" facing="right" />
-        <PartySprite id="cordera" heroHeight="var(--party-hero-h)" facing="left" />
-      </div>
 
       {/* ⚡ BATALLAS LIBRES: la vida cotidiana no necesita ceremonia. */}
       <aside className="realm-dock glass-panel">
@@ -1889,9 +1910,74 @@ function Battle({
     setOpenStepId(currentStep.id);
     setOrdersOpen(true);
   };
+  /*
+    LA HORDA TAMBIÉN TIENE SU CUADRÍCULA.
+
+    Cuatro enemigos, cuatro casillas: los de vanguardia en la columna que da
+    hacia nosotros y los de retaguardia detrás. Una casilla se apaga cuando SU
+    enemigo cae, así que el plano no es adorno: dice quién sigue en pie.
+  */
+  const HORDE_CELLS = [
+    { col: 0, row: 0 },
+    { col: 0, row: 1 },
+    { col: 1, row: 0 },
+    { col: 1, row: 1 },
+  ];
+  const hordeOrder = [...(battle?.enemies ?? [])].sort(
+    (a, b) => (a.position === "front" ? 0 : 1) - (b.position === "front" ? 0 : 1),
+  );
+  const fallenHordeCells = hordeOrder
+    .map((enemy, index) => (enemy.status === "ko" && HORDE_CELLS[index] ? `${HORDE_CELLS[index].col},${HORDE_CELLS[index].row}` : null))
+    .filter((cell): cell is string => cell !== null);
   return (
     <main className={`scene battle-scene ${impact ? "impact" : ""} ${incomingDamage ? "player-hit" : ""}`}>
-      <img className="battle-art" src="/assets/art/battle-realm.png" alt="El ejército de la Marca combate a la Horda" />
+      {/*
+        DOS CUADRÍCULAS INDEPENDIENTES DE 2×2, enfrentadas a través del valle:
+        una del grupo y otra de la Horda. No es un tablero único: cada bando
+        tiene la suya, y se inclinan en sentidos opuestos porque se miran.
+
+        Los vértices están calcados del trazo del mockup, y las casillas se
+        interpolan entre ellos, así que las piezas se plantan exactamente sobre
+        el suelo que el arte tiene pintado.
+      */}
+      <div className="battle-stage">
+        <img className="battle-art" src="/assets/art/battle-realm.png" alt="El ejército de la Marca combate a la Horda" />
+        {battle ? (
+          <>
+            <BattleGrid quad={ALLY_QUAD} className="ally-grid" />
+            <BattleGrid quad={HORDE_QUAD} className="horde-grid" fallen={fallenHordeCells} />
+            {(["cordera", "marques", "roku"] as const).map((id) => {
+              const member = battle.party[id === "roku" ? "roko" : id];
+              const cell = ALLY_CELLS[id];
+              const spot = cellCenter(ALLY_QUAD, cell.col, cell.row);
+              return (
+                <PartySprite
+                  key={id}
+                  id={id}
+                  decorative
+                  ko={member.status === "ko"}
+                  heroHeight={`calc(var(--stage-h) * ${BATTLE_HERO_HEIGHT / 100})`}
+                  className="stage-piece"
+                  style={{ left: `${spot.left}%`, top: `${spot.top}%`, zIndex: Math.round(spot.top) }}
+                />
+              );
+            })}
+            {/* El cuarto slot sólo se ocupa si un compañero real ejecutó algo. */}
+            {battle.agent.deployed ? (
+              <span
+                className="stage-agent"
+                style={{
+                  left: `${cellCenter(ALLY_QUAD, ALLY_CELLS.agent.col, ALLY_CELLS.agent.row).left}%`,
+                  top: `${cellCenter(ALLY_QUAD, ALLY_CELLS.agent.col, ALLY_CELLS.agent.row).top}%`,
+                  zIndex: Math.round(cellCenter(ALLY_QUAD, ALLY_CELLS.agent.col, ALLY_CELLS.agent.row).top),
+                }}
+              >
+                <b>{(battle.agent.name ?? "AGENTE").toUpperCase()}</b>
+              </span>
+            ) : null}
+          </>
+        ) : null}
+      </div>
       <header className="battle-header glass-panel">
         <button className="back" onClick={onBack}>‹</button>
         <div><p className="eyebrow">{quest.campaignTitle}</p><h1>{quest.title}</h1></div>
@@ -1969,54 +2055,6 @@ function Battle({
         <div className="player-health-track"><span style={{ width: `${playerHealth}%` }} /></div>
         <small className="stats-hint">VER PERSONAJE ›</small>
       </button>
-
-      {/*
-        EL TABLERO.
-
-        Un ajedrez de 4×4 visto en isométrico: Marqués y Cordera en las casillas
-        del rey y la reina de nuestra fila de fondo, y Roku en la casilla de peón
-        que hay DELANTE del Marqués, que es su oficio. El enemigo queda arriba a
-        la derecha, hacia la Horda. El plano se dibuja tenue a propósito: es la
-        misma rejilla con la que se calculan las casillas, así que enseña
-        literalmente el suelo donde están parados.
-      */}
-      {battle ? (
-        <div className="battle-board" aria-hidden="true">
-          <IsoBoard />
-          {(["marques", "cordera", "roku"] as const).map((id) => {
-            const memberId = id === "marques" ? "marques" : id === "cordera" ? "cordera" : "roko";
-            const member = battle.party[memberId];
-            const cell = PARTY_CELLS[id];
-            const center = cellCenter(cell);
-            return (
-              <PartySprite
-                key={id}
-                id={id}
-                decorative
-                heroHeight="var(--board-hero-h)"
-                facing="right"
-                ko={member.status === "ko"}
-                className="board-piece"
-                style={{
-                  left: `${center.left}%`,
-                  top: `${center.top}%`,
-                  // Pintor: quien está más cerca del jugador tapa al de atrás.
-                  zIndex: Math.round(center.top),
-                }}
-              />
-            );
-          })}
-          {/* El cuarto slot sólo se dibuja si un compañero real ejecutó algo. */}
-          {battle.agent.deployed ? (
-            <span
-              className="board-agent"
-              style={{ left: `${cellCenter(AGENT_CELL).left}%`, top: `${cellCenter(AGENT_CELL).top}%`, zIndex: Math.round(cellCenter(AGENT_CELL).top) }}
-            >
-              <b>{(battle.agent.name ?? "AGENTE").toUpperCase()}</b>
-            </span>
-          ) : null}
-        </div>
-      ) : null}
 
       <section className="battlefield" aria-label="Campo de batalla">
         <span className="battle-pulse ally" aria-hidden="true" />

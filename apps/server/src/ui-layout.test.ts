@@ -82,18 +82,17 @@ describe("Layout móvil de las pantallas con lista", () => {
 });
 
 /**
- * CASO E — SPRITES IDLE DEL GRUPO.
+ * EL ESCENARIO Y EL GRUPO.
  *
- * ROKU IS SMALL: ~30% OF THE MARQUÉS. THE PARTY MUST LOOK LIKE ONE PARTY.
- *
- * Las medidas declaradas en `PartySprite.tsx` no son decorativas: de ellas sale
- * el recorte del lienzo y la escala de cada personaje. Si alguien cambia un GIF
- * sin volver a medirlo, el recorte enseñaría transparencia o cortaría la capa,
- * el arco o la cola. Esta prueba lee los archivos REALES y los confronta con lo
- * declarado.
+ * Las medidas declaradas en `PartySprite.tsx` no son decorativas: de ellas
+ * salen el recorte del lienzo, la escala de cada personaje y el sitio exacto de
+ * cada casilla. Si alguien cambia un GIF o un fondo sin volver a medirlo, el
+ * recorte enseñaría transparencia y las piezas se despegarían del suelo pintado.
+ * Esta prueba lee los archivos REALES y los confronta con lo declarado.
  */
-describe("Sprites idle del grupo", () => {
+describe("El escenario, el grupo y las dos cuadrículas", () => {
   const spritesDir = resolve(here, "../../web/public/assets/sprites/party");
+  const artDir = resolve(here, "../../web/public/assets/art");
   const component = resolve(here, "../../web/src/PartySprite.tsx");
 
   /** Ancho y alto lógicos del GIF: bytes 6..9 del encabezado, little endian. */
@@ -103,7 +102,13 @@ describe("Sprites idle del grupo", () => {
     return { w: bytes.readUInt16LE(6), h: bytes.readUInt16LE(8) };
   }
 
-  /** Las medidas declaradas para un personaje, leídas del propio componente. */
+  /** Ancho y alto del PNG: los ocho bytes que siguen a la cabecera IHDR. */
+  async function pngSize(file: string): Promise<{ w: number; h: number }> {
+    const bytes = await readFile(file);
+    expect(bytes.subarray(1, 4).toString("ascii")).toBe("PNG");
+    return { w: bytes.readUInt32BE(16), h: bytes.readUInt32BE(20) };
+  }
+
   function declared(source: string, id: string) {
     const block = source.slice(source.indexOf(`  ${id}: {`));
     const canvas = block.match(/canvas: \{ w: (\d+), h: (\d+) \}/)!;
@@ -126,77 +131,141 @@ describe("Sprites idle del grupo", () => {
       const canvas = await gifCanvas(resolve(spritesDir, file));
       const spec = declared(source, id);
       expect(canvas).toEqual(spec.canvas);
-      // La caja visible tiene que caber dentro del lienzo, o el recorte
-      // enseñaría vacío o cortaría al personaje.
+      // La caja visible cabe dentro del lienzo, o el recorte enseñaría vacío.
       expect(spec.box.x + spec.box.w).toBeLessThanOrEqual(canvas.w);
       expect(spec.box.y + spec.box.h).toBeLessThanOrEqual(canvas.h);
     }
   });
 
-  it("las proporciones del grupo se miden por altura VISIBLE, no por el lienzo", async () => {
+  /**
+   * LAS PROPORCIONES SALEN DEL MOCKUP, NO DE UNA TABLA.
+   *
+   * Medidas sobre los mockups que compuso el jugador: en `MAIN MOCKUP.png` el
+   * Marqués mide 306 px, Cordera 300 y Roku 136; en el de Battle, 356 / 370 /
+   * 140. Sustituyen al 0.90 / 0.30 del documento anterior.
+   */
+  it("Cordera es casi tan alta como el Marqués y Roku es un perro grande", async () => {
     const source = await readFile(component, "utf8");
     const marques = declared(source, "marques");
     const cordera = declared(source, "cordera");
     const roku = declared(source, "roku");
 
     expect(marques.scale).toBe(1);
-    // Cordera conserva estatura humana, algo por debajo del Marqués.
-    expect(cordera.scale).toBeGreaterThanOrEqual(0.89);
-    expect(cordera.scale).toBeLessThanOrEqual(0.92);
-    // Roku es pequeño: eso es parte de la composición, no un descuido.
-    expect(roku.scale).toBeCloseTo(0.3, 2);
+    expect(cordera.scale).toBeGreaterThanOrEqual(0.95);
+    expect(cordera.scale).toBeLessThanOrEqual(1);
+    expect(roku.scale).toBeGreaterThanOrEqual(0.38);
+    expect(roku.scale).toBeLessThanOrEqual(0.46);
 
-    // Escalar por el LIENZO daría proporciones muy distintas: por eso no se hace.
-    const byCanvas = roku.canvas.h / marques.canvas.h;
-    expect(byCanvas).toBeGreaterThan(0.45);
+    // Se mide por altura VISIBLE: por el lienzo, Roku saldría al doble.
+    expect(roku.canvas.h / marques.canvas.h).toBeGreaterThan(0.45);
   });
 
-  it("el grupo se dibuja con una sola escala y sin estirar en X/Y por separado", async () => {
+  it("una sola escala gobierna ancho y alto: nada se estira en X/Y por separado", async () => {
     const source = await readFile(component, "utf8");
-    // Un único factor gobierna ancho y alto: es lo que preserva el aspect ratio.
     expect(source).toContain("const factor = `calc(${heroHeight} * ${metrics.scale} / ${metrics.box.h})`");
     expect(source).toContain("width: `calc(${factor} * ${metrics.canvas.w})`");
     expect(source).toContain("height: `calc(${factor} * ${metrics.canvas.h})`");
+    // Sólo se espeja si lo pedido no coincide con cómo viene el asset.
+    expect(source).toContain("const mirrored = Boolean(facing) && facing !== metrics.nativeFacing");
 
     const css = await readFile(stylesheet, "utf8");
-    // Pixel art nítido: nada de suavizado al escalar.
     expect(ruleFor(css, ".party-sprite img")).toContain("image-rendering: pixelated");
-    // Una sola línea de suelo: las ventanas se alinean por su borde inferior.
-    expect(ruleFor(css, ".realm-party")).toContain("align-items: flex-end");
-  });
-
-  it("en el Reino el Marqués va a la izquierda, Roku en medio y Cordera enfrente", async () => {
-    const tsx = await readFile(view, "utf8");
-    const band = tsx.slice(tsx.indexOf('<div className="realm-party"'), tsx.indexOf("</div>", tsx.indexOf('<div className="realm-party"')));
-    const order = [...band.matchAll(/id="(marques|roku|cordera)"/g)].map((match) => match[1]);
-    expect(order).toEqual(["marques", "roku", "cordera"]);
-    // Cordera mira hacia el Marqués; él y Roku miran hacia el otro lado.
-    expect(band).toContain('id="cordera" heroHeight="var(--party-hero-h)" facing="left"');
-    expect(band).toContain('id="marques" heroHeight="var(--party-hero-h)" facing="right"');
+    // Los pies caen en el punto indicado; el cuerpo crece hacia arriba.
+    expect(ruleFor(css, ".stage-piece")).toContain("translate(-50%, -100%)");
   });
 
   /**
-   * EL TABLERO 4×4 EN ISOMÉTRICO.
+   * EL ESCENARIO SIGUE AL ARTE, NO A LA PANTALLA.
    *
-   * Marqués y Cordera en las casillas del rey y la reina de nuestra fila de
-   * fondo; Roku en la casilla de peón que hay DELANTE del Marqués. La caja va
-   * en proporción 2:1 para que cada casilla sea un rombo del doble de ancho que
-   * de alto: sin eso el plano deja de ser isométrico.
+   * El fondo se dibuja con `cover`: en una pantalla que no sea 16:9 se recorta.
+   * Si el grupo se colocara en % de la pantalla, se despegaría del suelo pintado
+   * en cuanto cambiara la proporción. La caja del escenario reproduce la
+   * geometría de `cover` con longitudes concretas, y todo lo de dentro va en %
+   * del ARTE. Por eso el lienzo del fondo no puede cambiar sin volver a medir.
    */
-  it("el tablero coloca al rey, la reina y el peón donde dice el ajedrez", async () => {
-    const source = await readFile(component, "utf8");
-    const cells = source.slice(source.indexOf("export const PARTY_CELLS"));
-    expect(cells).toContain("marques: { file: 0, rank: 1 }");
-    expect(cells).toContain("cordera: { file: 0, rank: 2 }");
-    // Un file más adelante que el Marqués, en su mismo rank: peón enfrente.
-    expect(cells).toContain("roku: { file: 1, rank: 1 }");
-
+  it("el escenario reproduce `cover` y el arte conserva el lienzo medido", async () => {
     const css = await readFile(stylesheet, "utf8");
-    const board = ruleFor(css, ".battle-board");
-    expect(board).toContain("aspect-ratio: 2 / 1");
-    // El plano se dibuja tenue, pero se dibuja: tiene suelo, damero y borde.
-    expect(css).toContain(".iso-floor");
-    expect(css).toContain(".iso-cell");
-    expect(css).toContain(".iso-outline");
+    const scene = ruleFor(css, ".realm-scene, .battle-scene");
+    expect(scene).toContain("--stage-w: max(100vw, 100dvh * 1672 / 941)");
+    expect(scene).toContain("--stage-h: max(100dvh, 100vw * 941 / 1672)");
+
+    for (const file of ["realm-menu-mockup.png", "battle-realm.png"]) {
+      expect(await pngSize(resolve(artDir, file))).toEqual({ w: 1672, h: 941 });
+    }
+  });
+
+  it("en el Reino: Marqués a la izquierda, Roku en medio, Cordera enfrente", async () => {
+    const source = await readFile(component, "utf8");
+    const spots = source.slice(source.indexOf("export const REALM_SPOTS"), source.indexOf("BATTLE_HERO_HEIGHT"));
+    const parsed = [...spots.matchAll(/id: "(\w+)", centerX: ([\d.]+), depth: (\d)/g)].map((match) => ({
+      id: match[1],
+      centerX: Number(match[2]),
+      depth: Number(match[3]),
+    }));
+    expect(parsed).toHaveLength(3);
+
+    const byX = [...parsed].sort((a, b) => a.centerX - b.centerX).map((spot) => spot.id);
+    expect(byX).toEqual(["marques", "roku", "cordera"]);
+
+    // Son un grupo, no tres figuras en fila: Cordera detrás, Roku delante.
+    const depth = Object.fromEntries(parsed.map((spot) => [spot.id, spot.depth]));
+    expect(depth.cordera).toBeLessThan(depth.marques);
+    expect(depth.marques).toBeLessThan(depth.roku);
+  });
+
+  /**
+   * DOS CUADRÍCULAS INDEPENDIENTES DE 2×2, no un tablero único de 4×4: una del
+   * grupo y otra de la Horda, enfrentadas. Los vértices están calcados del
+   * trazo del mockup y se inclinan en sentidos opuestos porque se miran.
+   */
+  it("hay dos cuadrículas 2×2 enfrentadas, calcadas del mockup", async () => {
+    const source = await readFile(component, "utf8");
+    expect(source).toContain("export const GRID_COLS = 2");
+    expect(source).toContain("export const GRID_ROWS = 2");
+
+    const quad = (name: string) => {
+      const block = source.slice(source.indexOf(`export const ${name}: Quad = {`));
+      return Object.fromEntries(
+        [...block.slice(0, 220).matchAll(/(tl|tr|br|bl): \[([\d.]+), ([\d.]+)\]/g)].map((match) => [
+          match[1],
+          [Number(match[2]), Number(match[3])],
+        ]),
+      ) as Record<string, [number, number]>;
+    };
+    const ally = quad("ALLY_QUAD");
+    const horde = quad("HORDE_QUAD");
+    for (const corners of [ally, horde]) {
+      expect(Object.keys(corners).sort()).toEqual(["bl", "br", "tl", "tr"]);
+    }
+
+    // Independientes: la del grupo termina antes de que empiece la de la Horda.
+    expect(Math.max(ally.tr[0], ally.br[0])).toBeLessThan(Math.min(horde.tl[0], horde.bl[0]));
+
+    // Enfrentadas: el lado del grupo se inclina a la izquierda al bajar y el de
+    // la Horda a la derecha. Si las dos cayeran igual, no se estarían mirando.
+    expect(ally.bl[0] - ally.tl[0]).toBeLessThan(0);
+    expect(horde.bl[0] - horde.tl[0]).toBeGreaterThan(0);
+  });
+
+  it("la columna que da a la Horda la ocupan Roku y el agente", async () => {
+    const source = await readFile(component, "utf8");
+    const cells = source.slice(source.indexOf("export const ALLY_CELLS"));
+    const parsed = Object.fromEntries(
+      [...cells.slice(0, 260).matchAll(/(\w+): \{ col: (\d), row: (\d) \}/g)].map((match) => [
+        match[1],
+        { col: Number(match[2]), row: Number(match[3]) },
+      ]),
+    );
+    expect(Object.keys(parsed).sort()).toEqual(["agent", "cordera", "marques", "roku"]);
+
+    // Cuatro combatientes, cuatro casillas distintas: es un tablero, no un montón.
+    const taken = Object.values(parsed).map((cell) => `${cell.col},${cell.row}`);
+    expect(new Set(taken).size).toBe(4);
+
+    // Roku se interpone y el cuarto slot entra a su lado; detrás, los dos humanos.
+    expect(parsed.roku.col).toBe(1);
+    expect(parsed.agent.col).toBe(1);
+    expect(parsed.marques.col).toBe(0);
+    expect(parsed.cordera.col).toBe(0);
   });
 });
