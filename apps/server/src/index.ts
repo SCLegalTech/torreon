@@ -14,7 +14,10 @@ for (const candidate of [".env", "../../.env"]) {
   }
 }
 
-const port = Number(process.env.PORT ?? 3000);
+// `TORREON_PORT` manda sobre `PORT`. Algunos entornos de desarrollo exportan
+// `PORT` para la interfaz, y entonces el Núcleo intentaba escuchar en el puerto
+// de Vite: la app quedaba viva pero sin reino al que preguntar.
+const port = Number(process.env.TORREON_PORT ?? process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "127.0.0.1";
 const statePath = resolve(process.env.TORREON_STATE_PATH ?? "./data/torreon-state.json");
 
@@ -27,6 +30,6 @@ const service = new QuestService(store, createCodice(), dirname(statePath), proc
 const app = createHttpApp(service);
 
 app.listen(port, host, () => {
-  process.stdout.write(`Torreón listo en http://${host}:${port}\nMCP: http://${host}:${port}/mcp\n`);
+  process.stdout.write(`Torreón listo en http://${host}:${port}\nMCP: http://${host}:${port}/mcp\nContrato: http://${host}:${port}/v1\nReino: ${storeKind}\n`);
 });
 

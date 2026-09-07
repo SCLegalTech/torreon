@@ -1,6 +1,6 @@
 # ADR-0004 · Contrato `/v1` con proyecciones por pantalla y eventos por SSE
 
-- **Estado:** propuesto (etapa 4)
+- **Estado:** aceptado — implementado en E4
 - **Fecha:** 2026-09-06
 - **Artículos:** 12, 13, 16
 

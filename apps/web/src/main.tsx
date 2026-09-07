@@ -2810,10 +2810,73 @@ function App() {
     }
   }, []);
 
+  /**
+   * EL SONDEO SE MUERE.
+   *
+   * Antes se pedía el reino ENTERO cada 1,5 s: unos 96 KB/s por cliente
+   * conectado, o 345 MB por hora, sólo para enterarse de que casi nunca había
+   * pasado nada. Ahora el reino avisa por `/v1/stream` y la interfaz refresca
+   * cuando de verdad cambió algo.
+   *
+   * Se usa `fetch` en vez de `EventSource` porque `EventSource` no sabe mandar
+   * cabeceras, y con el reino cerrado con llave la suscripción también la lleva.
+   *
+   * El sondeo lento que queda es una red de seguridad, no el mecanismo: si la
+   * suscripción se cae —túnel, proxy, la máquina de Fly suspendida— el jugador
+   * no se queda mirando una pantalla congelada.
+   */
   useEffect(() => {
     void refresh();
-    const interval = window.setInterval(() => void refresh(), 1500);
-    return () => window.clearInterval(interval);
+    const abort = new AbortController();
+    let vivo = true;
+
+    const escuchar = async () => {
+      // Espera creciente entre reconexiones. SIEMPRE se espera, incluso cuando
+      // la conexión murió «bien»: sin esto, un servidor caído o un proxy que
+      // devuelve otra cosa convierten la suscripción en un bucle a toda
+      // velocidad contra el servidor y contra la batería del teléfono.
+      let espera = 1000;
+      while (vivo) {
+        try {
+          const response = await fetch(`${API_BASE}/v1/stream`, {
+            signal: abort.signal,
+            headers: API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : undefined,
+          });
+          const tipo = response.headers.get("content-type") ?? "";
+          if (!response.ok || !response.body || !tipo.includes("text/event-stream")) {
+            throw new Error("esto no es una suscripción");
+          }
+          espera = 1000;
+          const lector = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (vivo) {
+            const { value, done } = await lector.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            // Un hecho por bloque; el latido (`: latido`) no trae ninguno.
+            if (buffer.includes("\n\n")) {
+              const hubieronHechos = buffer.includes("event: ");
+              buffer = "";
+              if (hubieronHechos) void refresh();
+            }
+          }
+        } catch {
+          // Cortada a propósito al desmontar: no es un fallo que reintentar.
+        }
+        if (!vivo) return;
+        await new Promise((resolve) => window.setTimeout(resolve, espera));
+        espera = Math.min(espera * 2, 30000);
+      }
+    };
+    void escuchar();
+
+    const red = window.setInterval(() => void refresh(), 30000);
+    return () => {
+      vivo = false;
+      abort.abort();
+      window.clearInterval(red);
+    };
   }, [refresh]);
 
   const act = async (operation: () => Promise<unknown>) => {

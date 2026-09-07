@@ -173,7 +173,7 @@ a quien los pide explícitamente y tiene derecho a verlos.
 
 Ver el detalle en [03-CONTRATO-DE-CLIENTE.md](03-CONTRATO-DE-CLIENTE.md).
 
-### Artículo 13 · El contrato es versionado y aditivo 🕐 (etapa 4)
+### Artículo 13 · El contrato es versionado y aditivo ✅ (`/v1`)
 
 Las rutas viven bajo `/v1`. Dentro de una versión mayor sólo se **añade**:
 ningún campo cambia de tipo, ningún valor desaparece de una unión, ningún campo

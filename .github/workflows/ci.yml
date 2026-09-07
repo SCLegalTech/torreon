@@ -24,10 +24,16 @@ jobs:
 
       - run: npm ci
 
+      # El vocabulario del contrato tiene UNA sola fuente (ADR-0005). Si el
+      # artefacto de C# no coincide con `domain.ts`, el build se pone rojo antes
+      # de que Unity herede una tercera copia a mano.
+      - name: Contrato
+        run: npm run contrato:check
+
       - name: Tipos
         run: npm run typecheck
 
-      # Incluye las 47 pruebas de aptitud arquitectónica. Una en rojo NO se
+      # Incluye las pruebas de aptitud arquitectónica. Una en rojo NO se
       # relaja: se respeta el límite o se cambia la constitución con un ADR.
       - name: Pruebas
         run: npm test

@@ -17,6 +17,8 @@
     "typecheck": "npm run typecheck -w @torreon/server && npm run typecheck -w @torreon/web",
     "capture:ui": "node scripts/capture-ui.mjs",
     "realm:sqlite": "npm run realm:sqlite -w @torreon/server",
+    "contrato:csharp": "node scripts/generar-contrato-csharp.mjs",
+    "contrato:check": "node scripts/generar-contrato-csharp.mjs --check",
     "android:sync": "npm run build -w @torreon/web && cap sync android",
     "android:apk": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/android.ps1 build",
     "android:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/android.ps1 install"

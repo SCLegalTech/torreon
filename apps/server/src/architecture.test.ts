@@ -170,4 +170,21 @@ describe("Artículo V — un solo vocabulario para todos los clientes", () => {
   it.each(shared)("%s significa lo mismo en el Núcleo y en el cliente", (name) => {
     expect(web.get(name), `el cliente redefinió ${name}`).toBe(core.get(name));
   });
+
+  /**
+   * Y el tercer cliente, el que todavía no existe.
+   *
+   * `contract/csharp/TorreonVocabulario.cs` se GENERA desde `domain.ts`
+   * (ADR-0005). Aquí sólo se comprueba que está y que no le falta vocabulario;
+   * la comparación exacta la hace `npm run contrato:check` en CI.
+   */
+  it("el vocabulario de Unity está generado y no le falta ninguna palabra", () => {
+    const csharp = read("contract/csharp/TorreonVocabulario.cs");
+    expect(csharp).toContain("NO SE EDITA A MANO");
+    for (const name of core.keys()) {
+      expect(csharp, `falta ${name} en el contrato de C#`).toContain(`public enum ${name}`);
+    }
+    // Un valor nuevo del servidor no puede romper una APK ya instalada.
+    expect(csharp.match(/Unknown = 0,/g)?.length).toBe(core.size);
+  });
 });

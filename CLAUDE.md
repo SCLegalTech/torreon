@@ -23,7 +23,7 @@ tareas con espadas.
 ```bash
 npm install
 npm run dev          # interfaz en :5173, MCP y API en :3000
-npm test             # 292 pruebas (las de SQLite se saltan si Node < 22.5)
+npm test             # 308 pruebas (las de SQLite se saltan si Node < 22.5)
 npm run typecheck
 ```
 
@@ -43,7 +43,8 @@ consultan ChatGPT y Claude por MCP.
 | `apps/server/src/quest-service.ts` | El orquestador. **Sólo puede encoger**: hay un trinquete. |
 | `apps/server/src/realm-store.ts` | El puerto de la persistencia. `store.ts` (JSON) y `sqlite-store.ts` lo cumplen. |
 | `apps/server/src/codice.ts` | El contrato del Dungeon Master, con dos runtimes. |
-| `apps/server/src/app.ts` / `mcp.ts` | Transporte. Traducen; no deciden. |
+| `apps/server/src/v1.ts` | El contrato que consumirá Unity: vistas, comandos y suscripción. |
+| `apps/server/src/app.ts` / `mcp.ts` | Transporte. `/api` es la superficie legada de React. |
 | `apps/server/src/architecture.test.ts` | Las pruebas que defienden la constitución. |
 | `apps/web/src/main.tsx` | Cliente React. Transitorio: Unity lo sustituye. |
 | `docs/arquitectura/` | Auditoría, constitución, arquitectura objetivo, contrato de cliente, hoja de ruta, ADR. |

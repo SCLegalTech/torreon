@@ -7,6 +7,7 @@ import { createMcpServer } from "./mcp.js";
 import { demoQuest, QuestService } from "./quest-service.js";
 import { describeFailure, invalid } from "./errors.js";
 import { HTTP_BODIES, type HttpRoute } from "./contracts.js";
+import { createV1Router } from "./v1.js";
 
 export function createHttpApp(service: QuestService) {
   const app = express();
@@ -45,12 +46,17 @@ export function createHttpApp(service: QuestService) {
   // la publicación. Sirve para que un reino en la nube deje de estar abierto al
   // mundo mientras llega la identidad de verdad (ADR-0007).
   // ---------------------------------------------------------------------------
-  app.use("/api", (req, res, next) => {
+  const laLlave: express.RequestHandler = (req, res, next) => {
     const expected = process.env.TORREON_API_TOKEN?.trim();
     if (!expected) return next();
     if (req.header("authorization") === `Bearer ${expected}`) return next();
     res.status(401).json({ error: "Este reino está cerrado con llave." });
-  });
+  };
+  app.use("/api", laLlave);
+  app.use("/v1", laLlave);
+
+  // EL CONTRATO NUEVO. `/api` es la superficie legada del cliente React.
+  app.use("/v1", createV1Router(service, service.realmClock));
 
   // ---------------------------------------------------------------------------
   // VALIDACIÓN EN EL BORDE (artículo 7).

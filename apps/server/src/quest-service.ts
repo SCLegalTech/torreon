@@ -137,6 +137,8 @@ import {
   type ScaleProposal,
 } from "./scale.js";
 import type { RealmStore } from "./realm-store.js";
+import { RealmBus } from "./realm-bus.js";
+import { recoverParty } from "./party-flow.js";
 import { DEFAULT_PLAYER_ID, type PlayerId } from "./players.js";
 import {
   abandonCampaign,
@@ -771,6 +773,8 @@ export class QuestService {
      * sólo se garantiza que todo lo que se lee y se escribe es de alguien.
      */
     private readonly playerId: PlayerId = DEFAULT_PLAYER_ID,
+    /** Por dónde sale el aviso de que la verdad cambió. */
+    readonly bus: RealmBus = new RealmBus(),
   ) {}
 
   /** Toda lectura y toda escritura llevan sujeto. No hay «el reino». */
@@ -778,12 +782,30 @@ export class QuestService {
     return this.store.read(this.playerId);
   }
 
-  private mutate<T>(mutation: (state: RealmState) => T | Promise<T>): Promise<{ result: T; state: RealmState }> {
-    return this.store.mutate(mutation, this.playerId);
+  private async mutate<T>(mutation: (state: RealmState) => T | Promise<T>): Promise<{ result: T; state: RealmState }> {
+    const outcome = await this.store.mutate(mutation, this.playerId);
+    // La verdad cambió: quien escuche se entera ahora, no en el próximo sondeo.
+    this.bus.publish(this.playerId, outcome.state);
+    return outcome;
   }
 
   get codiceName(): string {
     return this.codice.name;
+  }
+
+  /** Etiqueta de esta instancia. Distingue el reino local del de la nube. */
+  get instanceName(): string {
+    return this.instance;
+  }
+
+  /** De quién es el reino que este servicio sirve. */
+  get playerIdOfRealm(): PlayerId {
+    return this.playerId;
+  }
+
+  /** El reloj autoritativo. El transporte lo usa para sellar `serverTime`. */
+  get realmClock(): Clock {
+    return this.clock;
   }
 
   /**
@@ -793,7 +815,8 @@ export class QuestService {
    * debía haber cobrado mientras la app estaba cerrada. Sólo escribe si de
    * verdad hay algo pendiente: leer el reino no puede ensuciar el archivo.
    */
-  private async tick(): Promise<RealmState> {
+  /** Público para que la capa de vistas pueda leer el reino ya al día. */
+  async tick(): Promise<RealmState> {
     const state = await this.read();
     // El zurrón inicial se entrega UNA vez. Recargar o redesplegar no repite.
     if (!state.inventory.initializedAt) {
@@ -1171,40 +1194,9 @@ export class QuestService {
     // del que quedó escrito antes de que la Horda cobrara lo suyo.
     await this.tick();
     const { result } = await this.mutate((state) => {
-      const offer = recoveryOfferFor(state, questId);
-      if (!offer.available) throw deny(offer.reason ?? "La retirada táctica no está disponible ahora.");
+      const outcome = recoverParty(state, questId, this.clock.now());
       const quest = requireQuest(state, questId);
-      const record = quest.battle!;
-      const raised = recoverFallen(record.party);
-      const timestamp = this.clock.iso();
-      // El intento se cierra: volver del suelo NUNCA ocurre dentro del mismo.
-      const current = record.attempts.find((attempt) => attempt.attempt === record.attempt);
-      if (current && !current.endedAt) {
-        current.endedAt = timestamp;
-        current.endReason = "timeout";
-      }
-      // El frente sigue esperando un pacto nuevo: retirarse no lo reabre solo.
-      record.status = "awaiting_replan";
-      quest.updatedAt = timestamp;
-      const names = raised.map((id) => record.party[id].name).join(", ");
-      state.gameEvents.unshift({
-        id: randomUUID(),
-        type: "party_member_revived",
-        questId,
-        damage: 0,
-        battleAttempt: record.attempt,
-        message: `Retirada táctica: ${names} vuelve(n) de las Barracas con ${offer.minHealth} HP.`,
-        createdAt: timestamp,
-      });
-      state.gameEvents = state.gameEvents.slice(0, 200);
-      addEvent(state, {
-      type: "battle_restarted",
-      questId,
-      message:
-        `Retirada táctica de «${quest.title}»: ${names} se recupera(n) en las Barracas hasta ${offer.minHealth} HP. ` +
-        "El progreso validado, la Horda, las heridas del resto y el zurrón siguen exactamente como estaban.",
-      }, this.clock.now());
-      return { battle: battleFor(quest, this.clock.now(), state.gameEvents)!, raised, minHealth: offer.minHealth };
+      return { battle: battleFor(quest, this.clock.now(), state.gameEvents)!, raised: outcome.raised, minHealth: outcome.minHealth };
     });
     return result;
   }

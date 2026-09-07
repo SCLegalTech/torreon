@@ -173,7 +173,7 @@ además centralizado en `realm-events.ts`, y `reset` ya no borra el expediente.
 **Falta trasladar el reino de producción**, que es una decisión de persona con
 copia del volumen por delante.
 
-### B-4 · El contrato con el cliente es «te mando todo el estado, cada 1,5 segundos»
+### B-4 · El contrato con el cliente es «te mando todo el estado, cada 1,5 segundos» *(resuelto)*
 
 `GET /api/state` devuelve `RealmSnapshot`, cuyo primer campo es
 `realm: RealmState` (`domain.ts:1462`): **el documento persistido completo**, más
@@ -194,8 +194,13 @@ razonamientos del juez, rutas de artefactos en disco, contadores de plan,
 transacciones financieras completas. Con dos jugadores, esa forma de respuesta
 es directamente una fuga.
 
-**Para Unity esto es el problema principal**: el cliente Unity heredaría este
+**Para Unity esto era el problema principal**: el cliente Unity heredaría este
 mismo *polling* y este mismo acoplamiento a la forma interna de la persistencia.
+
+**Resuelto en E4** (ADR-0004): `/v1` entrega una vista por pantalla dentro de un
+sobre versionado, `RealmState` ya no viaja —hay una prueba que lo impide— y
+`GET /v1/stream` sustituye el sondeo. Medido en el navegador: **4 peticiones de
+estado en 30 s contra las ~20 de antes**, con una sola conexión abierta.
 
 ### B-5 · Migraciones sin versión, ejecutadas en cada lectura
 
@@ -292,7 +297,7 @@ en la siguiente; aislado pasa siempre. Las pruebas de tiempo esperan de verdad
 guardián que falla al azar deja de ser un guardián: se empieza a repetir el
 build en vez de leerlo.
 
-### A-5 · El contrato del cliente se mantiene copiando a mano
+### A-5 · El contrato del cliente se mantiene copiando a mano *(mitigado)*
 
 `apps/web/src/types.ts` (648 líneas) es una transcripción manual de `domain.ts`.
 Ya había derivado, y en la dirección peligrosa: **el cliente había ensanchado un
@@ -310,7 +315,13 @@ podía ser cierto. *(Corregido en este mismo cambio; ahora hay una prueba que lo
 impide.)*
 
 **Unity sería la tercera copia a mano**, en otro lenguaje, sin compilador que la
-ate a las otras dos. Es el momento exacto para dejar de copiar.
+ate a las otras dos.
+
+**Mitigado en E4** (ADR-0005): el vocabulario compartido se **genera** para C#
+desde `domain.ts`, con `Unknown = 0` en cada enum, y CI falla si el artefacto y
+la fuente se separan. Los DTO de cada vista se generarán cuando exista el
+proyecto Unity; hasta entonces `apps/web/src/types.ts` sigue a mano, con la
+prueba de no-deriva encima.
 
 ### M-1 · Sin CI, sin lint, sin formato
 

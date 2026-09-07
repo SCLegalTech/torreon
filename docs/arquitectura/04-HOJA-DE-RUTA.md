@@ -15,7 +15,7 @@ añadiendo juego entre etapas.
 | OK | **E1** — puertos y bordes | pruebas deterministas, errores útiles | — |
 | OK | **E2** — el jugador en el modelo | todo lo multiusuario | — |
 | ~ | **E3** — persistencia real | concurrencia, auditoría, escala | **alto** · *construida y probada; trasladar el reino es decisión de persona* |
-| | **E4** — contrato versionado + SSE | **Unity** | medio |
+| ~ | **E4** — contrato versionado + SSE | **Unity** | medio · *el contrato ya existe; falta que React lo consuma entero* |
 | | **E5** — autenticación e identidad | **Play Store** | medio |
 | | **E6** — descomponer el orquestador | velocidad sostenida | bajo, continuo |
 | | **E7** — preparación de tienda | publicar | medio |
@@ -184,17 +184,45 @@ a un reinicio del reino, hecho.
 
 ---
 
-## E4 — Contrato versionado, proyecciones y SSE *(la etapa que desbloquea Unity)*
+## E4 — Contrato versionado, proyecciones y SSE *(el contrato ya existe)*
 
-1. `/v1` con sobre estable (`schemaVersion`, `serverTime`, `cursor`, `data`).
-2. Vistas por pantalla; `RealmSnapshot.realm` sale del contrato público.
-3. `GET /v1/stream` (SSE) reanudable por `cursor`; el sondeo de 1,5 s muere.
-4. Contrato generado a JSON Schema → TypeScript y C# (ADR-0005), verificado en CI.
-5. React migra a `/v1` y **valida el diseño**: si React puede, Unity puede.
+### Hecho
 
-*Criterio:* la carga por cliente conectado baja de ~345 MB/hora a kilobytes;
-`apps/web/src/types.ts` deja de existir como archivo escrito a mano; el contrato
-C# se genera y compila.
+1. **`/v1` con sobre estable** — `schemaVersion`, `serverTime`, `cursor`,
+   `data`. El reloj autoritativo es el del servidor, y el `cursor` ata cada foto
+   a un punto exacto del expediente.
+2. **Vistas por pantalla** (`v1-views.ts`, `v1-service.ts`): bastión, mapa,
+   frente, expediente, barracas, avisos y tesorería. **`RealmState` no viaja**:
+   hay una prueba que falla si el documento del reino se cuela en una respuesta.
+3. **`GET /v1/stream` (SSE)**, reanudable por `cursor`, con latido cada 25 s y
+   el backlog entregado ANTES de escuchar lo nuevo, para que no quede hueco
+   entre la foto y la suscripción. `realm-bus.ts` avisa al terminar cada
+   mutación: la verdad cambió, no «han pasado 1,5 segundos».
+4. **Comandos bajo `/v1`**, con la misma validación de forma que `/api` y
+   devolviendo el resultado autoritativo dentro del mismo sobre.
+5. **El sondeo murió en el cliente.** React abre la suscripción y refresca sólo
+   cuando llega un hecho; queda un sondeo lento de 30 s como red de seguridad.
+   Comprobado en el navegador: **4 peticiones de estado en 30 s, contra ~20
+   antes**, y una sola conexión abierta.
+6. **Vocabulario de C# generado** desde `domain.ts`
+   (`scripts/generar-contrato-csharp.mjs` → `contract/csharp/`), con
+   `Unknown = 0` en cada enum para que un valor nuevo del servidor no rompa una
+   APK instalada. CI falla si el artefacto y la fuente no coinciden.
+
+### Pendiente
+
+- **Los DTO de cada vista en C#.** El vocabulario ya se genera; las formas de
+  las vistas se generarán cuando exista el proyecto Unity y diga qué necesita.
+  Hasta entonces, la prueba de no-deriva cubre el riesgo demostrado.
+- **React sigue leyendo `/api/state`** para pintar: usa la suscripción para
+  saber CUÁNDO, no para saber QUÉ. Migrar sus pantallas a las vistas de `/v1`
+  es trabajo de calca, pantalla a pantalla, y no bloquea a Unity.
+- **`apps/web/src/types.ts` sigue escrito a mano**, vigilado por la prueba de
+  no-deriva. Desaparece cuando se generen los DTO.
+
+*Criterio:* el tráfico por cliente cae de ~345 MB/hora a una conexión abierta y
+un puñado de peticiones, hecho; el contrato C# se genera y CI lo verifica,
+hecho; `types.ts` a mano, pendiente.
 
 ---
 

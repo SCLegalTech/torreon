@@ -1,6 +1,6 @@
 # ADR-0005 · El vocabulario del contrato se genera; no se copia a mano
 
-- **Estado:** propuesto (etapa 4)
+- **Estado:** aceptado — el vocabulario ya se genera y CI lo verifica; los DTO de cada vista, con el proyecto Unity
 - **Fecha:** 2026-09-06
 - **Artículos:** 13, 14
 
