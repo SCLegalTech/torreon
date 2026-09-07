@@ -163,6 +163,41 @@ describe("Cuando el reino dice que no", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
+  /**
+   * UN PROPÓSITO NUEVO ES UNA QUEST NUEVA.
+   *
+   * Esta ruta devolvía la quest viva que hubiera —fuera cual fuera— en vez de
+   * trazar la pedida. Con un frente abierto de otra campaña, pedir «pagar la
+   * seguridad social de agosto» contestaba con la quest del Coloso: el pacto
+   * pedido no llegaba a existir, no aparecía en Batallas, no generaba aviso, y
+   * el Dungeon Master no podía confirmar nada porque no había nada.
+   */
+  it("con un frente ya abierto, un propósito nuevo sigue trazando su propio pacto", async () => {
+    const viejo = await service.createDraft(demoQuest);
+    await service.accept(viejo.id, true);
+    await service.start(viejo.id);
+
+    const response = await request(app)
+      .post("/api/quests/from-intent")
+      .send({ intent: "Pagar la seguridad social de agosto y guardar el comprobante" })
+      .expect(201);
+
+    expect(response.body.reused).toBe(false);
+    expect(response.body.quest.id).not.toBe(viejo.id);
+    expect(response.body.quest.status).toBe("draft");
+
+    // Y el pacto nuevo se puede sellar y arrancar en cuanto el frente se libere.
+    const snapshot = await service.snapshot();
+    expect(snapshot.realm.quests.map((quest) => quest.id)).toContain(response.body.quest.id);
+  });
+
+  it("la quest demostrativa sí se reutiliza: es una sola y no llena el reino", async () => {
+    const primera = await request(app).post("/api/demo/quest").expect(201);
+    const segunda = await request(app).post("/api/demo/quest").expect(200);
+    expect(segunda.body.reused).toBe(true);
+    expect(segunda.body.quest.id).toBe(primera.body.quest.id);
+  });
+
   it("lo que no existe se dice con 404, no con «petición mal formada»", async () => {
     const response = await request(app).get("/api/quests/no-existe-esta-quest").expect(404);
     expect(response.body.kind).toBe("not_found");

@@ -1609,6 +1609,10 @@ function CampaignMap({
 }) {
   const quest = snapshot.currentQuest;
   const activeAct = campaign.acts.find((act) => act.id === snapshot.hierarchy.currentActId) ?? campaign.acts.find((act) => !act.locked);
+  // Una campaña abandonada o conquistada ya no pide nada: no ocupa sitio aquí.
+  const abiertas = snapshot.hierarchy.campaigns.filter(
+    (candidate) => candidate.status !== "abandoned" && candidate.status !== "completed",
+  );
   return (
     <main className="scene map-scene">
       <img className="map-art" src="/assets/art/campaign-map.png" alt="" aria-hidden="true" />
@@ -1622,6 +1626,38 @@ function CampaignMap({
         <h1>{campaign.title}</h1>
         {campaign.summary ? <p>{campaign.summary}</p> : null}
       </header>
+
+      {/*
+        MANY CAMPAIGNS, Y QUE SE VEA.
+
+        Esto estaba al fondo de la pantalla, en la barra de navegación, y daba
+        la impresión de que sólo existía una campaña: el jugador tenía varios
+        frentes vivos y sólo veía el que estaba en foco. Cambiar de frente no
+        cierra ninguno, no reinicia nada y no hace que las otras ataquen.
+      */}
+      {abiertas.length > 1 ? (
+        <section className="campaign-picker" aria-label="Tus campañas">
+          <p className="eyebrow">TUS CAMPAÑAS · {abiertas.length}</p>
+          <div>
+            {abiertas.map((candidate) => (
+              <button
+                key={candidate.id}
+                type="button"
+                className={`campaign-chip ${candidate.id === campaign.id ? "current" : ""} ${candidate.status}`}
+                disabled={busy || candidate.id === campaign.id}
+                onClick={() => onFocusCampaign(candidate.id)}
+              >
+                <strong>{candidate.title}</strong>
+                <small>
+                  {candidate.status === "draft"
+                    ? "SIN SELLAR"
+                    : `${candidate.completedQuests}/${candidate.totalQuests} battles · ${candidate.percent}%`}
+                </small>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="map-progress">
         <p className="eyebrow">PROGRESO DE CAMPAÑA</p>
@@ -1700,25 +1736,6 @@ function CampaignMap({
           MANY CAMPAIGNS: cambiar de frente sólo mueve la mirada. Ninguna de las
           otras se cierra, se reinicia ni empieza a atacar por dejar el foco.
         */}
-        <div className="campaign-switch" aria-label="Campañas activas">
-          <span>FRENTES ABIERTOS</span>
-          <div>
-            {snapshot.hierarchy.campaigns
-              .filter((candidate) => candidate.status !== "abandoned" && candidate.status !== "completed")
-              .map((candidate) => (
-              <button
-                key={candidate.id}
-                type="button"
-                className={`${candidate.id === campaign.id ? "current" : ""} ${candidate.status}`}
-                disabled={busy || candidate.id === campaign.id}
-                onClick={() => onFocusCampaign(candidate.id)}
-              >
-                {candidate.title}
-                <small>{candidate.status === "draft" ? "SIN SELLAR" : `${candidate.completedQuests}/${candidate.totalQuests}`}</small>
-              </button>
-              ))}
-          </div>
-        </div>
       </nav>
     </main>
   );

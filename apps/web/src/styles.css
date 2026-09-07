@@ -2685,3 +2685,60 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
     transform: none;
   }
 }
+
+/* TUS CAMPAÑAS — se ven todas, no sólo la que está en foco. */
+.campaign-picker {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.campaign-picker > div {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+}
+
+.campaign-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  align-items: flex-start;
+  flex: 0 0 auto;
+  max-width: 15rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(214, 178, 106, 0.35);
+  background: rgba(12, 10, 20, 0.72);
+  color: #efe3c8;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.campaign-chip strong {
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.campaign-chip small {
+  font-size: 0.62rem;
+  opacity: 0.75;
+  letter-spacing: 0.08em;
+}
+
+.campaign-chip.current {
+  border-color: #d6b26a;
+  background: rgba(84, 62, 24, 0.9);
+  cursor: default;
+}
+
+.campaign-chip.draft {
+  border-style: dashed;
+}

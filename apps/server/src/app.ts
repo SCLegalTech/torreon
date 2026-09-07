@@ -135,11 +135,17 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
     }
   });
 
+  // La quest demostrativa SÍ se reutiliza: es una sola, y sirve para recorrer
+  // el contrato sin conectar a nadie. Pedirla dos veces no llena el reino de
+  // demos.
   app.post("/api/demo/quest", async (_req, res, next) => {
     try {
       const snapshot = await service.snapshot();
-      if (snapshot.currentQuest && !["completed", "abandoned"].includes(snapshot.currentQuest.status)) {
-        res.json({ quest: snapshot.currentQuest, reused: true });
+      const yaEsta = snapshot.realm.quests.find(
+        (quest) => quest.title === demoQuest.title && !["completed", "abandoned"].includes(quest.status),
+      );
+      if (yaEsta) {
+        res.json({ quest: yaEsta, reused: true });
         return;
       }
       res.status(201).json({ quest: await service.createDraft(demoQuest), reused: false });
@@ -148,13 +154,22 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
     }
   });
 
+  /**
+   * UN PROPÓSITO NUEVO ES UNA QUEST NUEVA.
+   *
+   * Esta ruta devolvía la quest viva que hubiera —fuera cual fuera— en vez de
+   * trazar la que se le pedía. Con un frente abierto de otra campaña, pedir
+   * «pagar la seguridad social de agosto» contestaba con «El Archivo del
+   * Coloso I» y el pacto pedido no llegaba a existir: no aparecía en Batallas,
+   * no generaba aviso, y el Dungeon Master no podía confirmar nada porque no
+   * había nada que confirmar.
+   *
+   * Tener un frente abierto no es motivo para no PLANEAR otro. Lo que no puede
+   * haber es dos relojes corriendo, y eso lo defiende `start_quest`, que es
+   * donde de verdad se compromete el frente.
+   */
   app.post("/api/quests/from-intent", validate("POST /api/quests/from-intent"), async (req, res, next) => {
     try {
-      const snapshot = await service.snapshot();
-      if (snapshot.currentQuest && !["completed", "abandoned"].includes(snapshot.currentQuest.status)) {
-        res.json({ quest: snapshot.currentQuest, reused: true });
-        return;
-      }
       const minutes = Number(req.body?.minutesAvailable);
       res.status(201).json({
         quest: await service.createDraftFromIntent(
