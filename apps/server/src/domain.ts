@@ -802,6 +802,13 @@ export interface RealmState {
   version: 1;
   /** Identidad del reino. Permite distinguir el reino local del de la nube. */
   realmId: string;
+  /**
+   * DE QUIÉN ES ESTE REINO.
+   *
+   * La raíz de agregado (artículo 10, ADR-0002). Un reino sin dueño no tiene
+   * dónde poner al segundo jugador, y eso bloquea Play Store entero.
+   */
+  playerId: string;
   player: {
     displayName: string;
     title: string;

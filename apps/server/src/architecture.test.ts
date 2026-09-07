@@ -30,6 +30,7 @@ const CORE_MODULES = [
   "read-models.ts",
   "realm-events.ts",
   "treasury-flow.ts",
+  "campaign-flow.ts",
   "battle.ts",
   "party.ts",
   "horde.ts",
@@ -101,7 +102,7 @@ describe("Artículo IV — el monolito sólo puede encoger", () => {
    * presupuesto es su marca máxima histórica: cada extracción debe BAJARLO.
    * Nunca se sube. Si una función nueva no cabe, es que no vive aquí.
    */
-  const BUDGET = 2767;
+  const BUDGET = 2647;
 
   it(`quest-service.ts no supera las ${BUDGET} líneas`, () => {
     const lines = serverSource("quest-service.ts").split("\n").length;

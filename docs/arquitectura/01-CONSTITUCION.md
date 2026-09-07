@@ -135,13 +135,14 @@ módulo del Núcleo y **bajar el presupuesto**, nunca subirlo.
 
 ## Título III — El jugador
 
-*(Título completo 🕐 — hoy no se cumple ninguno de estos artículos. Es la etapa 3
-de la hoja de ruta y el bloqueo duro para Play Store.)*
+*(El artículo 10 ya se cumple desde E2. Los artículos 11 y 12 siguen 🕐: son la
+etapa 5, y son el bloqueo duro para Play Store.)*
 
-### Artículo 10 · Todo dato pertenece a un jugador
+### Artículo 10 · Todo dato pertenece a un jugador ✅
 
 `playerId` es la raíz de todo agregado. No existe consulta sin sujeto: no hay
-«el reino», hay «el reino de este jugador».
+«el reino», hay «el reino de este jugador». Un `QuestService` se construye para
+UN jugador y no puede alcanzar el reino de otro.
 
 *Por qué:* multiusuario no es una capa que se pone encima. Es la raíz del modelo
 de datos, y cambiarla después cuesta una migración de todo lo persistido.

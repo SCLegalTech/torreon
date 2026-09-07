@@ -137,6 +137,19 @@ import {
   type ScaleProposal,
 } from "./scale.js";
 import { JsonRealmStore } from "./store.js";
+import { DEFAULT_PLAYER_ID, type PlayerId } from "./players.js";
+import {
+  abandonCampaign,
+  acceptCampaign,
+  buildAct,
+  campaignTitleFrom,
+  closeParents,
+  createAct,
+  createSaga,
+  requireCampaign,
+  type ActInput,
+  type SagaInput,
+} from "./campaign-flow.js";
 import { addEvent, markEntityNotificationsRead, pushGameEvent } from "./realm-events.js";
 import { createObligation, obligationsView, recordTransaction, updateObligation, type ObligationPatch } from "./treasury-flow.js";
 import { isoAt, systemClock, type Clock } from "./clock.js";
@@ -656,59 +669,6 @@ function currentQuest(state: RealmState): Quest | null {
   return state.quests.find((quest) => quest.status !== "abandoned") ?? null;
 }
 
-/**
- * EL PROGRESO SUBE SOLO CON RESULTADOS REALES.
- *
- * Una Quest completada cierra su Acto cuando ya no queda ninguna Quest viva en
- * el; un Acto cerrado cierra su Campaña; una Campaña cerrada cierra su Saga.
- * Nada de esto se marca a mano ni con un clic.
- */
-function closeParents(state: RealmState, quest: Quest, nowMs: number): void {
-  const timestamp = isoAt(nowMs);
-  const act = quest.actId ? state.acts.find((candidate) => candidate.id === quest.actId) : undefined;
-  if (!act) return;
-  const questsOfAct = act.questIds
-    .map((questId) => state.quests.find((candidate) => candidate.id === questId))
-    .filter((candidate): candidate is Quest => Boolean(candidate));
-  if (!questsOfAct.every((candidate) => ["completed", "abandoned"].includes(candidate.status))) return;
-  act.status = "completed";
-  act.completedAt = timestamp;
-  act.updatedAt = timestamp;
-  addEvent(state, { type: "act_completed", entityType: "act", entityId: act.id, message: `El acto «${act.title}» quedó cerrado.` }, nowMs);
-
-  const campaign = act.campaignId ? state.campaigns.find((candidate) => candidate.id === act.campaignId) : undefined;
-  if (!campaign) return;
-  const actsOfCampaign = campaign.actIds
-    .map((actId) => state.acts.find((candidate) => candidate.id === actId))
-    .filter((candidate): candidate is Act => Boolean(candidate));
-  if (!actsOfCampaign.every((candidate) => ["completed", "abandoned"].includes(candidate.status))) return;
-  campaign.status = "completed";
-  campaign.completedAt = timestamp;
-  campaign.updatedAt = timestamp;
-  addEvent(state, { type: "campaign_completed", entityType: "campaign", entityId: campaign.id, message: `Campaña conquistada: «${campaign.title}».` }, nowMs);
-
-  const saga = campaign.sagaId ? state.sagas.find((candidate) => candidate.id === campaign.sagaId) : undefined;
-  if (!saga) return;
-  const campaignsOfSaga = saga.campaignIds
-    .map((campaignId) => state.campaigns.find((candidate) => candidate.id === campaignId))
-    .filter((candidate): candidate is Campaign => Boolean(candidate));
-  if (!campaignsOfSaga.every((candidate) => ["completed", "abandoned"].includes(candidate.status))) return;
-  saga.status = "completed";
-  saga.completedAt = timestamp;
-  saga.updatedAt = timestamp;
-}
-
-/** Nombra la gesta sin repetir literalmente la frase del jugador. */
-function campaignTitleFrom(intent: string): string {
-  const core = intent
-    .replace(/^(necesito|quiero|tengo que|debo|me toca|hay que|voy a|deseo)\s+/i, "")
-    .replace(/[.?!]+$/g, "")
-    .trim();
-  const short = core.length > 44 ? `${core.slice(0, 41).trim()}...` : core;
-  const named = short.charAt(0).toUpperCase() + short.slice(1);
-  return `La Forja de ${named}`.slice(0, 120);
-}
-
 /** El frente donde se puede actuar: el comprometido o el que espera auxilio. */
 function engagedOrRecoverable(state: RealmState): Quest | null {
   return (
@@ -716,35 +676,6 @@ function engagedOrRecoverable(state: RealmState): Quest | null {
     state.quests.find((quest) => quest.battle && ["awaiting_replan", "awaiting_recovery"].includes(quest.battle.status)) ??
     null
   );
-}
-
-function requireCampaign(state: RealmState, campaignId: string): Campaign {
-  const campaign = state.campaigns.find((candidate) => candidate.id === campaignId);
-  if (!campaign) throw notFound(`Campaña no encontrada: ${campaignId}`);
-  return campaign;
-}
-
-/** Un Acto nace disponible: es planificación, no un pacto aparte. */
-function buildAct(
-  campaign: Campaign | undefined,
-  proposal: { title: string; subtitle?: string; outcome?: string; estimatedActiveMinutes?: number; dependsOnActIds?: string[] },
-  timestamp: string,
-): Act {
-  return {
-    id: randomUUID(),
-    campaignId: campaign?.id,
-    sagaId: campaign?.sagaId,
-    title: proposal.title.trim().slice(0, 120),
-    subtitle: proposal.subtitle?.trim().slice(0, 200),
-    outcome: proposal.outcome?.trim().slice(0, 500),
-    status: "available",
-    questIds: [],
-    estimatedActiveMinutes: Math.max(0, Math.round(proposal.estimatedActiveMinutes ?? 0)),
-    // ACTOS EN PARALELO POR DEFECTO: sin dependencia explícita, disponible.
-    dependsOnActIds: (proposal.dependsOnActIds ?? []).slice(0, 7),
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
 }
 
 function requireStep(quest: Quest, stepId: string): QuestStep {
@@ -833,7 +764,23 @@ export class QuestService {
      * El Núcleo no consulta el reloj de pared: lo recibe (artículo 8, ADR-0006).
      */
     private readonly clock: Clock = systemClock,
+    /**
+     * DE QUIÉN ES EL REINO QUE ESTE SERVICIO TOCA (artículo 10, ADR-0002).
+     *
+     * Un servicio sirve a UN jugador. Saber quién pregunta es la etapa 5: aquí
+     * sólo se garantiza que todo lo que se lee y se escribe es de alguien.
+     */
+    private readonly playerId: PlayerId = DEFAULT_PLAYER_ID,
   ) {}
+
+  /** Toda lectura y toda escritura llevan sujeto. No hay «el reino». */
+  private read(): Promise<RealmState> {
+    return this.store.read(this.playerId);
+  }
+
+  private mutate<T>(mutation: (state: RealmState) => T | Promise<T>): Promise<{ result: T; state: RealmState }> {
+    return this.store.mutate(mutation, this.playerId);
+  }
 
   get codiceName(): string {
     return this.codice.name;
@@ -847,10 +794,10 @@ export class QuestService {
    * verdad hay algo pendiente: leer el reino no puede ensuciar el archivo.
    */
   private async tick(): Promise<RealmState> {
-    const state = await this.store.read();
+    const state = await this.read();
     // El zurrón inicial se entrega UNA vez. Recargar o redesplegar no repite.
     if (!state.inventory.initializedAt) {
-      const { state: stocked } = await this.store.mutate((draft) => {
+      const { state: stocked } = await this.mutate((draft) => {
         if (draft.inventory.initializedAt) return null;
         const timestamp = this.clock.iso();
         for (const entry of STARTER_INVENTORY) {
@@ -870,11 +817,11 @@ export class QuestService {
         return null;
       });
       if (!needsAdvance(stocked, this.clock.now())) return stocked;
-      const { state: advanced } = await this.store.mutate((draft) => advanceBattles(draft, this.clock.now()));
+      const { state: advanced } = await this.mutate((draft) => advanceBattles(draft, this.clock.now()));
       return advanced;
     }
     if (!needsAdvance(state, this.clock.now())) return state;
-    const { state: fresh } = await this.store.mutate((draft) => advanceBattles(draft, this.clock.now()));
+    const { state: fresh } = await this.mutate((draft) => advanceBattles(draft, this.clock.now()));
     return fresh;
   }
 
@@ -970,7 +917,7 @@ export class QuestService {
 
   async createDraft(plan: QuestPlanInput, parents: { actId?: string; campaignId?: string } = {}): Promise<Quest> {
     validatePlan(plan);
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       // Varias campañas pueden tener quests listas a la vez. Lo que no puede
       // duplicarse es la Battle comprometida, y eso lo defiende start().
       const act = parents.actId ? state.acts.find((candidate) => candidate.id === parents.actId) : undefined;
@@ -1026,7 +973,7 @@ export class QuestService {
   async createDraftFromIntent(intent: string, minutesAvailable?: number, actId?: string, campaignId?: string): Promise<Quest> {
     const clean = intent.trim();
     if (clean.length < 8) throw deny("Describe una quest con un poco más de detalle.");
-    const realm = await this.store.read();
+    const realm = await this.read();
     const plan = await this.codice.plan({
       intent: clean,
       playerTitle: `${realm.player.displayName}, ${realm.player.title}`,
@@ -1054,7 +1001,7 @@ export class QuestService {
 
   async reviseDraft(questId: string, plan: QuestPlanInput): Promise<Quest> {
     validatePlan(plan);
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (quest.status !== "draft") throw deny("Solo se puede reformular una quest en borrador.");
       Object.assign(quest, plan, {
@@ -1069,7 +1016,7 @@ export class QuestService {
 
   async accept(questId: string, userAccepted: boolean): Promise<Quest> {
     if (!userAccepted) throw deny("La aceptación explícita del usuario es obligatoria.");
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (quest.status !== "draft") throw deny("Solo se puede aceptar una quest en borrador.");
       quest.status = "accepted";
@@ -1090,7 +1037,7 @@ export class QuestService {
    * persisten `startedAt`, `durationMinutes` y `deadlineAt` en el Core.
    */
   async start(questId: string, durationMinutes?: number): Promise<Quest> {
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (quest.status !== "accepted") throw deny("La quest debe estar aceptada antes de comenzar.");
       // PREFLIGHT: NADIE ENTRA A UN FRENTE NUEVO DESDE EL SUELO.
@@ -1158,7 +1105,7 @@ export class QuestService {
    * del Marqués, porque es otra Battle sobre la misma Quest.
    */
   async retryBattle(questId: string, durationMinutes?: number): Promise<{ quest: Quest; battle: BattleState }> {
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       const record = quest.battle;
       if (!record) throw deny("Esta quest todavía no tiene Battle que reintentar.");
@@ -1223,7 +1170,7 @@ export class QuestService {
     // app estaba cerrada, la salida legal depende del estado YA resuelto, no
     // del que quedó escrito antes de que la Horda cobrara lo suyo.
     await this.tick();
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const offer = recoveryOfferFor(state, questId);
       if (!offer.available) throw deny(offer.reason ?? "La retirada táctica no está disponible ahora.");
       const quest = requireQuest(state, questId);
@@ -1276,7 +1223,7 @@ export class QuestService {
    */
   async proposeBattleRecontract(questId: string, input: { reason: string; newDurationMinutes: number }): Promise<BattleState> {
     if (input.reason.trim().length < 10) throw deny("Explica qué cambió en la realidad antes de repactar el tiempo.");
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       const record = quest.battle;
       if (!record) throw deny("Esta quest todavía no tiene Battle.");
@@ -1301,7 +1248,7 @@ export class QuestService {
 
   async acceptBattleRecontract(questId: string, recontractId: string, userAccepted: boolean): Promise<BattleState> {
     if (!userAccepted) throw deny("Repactar el tiempo requiere aceptación explícita del jugador.");
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       const record = quest.battle;
       if (!record?.pendingRecontract) throw deny("No hay ningún nuevo pacto temporal esperando decisión.");
@@ -1347,7 +1294,7 @@ export class QuestService {
     target: PartyMemberId,
     questId?: string,
   ): Promise<{ battle: BattleState | null; remaining: number; message: string }> {
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = questId ? requireQuest(state, questId) : engagedOrRecoverable(state);
       if (!quest?.battle) throw deny("No hay ningún frente abierto donde usar objetos.");
       if (quest.battle.status === "won") throw deny("Esta Battle ya está ganada: no hay a quién curar.");
@@ -1418,7 +1365,7 @@ export class QuestService {
     contributionSummary: string;
   }): Promise<{ assist: CompanionAssist; duplicate: boolean }> {
     if (input.contributionSummary.trim().length < 5) throw deny("Describe qué hizo realmente el compañero.");
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, input.questId);
       requireStep(quest, input.stepId);
       const timestamp = this.clock.iso();
@@ -1485,7 +1432,7 @@ export class QuestService {
    * marca `unavailable` y se conserva cuándo fue su último despliegue.
    */
   async setHeroAvailability(heroId: HeroId, availability: HeroAvailability): Promise<BarracksView> {
-    const { state } = await this.store.mutate((draft) => {
+    const { state } = await this.mutate((draft) => {
       ensureRoster(draft, this.clock.iso());
       const hero = ensureHero(draft, heroId, this.clock.iso());
       // Declarar acceso NO es participación: los contadores no se tocan aquí.
@@ -1522,7 +1469,7 @@ export class QuestService {
       executionRef?: string;
     },
   ): Promise<{ quest: Quest; battle: BattleState; evidenceId: string; lifeEventId: string; gameEventId: string | null }> {
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (quest.status !== "active") throw deny("La quest debe estar activa para evaluar evidencia.");
       if (quest.battle && ["awaiting_replan", "awaiting_recovery"].includes(quest.battle.status)) {
@@ -1761,7 +1708,7 @@ export class QuestService {
    * causa daño: un artefacto es materia prima de un veredicto, no el veredicto.
    */
   async attachArtifact(questId: string, stepId: string, input: ArtifactInput): Promise<EvidenceArtifact> {
-    const state = await this.store.read();
+    const state = await this.read();
     const quest = requireQuest(state, questId);
     if (["completed", "abandoned"].includes(quest.status)) {
       throw deny("Esta quest ya no admite evidencia.");
@@ -1770,7 +1717,7 @@ export class QuestService {
 
     const artifact = await ingestArtifact(this.clock.now(), input, questId, stepId, this.dataDir);
 
-    const { result } = await this.store.mutate((fresh) => {
+    const { result } = await this.mutate((fresh) => {
       const freshQuest = requireQuest(fresh, questId);
       const step = freshQuest.steps.find((candidate) => candidate.id === stepId);
       if (!step) throw notFound(`Paso no encontrado: ${stepId}`);
@@ -1793,7 +1740,7 @@ export class QuestService {
    * Permite jugar sin tocar el teléfono: la prueba nunca pasa por el juego.
    */
   async attestArtifact(questId: string, stepId: string, input: WitnessInput): Promise<EvidenceArtifact> {
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (["completed", "abandoned"].includes(quest.status)) {
         throw deny("Esta quest ya no admite evidencia.");
@@ -1835,7 +1782,7 @@ export class QuestService {
   ): Promise<CodiceVerdictResult> {
     if (input.attach) await this.attachArtifact(questId, stepId, input.attach);
 
-    const state = await this.store.read();
+    const state = await this.read();
     const quest = requireQuest(state, questId);
     if (quest.status !== "active") throw deny("La quest debe estar activa para evaluar evidencia.");
     const step: QuestStep | undefined = quest.steps.find((candidate) => candidate.id === stepId);
@@ -1901,7 +1848,7 @@ export class QuestService {
     if (input.reason.trim().length < 10) throw deny("Explica qué cambió en la realidad antes de proponer el amendment.");
     if (input.changes.length === 0) throw deny("El amendment debe proponer al menos un cambio.");
 
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (!["active", "waiting_external"].includes(quest.status)) throw deny("Sólo una quest iniciada puede recibir un amendment.");
       if (quest.amendments.some((candidate) => candidate.status === "proposed")) throw deny("Ya existe un amendment esperando decisión del jugador.");
@@ -1931,7 +1878,7 @@ export class QuestService {
 
   async acceptAmendment(questId: string, amendmentId: string, userAccepted: boolean): Promise<{ quest: Quest; amendment: QuestAmendment; battle: BattleState }> {
     if (!userAccepted) throw deny("Los cambios materiales requieren aceptación explícita del jugador.");
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       const amendment = quest.amendments.find((candidate) => candidate.id === amendmentId);
       if (!amendment) throw notFound(`Amendment no encontrado: ${amendmentId}`);
@@ -1961,7 +1908,7 @@ export class QuestService {
   }
 
   async reuseArtifact(questId: string, artifactId: string, targetStepId: string): Promise<EvidenceArtifact> {
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       const step = requireStep(quest, targetStepId);
       const artifact = state.artifacts.find((candidate) => candidate.id === artifactId && candidate.questId === questId);
@@ -1995,7 +1942,7 @@ export class QuestService {
         "Un reintento, un error técnico, la latencia, un assist duplicado o el tiempo transcurrido NO son exigencias nuevas de la realidad. La presión del reloj ya la cobra el servidor: no la cobres otra vez a mano.",
       );
     }
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (quest.status !== "active") throw deny("La Horda sólo puede atacar un frente activo con presión real; una espera externa no recibe daño automático.");
       if (input.stepId) requireStep(quest, input.stepId);
@@ -2089,7 +2036,7 @@ export class QuestService {
     invalidatedBy?: string;
   }): Promise<{ eventId: string; type: string; healed: number; shieldRestored: number; message: string }> {
     if (input.reason.trim().length < 10) throw deny("Explica por qué este hecho fue un error operativo antes de anularlo.");
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const timestamp = this.clock.iso();
       const by = input.invalidatedBy?.trim().slice(0, 60) || "codice";
       const lifeEvent = (state.lifeEvents ?? []).find((candidate) => candidate.id === input.eventId);
@@ -2170,7 +2117,7 @@ export class QuestService {
    * mirándolas. Varios frentes de vida no pueden matarlo a la vez.
    */
   async focusCampaign(campaignId: string | null): Promise<RealmSnapshot> {
-    await this.store.mutate((state) => {
+    await this.mutate((state) => {
       if (campaignId === null) {
         delete state.focusedCampaignId;
         return null;
@@ -2191,23 +2138,27 @@ export class QuestService {
     return this.snapshot();
   }
 
-  async createSaga(input: { title: string; summary?: string; estimatedActiveMinutes?: number }): Promise<Saga> {
-    if (input.title.trim().length < 3) throw deny("La saga necesita un título.");
-    const { result } = await this.store.mutate((state) => {
-      const timestamp = this.clock.iso();
-      const saga: Saga = {
-        id: randomUUID(),
-        title: input.title.trim().slice(0, 120),
-        summary: input.summary?.trim().slice(0, 500),
-        status: "active",
-        campaignIds: [],
-        estimatedActiveMinutes: Math.max(0, Math.round(input.estimatedActiveMinutes ?? 0)),
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
-      state.sagas.unshift(saga);
-      return saga;
-    });
+  // -------------------------------------------------------------------------
+  // SAGA, CAMPAÑA, ACTO — las reglas viven en `campaign-flow.ts` (artículo 9).
+  // -------------------------------------------------------------------------
+
+  async createSaga(input: SagaInput): Promise<Saga> {
+    const { result } = await this.mutate((state) => createSaga(state, input, this.clock.now()));
+    return result;
+  }
+
+  async acceptCampaign(campaignId: string, userAccepted: boolean): Promise<Campaign> {
+    const { result } = await this.mutate((state) => acceptCampaign(state, campaignId, userAccepted, this.clock.now()));
+    return result;
+  }
+
+  async abandonCampaign(campaignId: string, reason: string): Promise<Campaign> {
+    const { result } = await this.mutate((state) => abandonCampaign(state, campaignId, reason, this.clock.now()));
+    return result;
+  }
+
+  async createAct(input: ActInput): Promise<Act> {
+    const { result } = await this.mutate((state) => createAct(state, input, this.clock.now()));
     return result;
   }
 
@@ -2233,7 +2184,7 @@ export class QuestService {
     initialActs?: Array<{ title: string; subtitle?: string; outcome?: string; estimatedActiveMinutes?: number }>;
   }): Promise<{ campaign: Campaign; acts: Act[] }> {
     if (input.title.trim().length < 3) throw deny("La campaña necesita un título.");
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const saga = input.sagaId ? state.sagas.find((candidate) => candidate.id === input.sagaId) : undefined;
       if (input.sagaId && !saga) throw notFound(`Saga no encontrada: ${input.sagaId}`);
       const timestamp = this.clock.iso();
@@ -2289,25 +2240,6 @@ export class QuestService {
    * No borra nada: las quests conservan su id, su estado y su historia, y
    * simplemente dejan de colgar de una campaña retirada.
    */
-  async abandonCampaign(campaignId: string, reason: string): Promise<Campaign> {
-    const { result } = await this.store.mutate((state) => {
-      const campaign = requireCampaign(state, campaignId);
-      if (campaign.status === "abandoned") return campaign;
-      if (campaign.status === "completed") throw deny("Una campaña conquistada es historia: no se retira.");
-      campaign.status = "abandoned";
-      campaign.updatedAt = this.clock.iso();
-      if (state.focusedCampaignId === campaign.id) delete state.focusedCampaignId;
-      addEvent(state, {
-      type: "campaign_abandoned",
-      entityType: "campaign",
-      entityId: campaign.id,
-      message: `Retirada de «${campaign.title}»: ${reason.trim() || "sin motivo registrado"}.`,
-      }, this.clock.now());
-      return campaign;
-    });
-    return result;
-  }
-
   /**
    * Convierte una intención amplia en un borrador de Campaña con Actos.
    *
@@ -2360,7 +2292,7 @@ export class QuestService {
       initialActs?: Array<{ title: string; subtitle?: string; outcome?: string; estimatedActiveMinutes?: number }>;
     },
   ): Promise<{ campaign: Campaign; acts: Act[] }> {
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const campaign = requireCampaign(state, campaignId);
       if (campaign.status !== "draft") throw deny("Sólo se puede reformular una campaña en borrador.");
       const timestamp = this.clock.iso();
@@ -2409,58 +2341,6 @@ export class QuestService {
    * Sella el pacto. Aceptar una campaña NO inicia ninguna Battle ni cierra
    * ninguna otra campaña: sólo la incorpora a los frentes vivos del reino.
    */
-  async acceptCampaign(campaignId: string, userAccepted: boolean): Promise<Campaign> {
-    if (!userAccepted) throw deny("La aceptación explícita del usuario es obligatoria.");
-    const { result } = await this.store.mutate((state) => {
-      const campaign = requireCampaign(state, campaignId);
-      // Idempotente: reintentar un sello ya puesto no rompe nada.
-      if (campaign.status === "active") return campaign;
-      if (campaign.status !== "draft") throw deny(`Esta campaña ya está ${campaign.status}.`);
-      campaign.status = "active";
-      campaign.acceptedAt = this.clock.iso();
-      campaign.updatedAt = campaign.acceptedAt;
-      state.focusedCampaignId ??= campaign.id;
-      addEvent(state, {
-      type: "campaign_accepted",
-      entityType: "campaign",
-      entityId: campaign.id,
-      message: `El pacto de «${campaign.title}» ha sido sellado.`,
-      }, this.clock.now());
-      return campaign;
-    });
-    return result;
-  }
-
-  async createAct(input: {
-    title: string;
-    subtitle?: string;
-    outcome?: string;
-    campaignId?: string;
-    scenario?: string;
-    estimatedActiveMinutes?: number;
-    /** Dependencias EXPLÍCITAS. Sin esto el Acto nace disponible, en paralelo. */
-    dependsOnActIds?: string[];
-  }): Promise<Act> {
-    if (input.title.trim().length < 3) throw deny("El acto necesita un título.");
-    const { result } = await this.store.mutate((state) => {
-      const campaign = input.campaignId ? requireCampaign(state, input.campaignId) : undefined;
-      if (campaign && campaign.actIds.length >= MAX_ACTS_PER_CAMPAIGN) {
-        throw deny(`La campaña «${campaign.title}» ya sostiene ${MAX_ACTS_PER_CAMPAIGN} Actos: abre otra Campaña bajo una Saga.`);
-      }
-      const timestamp = this.clock.iso();
-      const act = buildAct(campaign, input, timestamp);
-      act.scenario = input.scenario?.trim().slice(0, 120);
-      state.acts.unshift(act);
-      if (campaign) {
-        campaign.actIds.push(act.id);
-        campaign.updatedAt = timestamp;
-      }
-      addEvent(state, { type: "act_created", entityType: "act", entityId: act.id, message: `Acto trazado: «${act.title}».` }, this.clock.now());
-      return act;
-    });
-    return result;
-  }
-
   /**
    * Vincula una quest YA EXISTENTE a una campaña y, si hace falta, a un acto.
    *
@@ -2469,7 +2349,7 @@ export class QuestService {
    * la relación autoritativa es por id y la declara alguien, no el azar.
    */
   async assignQuest(questId: string, target: { campaignId?: string; actId?: string }): Promise<{ quest: Quest; act: Act | null; campaign: Campaign | null }> {
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       const act = target.actId ? state.acts.find((candidate) => candidate.id === target.actId) ?? null : null;
       if (target.actId && !act) throw notFound(`Acto no encontrado: ${target.actId}`);
@@ -2529,7 +2409,7 @@ export class QuestService {
 
   /** Cambia la Quest en foco. No la acepta ni la inicia. `null` suelta el foco. */
   async focusQuest(questId: string | null): Promise<RealmSnapshot> {
-    await this.store.mutate((state) => {
+    await this.mutate((state) => {
       if (questId === null) {
         delete state.focusedQuestId;
         return null;
@@ -2551,7 +2431,7 @@ export class QuestService {
 
   /** Cambia el Acto en foco. Navegación pura: los demás Actos no se tocan. */
   async focusAct(actId: string | null): Promise<RealmSnapshot> {
-    await this.store.mutate((state) => {
+    await this.mutate((state) => {
       if (actId === null) {
         delete state.focusedActId;
         return null;
@@ -2579,7 +2459,7 @@ export class QuestService {
    * y lo completado es inmutable.
    */
   async deleteQuestDraft(questId: string): Promise<{ deleted: true; questId: string }> {
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (quest.status !== "draft" || quest.acceptedAt) {
         throw deny("Sólo un borrador nunca aceptado puede eliminarse. Usa abandon_quest para una Quest ya iniciada.");
@@ -2628,17 +2508,17 @@ export class QuestService {
   }
 
   async markNotificationRead(notificationId: string): Promise<NotificationRecord> {
-    const { result } = await this.store.mutate((state) => markRead(state, notificationId, this.clock.now()));
+    const { result } = await this.mutate((state) => markRead(state, notificationId, this.clock.now()));
     return result;
   }
 
   async archiveNotification(notificationId: string): Promise<NotificationRecord> {
-    const { result } = await this.store.mutate((state) => archive(state, notificationId, this.clock.now()));
+    const { result } = await this.mutate((state) => archive(state, notificationId, this.clock.now()));
     return result;
   }
 
   async resendNotification(notificationId: string): Promise<NotificationRecord> {
-    const { result } = await this.store.mutate((state) => resend(state, notificationId, this.clock.now()));
+    const { result } = await this.mutate((state) => resend(state, notificationId, this.clock.now()));
     return result;
   }
 
@@ -2647,7 +2527,7 @@ export class QuestService {
     entityId: string;
     notificationType?: NotificationType;
   }): Promise<NotificationRecord> {
-    const { result } = await this.store.mutate((state) => resendForEntity(state, input, this.clock.now()));
+    const { result } = await this.mutate((state) => resendForEntity(state, input, this.clock.now()));
     return result;
   }
 
@@ -2659,12 +2539,12 @@ export class QuestService {
   // -------------------------------------------------------------------------
 
   async createRecurringObligation(input: RecurringObligationInput): Promise<RecurringObligation> {
-    const { result } = await this.store.mutate((state) => createObligation(state, input, this.clock.now()));
+    const { result } = await this.mutate((state) => createObligation(state, input, this.clock.now()));
     return result;
   }
 
   async updateRecurringObligation(obligationId: string, patch: ObligationPatch): Promise<RecurringObligation> {
-    const { result } = await this.store.mutate((state) => updateObligation(state, obligationId, patch, this.clock.now()));
+    const { result } = await this.mutate((state) => updateObligation(state, obligationId, patch, this.clock.now()));
     return result;
   }
 
@@ -2675,7 +2555,7 @@ export class QuestService {
   async recordFinancialTransaction(
     input: FinancialTransactionInput,
   ): Promise<{ transaction: FinancialTransaction; obligation: RecurringObligation | null; duplicate: boolean }> {
-    const { result } = await this.store.mutate((state) => recordTransaction(state, input, this.clock.now()));
+    const { result } = await this.mutate((state) => recordTransaction(state, input, this.clock.now()));
     return result;
   }
 
@@ -2716,7 +2596,7 @@ export class QuestService {
   }
 
   async abandon(questId: string, reason: string): Promise<Quest> {
-    const { result } = await this.store.mutate((state) => {
+    const { result } = await this.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (!["draft", "accepted", "active", "waiting_external"].includes(quest.status)) {
         throw deny("Esta quest ya no puede abandonarse.");
@@ -2742,7 +2622,7 @@ export class QuestService {
   }
 
   async reset(): Promise<RealmSnapshot> {
-    await this.store.reset();
+    await this.store.reset(this.playerId);
     return this.snapshot();
   }
 }

@@ -13,7 +13,7 @@ añadiendo juego entre etapas.
 | 🔑 | **Mitigación inmediata** — cerrar la API abierta | nada; **detiene un daño en curso** | bajo · *código listo, falta desplegar* |
 | ✅ | **E0** — guardarraíles | que lo demás no se deshaga | — |
 | OK | **E1** — puertos y bordes | pruebas deterministas, errores útiles | — |
-| | **E2** — el jugador en el modelo | todo lo multiusuario | medio |
+| OK | **E2** — el jugador en el modelo | todo lo multiusuario | — |
 | | **E3** — persistencia real | concurrencia, auditoría, escala | **alto** |
 | | **E4** — contrato versionado + SSE | **Unity** | medio |
 | | **E5** — autenticación e identidad | **Play Store** | medio |
@@ -106,20 +106,30 @@ bajo carga: todas las pruebas de servicio plantan el reloj del reino.
 
 ---
 
-## E2 — El jugador entra en el modelo
+## E2 — El jugador entra en el modelo *(hecho)*
 
 Sin autenticación todavía. Sólo el sujeto (art. 10).
 
-1. `playerId` como raíz de agregado en `domain.ts`.
-2. El almacén se direcciona por jugador: `read(playerId)`, `mutate(playerId, …)`.
-3. Un único jugador con id fijo mientras no exista E5. El juego no cambia.
-4. Una migración versionada que adopta el reino existente bajo ese id.
+1. `RealmState.playerId` es la raíz de agregado. `players.ts` define el tipo, el
+   id del jugador que ya existía y la validación —un id no puede escaparse del
+   directorio del reino—.
+2. El almacén se direcciona por jugador: `read(playerId)`, `mutate(fn, playerId)`,
+   `reset(playerId)`, **una cola de escritura por reino** en vez de una global.
+3. `QuestService` se construye PARA un jugador y no puede tocar otro reino.
+4. Adopción, no migración: el reino que ya existe conserva su archivo
+   (`torreon-state.json`), su `realmId` y todo su contenido; sólo estrena dueño
+   al leerse. Un jugador nuevo estrena archivo bajo `realms/<id>.json`.
 
 *Por qué antes de E3:* si el esquema de la base de datos nace sin `player_id`,
 E3 se paga dos veces.
 
-*Criterio:* dos reinos coexisten en el mismo proceso sin verse, demostrado por
-una prueba; el reino de Diego sobrevive intacto a la migración.
+*Criterio cumplido:* `players.test.ts` demuestra que dos reinos conviven en el
+mismo proceso y el mismo almacén sin verse la campaña, que el frente
+comprometido de uno no ocupa el del otro, que reiniciar uno no toca al otro, y
+que el reino que ya existía sobrevive intacto.
+
+**Lo que sigue faltando:** saber QUIÉN pregunta. Hoy el transporte sirve siempre
+al jugador por defecto; la identidad real es E5.
 
 ---
 

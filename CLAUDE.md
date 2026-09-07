@@ -23,7 +23,7 @@ tareas con espadas.
 ```bash
 npm install
 npm run dev          # interfaz en :5173, MCP y API en :3000
-npm test             # 269 pruebas: dominio, acceso y arquitectura
+npm test             # 278 pruebas: dominio, jugadores, acceso y arquitectura
 npm run typecheck
 ```
 
@@ -47,7 +47,7 @@ consultan ChatGPT y Claude por MCP.
 | `apps/web/src/main.tsx` | Cliente React. Transitorio: Unity lo sustituye. |
 | `docs/arquitectura/` | Auditoría, constitución, arquitectura objetivo, contrato de cliente, hoja de ruta, ADR. |
 
-## Las cinco reglas que más se rompen
+## Las seis reglas que más se rompen
 
 1. **El renderer no decide nada.** Ni progreso, ni daño, ni victoria, ni
    recompensa. Si lo estás calculando en el cliente, está mal.
@@ -58,8 +58,11 @@ consultan ChatGPT y Claude por MCP.
    sitios que dicen cosas distintas sobre la misma Battle es el error que más
    veces se ha pagado aquí.
 4. **No ensanches `quest-service.ts`.** Hay un trinquete que lo impide. Si tu
-   cambio no cabe, extrae un módulo y baja el presupuesto.
-5. **Anular no es borrar.** Un hecho registrado se marca inválido con motivo y
+   cambio no cabe, extrae un módulo y baja el presupuesto. Ya salieron así
+   `realm-events.ts`, `treasury-flow.ts` y `campaign-flow.ts`.
+5. **Todo lo que se guarda es de alguien.** `playerId` es la raíz: nunca leas
+   ni escribas «el reino», sino el reino de un jugador.
+6. **Anular no es borrar.** Un hecho registrado se marca inválido con motivo y
    autor; no se reescribe.
 
 ## Cómo se trabaja aquí

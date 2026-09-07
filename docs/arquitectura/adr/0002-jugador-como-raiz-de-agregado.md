@@ -1,6 +1,6 @@
 # ADR-0002 · El jugador es la raíz de agregado, no el reino
 
-- **Estado:** propuesto (etapa 2 de la hoja de ruta)
+- **Estado:** aceptado — implementado en E2
 - **Fecha:** 2026-09-06
 - **Artículos:** 10, 11, 12
 

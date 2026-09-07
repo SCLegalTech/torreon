@@ -94,16 +94,21 @@ Estas no son cortesías; son el activo. Cualquier plan que las dañe está mal.
 Severidad: **B** = bloquea el objetivo declarado · **A** = alto riesgo ·
 **M** = medio.
 
-### B-1 · No existe el jugador
+### B-1 · No existe el jugador *(resuelto)*
 
 `RealmState` tiene `realmId` (`store.ts:18`) pero **no tiene `userId`**. El
 proceso entero es un reino: `JsonRealmStore` recibe *un* `statePath`
 (`index.ts:21`), `QuestService` recibe *ese* almacén, y todas las lecturas son
 `store.read()` sin filtro de propietario.
 
-Consecuencia exacta: **no hay dónde poner el segundo jugador**. No es que falte
-autenticación —falta el sujeto. Toda la jerarquía (Saga → Campaña → Acto →
-Quest → Battle) cuelga hoy de la raíz equivocada.
+Consecuencia exacta: **no había dónde poner el segundo jugador**. No es que
+faltara autenticación —faltaba el sujeto. Toda la jerarquía (Saga → Campaña →
+Acto → Quest → Battle) colgaba de la raíz equivocada.
+
+**Resuelto en E2** (ADR-0002): `playerId` es la raíz, el almacén se direcciona
+por jugador y `players.test.ts` demuestra dos reinos conviviendo sin verse. El
+reino que ya existía fue adoptado sin moverse de archivo. Queda B-2: saber
+**quién** pregunta sigue siendo la etapa 5.
 
 ### B-2 · La API de la aplicación no tiene autenticación de ningún tipo · *código listo, falta desplegar*
 

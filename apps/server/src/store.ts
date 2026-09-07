@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { backfillHeroCareer, ensureRoster } from "./barracks.js";
 import { reconcileBattleProjection } from "./battle.js";
 import { emptyAgentSlot } from "./companions.js";
@@ -10,12 +10,15 @@ import { backfillNotifications, settleClosedNotifications } from "./notification
 import { freshParty, refreshPartyDisplay } from "./party.js";
 import { DEV_ENTITLEMENTS, freshUsage, rolloverUsage } from "./product.js";
 import { isoAt, systemClock, type Clock } from "./clock.js";
+import { DEFAULT_PLAYER_ID, requirePlayerId, type PlayerId } from "./players.js";
 
 
-export function createInitialState(nowMs: number): RealmState {
+export function createInitialState(nowMs: number, playerId: PlayerId = DEFAULT_PLAYER_ID): RealmState {
   return {
     version: 1,
     realmId: randomUUID(),
+    /** DE ALGUIEN. Ningún reino existe sin dueño (artículo 10). */
+    playerId,
     player: {
       displayName: "Marqués Phi",
       title: "Guardián de la Marca",
@@ -60,27 +63,60 @@ export function createInitialState(nowMs: number): RealmState {
 }
 
 export class JsonRealmStore {
-  private queue: Promise<unknown> = Promise.resolve();
+  /**
+   * UNA COLA POR JUGADOR.
+   *
+   * La cola serializa las escrituras de un mismo reino; una sola cola global
+   * haría que el reino de un jugador esperara al de otro sin ninguna razón.
+   *
+   * Sigue siendo una cola EN MEMORIA: con dos procesos, dos escrituras se
+   * pisan. Eso lo cierra la etapa 3 (ADR-0003), y por eso `fly.toml` fija
+   * `max_machines_running = 1`.
+   */
+  private readonly queues = new Map<PlayerId, Promise<unknown>>();
 
   constructor(
+    /**
+     * Archivo del jugador por defecto. Los demás cuelgan de `realms/` junto a
+     * él, así que el reino que ya existe en producción NO se mueve de sitio.
+     */
     private readonly statePath: string,
     /** El reloj es una dependencia: el almacén tampoco lo consulta por su cuenta. */
     private readonly clock: Clock = systemClock,
   ) {}
 
-  async init(): Promise<void> {
-    await mkdir(dirname(this.statePath), { recursive: true });
+  /** Dónde vive el reino de cada jugador. El de siempre, donde siempre. */
+  private pathFor(playerId: PlayerId): string {
+    if (playerId === DEFAULT_PLAYER_ID) return this.statePath;
+    return resolve(dirname(this.statePath), "realms", `${requirePlayerId(playerId)}.json`);
+  }
+
+  private queueFor(playerId: PlayerId): Promise<unknown> {
+    return this.queues.get(playerId) ?? Promise.resolve();
+  }
+
+  async init(playerId: PlayerId = DEFAULT_PLAYER_ID): Promise<void> {
+    const path = this.pathFor(playerId);
+    await mkdir(dirname(path), { recursive: true });
     try {
-      await readFile(this.statePath, "utf8");
+      await readFile(path, "utf8");
     } catch {
-      await this.write(createInitialState(this.clock.now()));
+      await this.write(createInitialState(this.clock.now(), playerId), playerId);
     }
   }
 
-  async read(): Promise<RealmState> {
+  async read(playerId: PlayerId = DEFAULT_PLAYER_ID): Promise<RealmState> {
     const nowMs = this.clock.now();
-    const raw = await readFile(this.statePath, "utf8");
+    const raw = await readFile(this.pathFor(playerId), "utf8").catch(async (error) => {
+      // Un jugador nuevo estrena reino en su primera lectura, no antes.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await this.init(playerId);
+      return readFile(this.pathFor(playerId), "utf8");
+    });
     const state = JSON.parse(raw) as RealmState;
+    // El reino que existía antes del sujeto se adopta al leerse. NO se mueve de
+    // archivo y no pierde nada: sólo pasa a tener dueño (artículo 10).
+    state.playerId ??= playerId;
     // Reinos creados antes de que existiera la identidad reciben una al leerse.
     state.realmId ??= randomUUID();
     state.evidence ??= [];
@@ -200,32 +236,37 @@ export class JsonRealmStore {
     return state;
   }
 
-  async mutate<T>(mutation: (state: RealmState) => T | Promise<T>): Promise<{ result: T; state: RealmState }> {
-    const operation = this.queue.then(async () => {
-      const state = await this.read();
+  async mutate<T>(
+    mutation: (state: RealmState) => T | Promise<T>,
+    playerId: PlayerId = DEFAULT_PLAYER_ID,
+  ): Promise<{ result: T; state: RealmState }> {
+    const operation = this.queueFor(playerId).then(async () => {
+      const state = await this.read(playerId);
       const result = await mutation(state);
       state.updatedAt = this.clock.iso();
-      await this.write(state);
+      await this.write(state, playerId);
       return { result, state };
     });
 
-    this.queue = operation.then(() => undefined, () => undefined);
+    this.queues.set(playerId, operation.then(() => undefined, () => undefined));
     return operation;
   }
 
-  async reset(): Promise<RealmState> {
-    const operation = this.queue.then(async () => {
-      const state = createInitialState(this.clock.now());
-      await this.write(state);
+  async reset(playerId: PlayerId = DEFAULT_PLAYER_ID): Promise<RealmState> {
+    const operation = this.queueFor(playerId).then(async () => {
+      const state = createInitialState(this.clock.now(), playerId);
+      await this.write(state, playerId);
       return state;
     });
-    this.queue = operation.then(() => undefined, () => undefined);
+    this.queues.set(playerId, operation.then(() => undefined, () => undefined));
     return operation;
   }
 
-  private async write(state: RealmState): Promise<void> {
-    const tempPath = `${this.statePath}.${process.pid}.tmp`;
+  private async write(state: RealmState, playerId: PlayerId): Promise<void> {
+    const path = this.pathFor(playerId);
+    await mkdir(dirname(path), { recursive: true });
+    const tempPath = `${path}.${process.pid}.tmp`;
     await writeFile(tempPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-    await rename(tempPath, this.statePath);
+    await rename(tempPath, path);
   }
 }
