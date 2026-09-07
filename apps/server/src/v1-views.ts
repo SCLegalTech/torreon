@@ -10,6 +10,7 @@ import type {
   QuestProgress,
   RealmConsistency,
   RealmHierarchy,
+  PlayerSheet,
   RealmState,
   RecoveryOffer,
   TreasuryView,
@@ -17,6 +18,7 @@ import type {
 } from "./domain.js";
 import { obligationViewFor, treasuryViewFor } from "./finance.js";
 import { barracksViewFor } from "./barracks.js";
+import { needsCharacter } from "./character.js";
 import { notificationViewsFor, unreadCount } from "./notifications.js";
 import {
   consistencyFor,
@@ -44,6 +46,9 @@ import {
 
 /** El bastión: quién soy, qué tengo, qué frentes hay abiertos y qué me reclama. */
 export interface RealmSummaryView {
+  /** La ficha del jugador y si todavía falta crearla. */
+  player: PlayerSheet;
+  needsCharacter: boolean;
   stats: CharacterStats;
   inventory: InventoryState;
   treasury: TreasuryView;
@@ -66,6 +71,8 @@ export function realmSummaryView(
   const unread = unreadCount(state);
   const { availableBalance, expectedIncome, committedExpenses, reserveTarget } = state.financial;
   return {
+    player: state.player,
+    needsCharacter: needsCharacter(state),
     stats: statsFor(state, context.battle),
     inventory: state.inventory,
     treasury: treasuryViewFor(state, nowMs),

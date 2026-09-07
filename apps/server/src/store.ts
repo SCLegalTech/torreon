@@ -145,7 +145,7 @@ export function migrateRealm(state: RealmState, nowMs: number): RealmState {
         { attempt: battle.attempt, startedAt: battle.startedAt, durationMinutes: battle.durationMinutes, deadlineAt: battle.deadlineAt },
       ];
       // Una Battle anterior al grupo y a la formación 4v4 los estrena ahora.
-      battle.party ??= freshParty();
+      battle.party ??= freshParty(state.player);
       battle.agent ??= emptyAgentSlot();
       // UNA MIGRACIÓN NO PUEDE RESUCITAR AL ENEMIGO.
       // Antes de la formación 4v4 la Horda era una barra: si estaba en 10 HP
@@ -165,7 +165,7 @@ export function migrateRealm(state: RealmState, nowMs: number): RealmState {
       // NOMBRE VISIBLE ≠ ID INTERNO: una formación guardada antes de la
       // corrección canónica lleva «Roko» dentro. Se corrige el nombre y NADA
       // más: id, HP, escudo y cicatrices siguen exactamente igual.
-      refreshPartyDisplay(battle.party);
+      refreshPartyDisplay(battle.party, state.player);
       // UNA SOLA FUENTE AUTORITATIVA. Nunca `won` en una vista y `active` en
       // otra: si el contrato está validado, la Battle está ganada aquí también.
       reconcileBattleProjection(quest, nowMs);

@@ -2762,3 +2762,69 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 .campaign-chip.current strong { color: #9dffcb; }
 .campaign-chip.draft { border-style: dashed; }
 .campaign-chip:not(:disabled):active { transform: translateY(2px); filter: brightness(1.15); }
+
+/* ─── LA FICHA DEL JUGADOR ─────────────────────────────────────────────── */
+.character-scene { position: relative; display: grid; place-items: center; overflow: auto; }
+.character-scene .map-art { position: absolute; z-index: -1; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: brightness(.45) saturate(.8); }
+
+.character-sheet {
+  display: grid;
+  gap: var(--gap);
+  width: min(94vw, 34rem);
+  margin: auto;
+  padding: var(--pad-y) var(--pad-x);
+  border: 1px solid var(--line);
+  background: linear-gradient(150deg, rgba(22, 19, 14, .96), rgba(8, 9, 7, .97));
+  box-shadow: inset 0 0 0 1px rgba(231, 185, 94, .12), 0 14px 40px #000c;
+}
+
+.character-sheet h1 { margin: 0; color: #f3d79a; font-size: var(--fs-lg); letter-spacing: .04em; }
+.character-sheet .eyebrow { margin: 0; }
+
+.character-archetypes { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+
+.character-option {
+  display: grid;
+  gap: .15rem;
+  justify-items: center;
+  padding: .5rem .4rem;
+  cursor: pointer;
+  border: 1px solid #7c6033;
+  color: inherit;
+  background: #0d100e;
+  text-align: center;
+}
+
+.character-option img { width: clamp(40px, 9vh, 64px); height: clamp(40px, 9vh, 64px); object-fit: contain; image-rendering: pixelated; }
+
+/*
+ * El teléfono apaisado deja unos 412 px de alto: la ficha entera tiene que
+ * caber sin buscar el botón. Se aprieta, no se recorta.
+ */
+@media (orientation: landscape) and (max-height: 560px) {
+  .character-sheet { gap: .3rem; padding: .45rem .7rem; }
+  .character-sheet h1 { font-size: var(--fs-md); }
+  .character-option { padding: .25rem .3rem; }
+  .character-field small { display: none; }
+}
+.character-option strong { color: #ffd98f; font-family: ui-monospace, "Cascadia Mono", monospace; font-size: var(--fs-2xs); letter-spacing: .05em; }
+.character-option small { color: #b7ab94; font-size: var(--fs-3xs); }
+.character-option.current { border-color: #3fe39a; background: #10241b; box-shadow: inset 0 0 0 1px #3fe39a33, 0 0 18px #2ee08e33; }
+.character-option.current strong { color: #9dffcb; }
+
+.character-field { display: grid; gap: .2rem; }
+.character-field > span { color: #d9c08a; font-size: var(--fs-3xs); letter-spacing: .12em; }
+.character-field small { color: #988d78; font-size: var(--fs-3xs); line-height: 1.35; }
+
+.character-field input {
+  min-height: var(--tap);
+  padding: .4rem .6rem;
+  border: 1px solid #7c6033;
+  color: #f0dcae;
+  background: #0b0d0b;
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+
+.character-field input:focus-visible { border-color: #3fe39a; outline: none; }
+.character-sheet .expedition-button { min-height: var(--tap); }

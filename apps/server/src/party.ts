@@ -1,4 +1,5 @@
-import type { PartyMemberId, PartyState } from "./domain.js";
+import type { PartyMemberId, PartyState, PlayerSheet } from "./domain.js";
+import { partyNamesFor } from "./character.js";
 import { HERO_CLASS, HERO_DISPLAY_NAME } from "./progression.js";
 
 /**
@@ -27,11 +28,12 @@ const PROFILE: Record<PartyMemberId, { name: string; role: string; maxShield?: n
   cordera: { name: HERO_DISPLAY_NAME.cordera, role: HERO_CLASS.cordera, maxShield: undefined },
 };
 
-export function freshParty(): PartyState {
+export function freshParty(player?: PlayerSheet): PartyState {
+  const nombres = player ? partyNamesFor(player) : null;
   const member = (id: PartyMemberId) => ({
     id,
-    name: PROFILE[id].name,
-    role: PROFILE[id].role,
+    name: nombres?.[id].name ?? PROFILE[id].name,
+    role: nombres?.[id].role ?? PROFILE[id].role,
     health: PARTY_MAX_HEALTH,
     maxHealth: PARTY_MAX_HEALTH,
     shield: PROFILE[id].maxShield,
@@ -99,10 +101,11 @@ export function refreshShield(party: PartyState, amount: number): number {
  * registro. Esto NO reescribe historia: el id, el HP, el escudo y las cicatrices
  * se conservan intactos; sólo el nombre que se muestra pasa a ser el correcto.
  */
-export function refreshPartyDisplay(party: PartyState): void {
+export function refreshPartyDisplay(party: PartyState, player?: PlayerSheet): void {
+  const nombres = player ? partyNamesFor(player) : null;
   for (const id of PARTY_ORDER) {
-    party[id].name = PROFILE[id].name;
-    party[id].role = PROFILE[id].role;
+    party[id].name = nombres?.[id].name ?? PROFILE[id].name;
+    party[id].role = nombres?.[id].role ?? PROFILE[id].role;
   }
 }
 

@@ -110,7 +110,15 @@ const questIntent = z.object({
 
 const explicitAcceptance = z.object({ userAccepted: z.boolean() });
 
+const characterBody = z.object({
+  archetype: z.enum(["marques", "cordera"]),
+  displayName: z.string().min(2).max(40),
+  petName: z.string().min(1).max(40).optional(),
+  title: z.string().min(2).max(60).optional(),
+});
+
 export const HTTP_BODIES = {
+  "POST /api/character": characterBody,
   "POST /api/quests/from-intent": questIntent,
   "POST /api/quests/:questId/accept": explicitAcceptance,
   "POST /api/quests/:questId/start": z.object({ durationMinutes: z.number().int().min(5).max(60).optional() }),

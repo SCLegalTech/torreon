@@ -119,6 +119,19 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
     });
   });
 
+  /**
+   * LA FICHA DEL JUGADOR: quién encarna y cómo se llama su mascota.
+   *
+   * Roku no se encarna: es la mascota, y sólo lleva nombre.
+   */
+  app.post("/api/character", validate("POST /api/character"), async (req, res, next) => {
+    try {
+      res.json({ player: await service.createCharacter(req.body) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/state", async (_req, res, next) => {
     try {
       res.json(await service.snapshot());

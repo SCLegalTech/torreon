@@ -146,6 +146,7 @@ export function createV1Router(
   // ---------------------------------------------------------------------------
   // COMANDOS. El jugador quiere hacer algo; el Núcleo decide si puede.
   // ---------------------------------------------------------------------------
+  router.post("/character", ...command("POST /api/character", (req) => resolveRealm(req).createCharacter(req.body)));
   router.post(
     "/quests/from-intent",
     ...command("POST /api/quests/from-intent", (req) =>

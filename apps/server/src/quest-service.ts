@@ -45,6 +45,7 @@ import { grantItem, STARTER_INVENTORY, useItem } from "./inventory.js";
 import { HeuristicCodice, questFromIntent, validatePlan, type CodicePlanner, type Judgement } from "./codice.js";
 import type {
   Act,
+  PlayerSheet,
   AfterActionReport,
   BarracksView,
   BattleMemoryView,
@@ -116,6 +117,7 @@ import {
   PARTY_ORDER,
   recoverFallen,
   recoveryHealth,
+  refreshPartyDisplay,
   SHIELD_PER_VALIDATED_IMPACT,
 } from "./party.js";
 import {
@@ -140,6 +142,8 @@ import type { RealmStore } from "./realm-store.js";
 import { RealmBus } from "./realm-bus.js";
 import { dungeonMasterView, type DungeonMasterView } from "./v1-views.js";
 import { invalidateEvent, type InvalidationInput, type InvalidationOutcome } from "./invalidation.js";
+import { createCharacter, type CharacterInput } from "./character.js";
+import { recordUnexpectedRequirement } from "./horde-pressure.js";
 import { recoverParty } from "./party-flow.js";
 import { DEFAULT_PLAYER_ID, type PlayerId } from "./players.js";
 import {
@@ -923,6 +927,25 @@ export class QuestService {
     });
   }
 
+  /**
+   * CREAR O RENOMBRAR LA FICHA.
+   *
+   * Los ids del grupo no cambian: sólo el nombre que se resuelve al leer, así
+   * que renombrar no reescribe una línea de historia. Las Battles vivas se
+   * refrescan aquí mismo para que el frente no siga llamando al personaje por
+   * su nombre viejo.
+   */
+  async createCharacter(input: CharacterInput): Promise<PlayerSheet> {
+    const { result } = await this.mutate((state) => {
+      const sheet = createCharacter(state, input, this.clock.now());
+      for (const quest of state.quests) {
+        if (quest.battle) refreshPartyDisplay(quest.battle.party, sheet);
+      }
+      return sheet;
+    });
+    return result;
+  }
+
   async barracks(): Promise<BarracksView> {
     return barracksViewFor(await this.tick());
   }
@@ -1108,7 +1131,7 @@ export class QuestService {
       quest.status = "active";
       quest.startedAt = new Date(startedAtMs).toISOString();
       quest.updatedAt = quest.startedAt;
-      quest.battle = createBattleRecord(startedAtMs, duration);
+      quest.battle = createBattleRecord(startedAtMs, duration, state.player);
       // Comprometer un frente es también mirarlo: así la Battle visible sigue
       // siendo ésta cuando el reloj termine, sin que nadie tenga que adivinarlo.
       state.focusedQuestId = quest.id;
@@ -1933,100 +1956,14 @@ export class QuestService {
     return result;
   }
 
-  /**
-   * LA HORDA SÓLO GOLPEA POR UNA EXIGENCIA REAL.
-   *
-   * `unexpected_requirement` representa una condición nueva e imprevista que
-   * AUMENTA el trabajo del jugador. Jamás puede nacer de un reintento de
-   * herramienta, de una traza de depuración, de latencia, de un assist
-   * duplicado ni del simple paso del tiempo: la presión temporal ya la cobra el
-   * propio servidor por ventanas, y castigar dos veces lo mismo sería mentir.
-   */
+  /** La Horda sólo golpea por una exigencia real (`horde-pressure.ts`). */
   async recordUnexpectedRequirement(
     questId: string,
     input: { reason: string; damage: number; stepId?: string },
   ): Promise<{ battle: BattleState; lifeEventId: string; gameEventId: string }> {
-    if (input.reason.trim().length < 10) throw deny("Describe el requisito inesperado que representa este ataque.");
-    if (!Number.isInteger(input.damage) || input.damage < 1 || input.damage > 50) throw deny("El daño debe ser un entero entre 1 y 50.");
-    if (FORBIDDEN_REQUIREMENT_REASON.test(input.reason)) {
-      throw deny(
-        "Un reintento, un error técnico, la latencia, un assist duplicado o el tiempo transcurrido NO son exigencias nuevas de la realidad. La presión del reloj ya la cobra el servidor: no la cobres otra vez a mano.",
-      );
-    }
-    const { result } = await this.mutate((state) => {
-      const quest = requireQuest(state, questId);
-      if (quest.status !== "active") throw deny("La Horda sólo puede atacar un frente activo con presión real; una espera externa no recibe daño automático.");
-      if (input.stepId) requireStep(quest, input.stepId);
-      const timestamp = this.clock.iso();
-      const lifeEventId = randomUUID();
-      state.lifeEvents.unshift({ id: lifeEventId, type: "unexpected_requirement", questId, stepId: input.stepId, reason: input.reason.trim(), createdAt: timestamp });
-      const gameEventId = randomUUID();
-      // Un requisito inesperado golpea el frente igual que el reloj: cae sobre
-      // quien la formación deje expuesto, y el escudo se gasta antes que la vida.
-      const record = quest.battle;
-      const party = record?.party ?? freshParty();
-      const attacker = record?.enemies.find((enemy) => enemy.status === "active");
-      const target: PartyMemberId = attacker
-        ? enemyTargetFor(attacker, party, record!.combatSeed, record!.attempt)
-        : party.roko.health > 0
-          ? "roko"
-          : "marques";
-      const { absorbed, ko } = applyDamage(party, target, input.damage);
-      state.gameEvents.unshift({
-        id: gameEventId,
-        type: "horde_attack",
-        sourceLifeEventId: lifeEventId,
-        questId,
-        stepId: input.stepId,
-        damage: input.damage,
-        reason: input.reason.trim(),
-        battleAttempt: record?.attempt ?? 1,
-        target,
-        sourceEnemyId: attacker?.id,
-        message: `La Horda contraataca sobre ${party[target].name}: ${input.reason.trim()} (-${input.damage}).`,
-        createdAt: timestamp,
-      });
-      if (absorbed > 0) {
-        state.gameEvents.unshift({
-          id: randomUUID(),
-          type: "shield_absorbed",
-          sourceLifeEventId: lifeEventId,
-          questId,
-          damage: absorbed,
-          target,
-          battleAttempt: record?.attempt ?? 1,
-          message: `El escudo de ${party[target].name} absorbe ${absorbed}.`,
-          createdAt: timestamp,
-        });
-      }
-      if (ko) {
-        state.gameEvents.unshift({
-          id: randomUUID(),
-          type: "party_member_ko",
-          sourceLifeEventId: lifeEventId,
-          questId,
-          damage: 0,
-          target,
-          battleAttempt: record?.attempt ?? 1,
-          message: `${party[target].name} cae en el frente.`,
-          createdAt: timestamp,
-        });
-      }
-      state.lifeEvents = state.lifeEvents.slice(0, 200);
-      state.gameEvents = state.gameEvents.slice(0, 200);
-      let battle = battleFor(quest, this.clock.now(), state.gameEvents)!;
-      addEvent(state, {
-      type: "horde_attack",
-      questId,
-      message: `La Horda golpea a ${party[target].name} (-${input.damage}). El Marqués conserva ${battle.playerHealth} HP.`,
-      }, this.clock.now());
-      if (battle.isPlayerKo && record?.status === "active") {
-        resolveBattle(state, quest, record, "awaiting_recovery", this.clock.now());
-        battle = battleFor(quest, this.clock.now(), state.gameEvents)!;
-      }
-      return { battle, lifeEventId, gameEventId };
-    });
-    return result;
+    const { result, state } = await this.mutate((draft) => recordUnexpectedRequirement(draft, questId, input, this.clock.now()));
+    const quest = requireQuest(state, questId);
+    return { battle: battleFor(quest, this.clock.now(), state.gameEvents)!, lifeEventId: result.lifeEventId, gameEventId: result.gameEventId };
   }
 
   /** Anular no es borrar. Las reglas viven en `invalidation.ts` (artículo 9). */

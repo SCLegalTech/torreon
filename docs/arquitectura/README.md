@@ -48,6 +48,7 @@ la constitución con un ADR (art. 18).
 | [0006](adr/0006-puertos-de-infraestructura.md) | Toda infraestructura entra por un puerto, empezando por el reloj | **implementado** (E1) · los archivos, pendientes |
 | [0007](adr/0007-identidad-jugador-y-agente.md) | Dos identidades: sesión de jugador y concesión de agente | **implementado** (E5) · apagado por defecto |
 | [0008](adr/0008-el-juez-no-obedece-a-la-evidencia.md) | El texto de un artefacto es dato, nunca instrucción | **implementado** |
+| [0009](adr/0009-jugar-con-otros.md) | Jugar con otros: la ficha, el Duelo y la Hermandad | la ficha, **implementada**; el resto, propuesto |
 
 ## Lo que falta encender
 

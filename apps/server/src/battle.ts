@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { emptyAgentSlot } from "./companions.js";
 import type {
+  PlayerSheet,
   AttemptEndReason,
   BattleClock,
   BattleRecord,
@@ -44,7 +45,7 @@ export function clampBattleMinutes(minutes: number): number {
   return Math.min(MAX_BATTLE_MINUTES, Math.max(1, Math.round(minutes)));
 }
 
-export function createBattleRecord(startedAtMs: number, durationMinutes: number): BattleRecord {
+export function createBattleRecord(startedAtMs: number, durationMinutes: number, player?: PlayerSheet): BattleRecord {
   const duration = clampBattleMinutes(durationMinutes);
   const startedAt = new Date(startedAtMs).toISOString();
   const deadlineAt = new Date(startedAtMs + duration * 60_000).toISOString();
@@ -61,7 +62,7 @@ export function createBattleRecord(startedAtMs: number, durationMinutes: number)
     suspendedMs: 0,
     settledPressureMs: 0,
     appliedCriticalWindows: [],
-    party: freshParty(),
+    party: freshParty(player),
     enemies: buildEncounter(encounterSeed),
     agent: emptyAgentSlot(),
   };

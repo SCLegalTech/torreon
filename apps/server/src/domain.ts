@@ -799,6 +799,24 @@ export interface WorldSystemView {
   badge?: number;
 }
 
+/**
+ * LA FICHA DEL JUGADOR.
+ *
+ * `archetype` es a quién encarna: `marques` o `cordera`. Roku NO se encarna —es
+ * la mascota— y por eso sólo lleva nombre. Los ids internos del grupo no
+ * cambian nunca: el nombre se resuelve al leer (ver `character.ts`).
+ */
+export interface PlayerSheet {
+  displayName: string;
+  title: string;
+  /** A quién encarna. Ausente en reinos anteriores a la ficha. */
+  archetype?: "marques" | "cordera";
+  /** Cómo se llama la mascota. Ausente = Roku. */
+  petName?: string;
+  /** Marca que la ficha ya se creó. Sin esto, la app la pide. */
+  createdAt?: string;
+}
+
 export interface RealmState {
   version: 1;
   /** Identidad del reino. Permite distinguir el reino local del de la nube. */
@@ -810,10 +828,7 @@ export interface RealmState {
    * dónde poner al segundo jugador, y eso bloquea Play Store entero.
    */
   playerId: string;
-  player: {
-    displayName: string;
-    title: string;
-  };
+  player: PlayerSheet;
   character: CharacterState;
   inventory: InventoryState;
   /** Ayudas reales de compañeros. Estar disponible no cuenta. */

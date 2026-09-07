@@ -2739,6 +2739,75 @@ function Battle({
   );
 }
 
+/**
+ * LA FICHA: A QUIÉN ENCARNAS Y CÓMO SE LLAMA TU MASCOTA.
+ *
+ * Dos arquetipos jugables —el Marqués y la Cordera— y una mascota que no se
+ * encarna. El id interno del grupo no cambia nunca: aquí sólo se eligen los
+ * nombres que el reino resuelve al leer, así que renombrar no toca la historia.
+ */
+function CharacterGate({ busy, onCreate }: { busy: boolean; onCreate: (ficha: { archetype: "marques" | "cordera"; displayName: string; petName: string }) => void }) {
+  const [archetype, setArchetype] = useState<"marques" | "cordera">("marques");
+  const [displayName, setDisplayName] = useState("");
+  const [petName, setPetName] = useState("Roku");
+  const listo = displayName.trim().length >= 2 && petName.trim().length >= 1;
+
+  return (
+    <main className="scene character-scene">
+      <img className="map-art" src="/assets/art/main-menu.png" alt="" aria-hidden="true" />
+      <div className="character-sheet">
+        <p className="eyebrow">ANTES DE ENTRAR AL REINO</p>
+        <h1>¿A quién encarnas?</h1>
+
+        <div className="character-archetypes" role="radiogroup" aria-label="Arquetipo">
+          {([
+            { id: "marques" as const, nombre: "EL MARQUÉS", clase: "Explorador / DPS", sprite: "/assets/sprites/party/marques-idle.gif" },
+            { id: "cordera" as const, nombre: "LA CORDERA", clase: "Sanadora / Apoyo", sprite: "/assets/sprites/party/cordera-idle.gif" },
+          ]).map((opcion) => (
+            <button
+              key={opcion.id}
+              type="button"
+              role="radio"
+              aria-checked={archetype === opcion.id}
+              className={`character-option ${archetype === opcion.id ? "current" : ""}`}
+              onClick={() => setArchetype(opcion.id)}
+            >
+              <img src={opcion.sprite} alt="" aria-hidden="true" />
+              <strong>{opcion.nombre}</strong>
+              <small>{opcion.clase}</small>
+            </button>
+          ))}
+        </div>
+
+        <label className="character-field">
+          <span>TU NOMBRE</span>
+          <input
+            value={displayName}
+            maxLength={40}
+            placeholder={archetype === "marques" ? "Marqués Phi" : "Cordera"}
+            onChange={(event) => setDisplayName(event.target.value)}
+          />
+        </label>
+
+        <label className="character-field">
+          <span>TU MASCOTA</span>
+          <input value={petName} maxLength={40} placeholder="Roku" onChange={(event) => setPetName(event.target.value)} />
+          <small>Roku va contigo y protege al grupo. No se encarna: se le pone nombre.</small>
+        </label>
+
+        <button
+          className="expedition-button"
+          type="button"
+          disabled={busy || !listo}
+          onClick={() => onCreate({ archetype, displayName: displayName.trim(), petName: petName.trim() })}
+        >
+          ⚔ ENTRAR AL REINO
+        </button>
+      </div>
+    </main>
+  );
+}
+
 function App() {
   const requestedScreen = new URLSearchParams(window.location.search).get("screen");
   const initialScreen: Screen =
@@ -2920,6 +2989,25 @@ function App() {
   }
   if (screen === "thinking") return <ThinkingScreen intent={pendingIntent} />;
   if (!snapshot) return <main className="loading"><Codex speaking /><p>El Códice despierta…</p>{error ? <strong>{error}</strong> : null}</main>;
+
+  /*
+    QUIÉN ERES ANTES DE JUGAR.
+
+    Con varios jugadores en el reino, el grupo deja de ser tres nombres
+    cableados: cada uno encarna a alguien. Roku NO se encarna —es la mascota— y
+    sólo lleva nombre. Esto se pregunta una vez y no vuelve a estorbar.
+  */
+  if (!snapshot.realm.player?.createdAt) {
+    return (
+      <>
+        <CharacterGate
+          busy={busy}
+          onCreate={(ficha) => act(() => api("/api/character", { method: "POST", body: JSON.stringify(ficha) }))}
+        />
+        {error ? <div className="error-toast" role="alert">{error}</div> : null}
+      </>
+    );
+  }
 
   const quest = snapshot.currentQuest;
   /*

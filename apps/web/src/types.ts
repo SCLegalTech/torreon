@@ -335,7 +335,18 @@ export interface Quest {
 export interface RealmSnapshot {
   realm: {
     realmId: string;
-    player: { displayName: string; title: string };
+    /**
+     * LA FICHA DEL JUGADOR. `archetype` es a quién encarna; Roku no se
+     * encarna —es la mascota— y sólo lleva nombre. Sin `createdAt`, la app
+     * pide crearla antes de entrar al reino.
+     */
+    player: {
+      displayName: string;
+      title: string;
+      archetype?: "marques" | "cordera";
+      petName?: string;
+      createdAt?: string;
+    };
     financial: {
       currency: "COP";
       availableBalance: number;
