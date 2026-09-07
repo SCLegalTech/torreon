@@ -5,6 +5,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { QuestPlanInput } from "./domain.js";
 import { QuestService } from "./quest-service.js";
 import { JsonRealmStore } from "./store.js";
+import { fixedClock } from "./clock.js";
+
+/**
+ * EL RELOJ DEL REINO SE PLANTA (artículo 8, ADR-0006). Sin esto, la presión y
+ * las ventanas críticas dependían del tiempo real que tardara la suite, y la
+ * misma prueba pasaba aislada y fallaba bajo carga.
+ */
+const RELOJ_DEL_REINO = "2026-05-11T09:00:00.000Z";
 
 /**
  * REPLANIFICAR NO BORRA LAS CICATRICES.
@@ -36,9 +44,9 @@ describe("Continuidad entre intentos", () => {
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-continuity-"));
-    store = new JsonRealmStore(join(directory, "state.json"));
+    store = new JsonRealmStore(join(directory, "state.json"), fixedClock(RELOJ_DEL_REINO));
     await store.init();
-    service = new QuestService(store, undefined, directory, "torreon-continuity-test");
+    service = new QuestService(store, undefined, directory, "torreon-continuity-test", fixedClock(RELOJ_DEL_REINO));
   });
 
   afterEach(async () => {
@@ -163,7 +171,7 @@ describe("Continuidad entre intentos", () => {
     expect(capped.remaining).toBe(0);
 
     // I-005: otra lectura del reino conserva las cantidades.
-    const reloaded = new QuestService(store, undefined, directory, "torreon-continuity-test");
+    const reloaded = new QuestService(store, undefined, directory, "torreon-continuity-test", fixedClock(RELOJ_DEL_REINO));
     const snapshot = await reloaded.snapshot();
     expect(snapshot.inventory.items.find((entry) => entry.itemId === "health_potion")?.quantity).toBe(0);
     expect(snapshot.battle?.party.marques.health).toBe(100);

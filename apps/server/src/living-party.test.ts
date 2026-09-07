@@ -5,6 +5,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { QuestPlanInput } from "./domain.js";
 import { QuestService } from "./quest-service.js";
 import { JsonRealmStore } from "./store.js";
+import { fixedClock } from "./clock.js";
+
+/**
+ * EL RELOJ DEL REINO SE PLANTA (artículo 8, ADR-0006). Sin esto, la presión y
+ * las ventanas críticas dependían del tiempo real que tardara la suite, y la
+ * misma prueba pasaba aislada y fallaba bajo carga.
+ */
+const RELOJ_DEL_REINO = "2026-05-11T09:00:00.000Z";
 
 /**
  * THE LIVING PARTY.
@@ -43,9 +51,9 @@ describe("La partida viva", () => {
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-living-"));
-    store = new JsonRealmStore(join(directory, "state.json"));
+    store = new JsonRealmStore(join(directory, "state.json"), fixedClock(RELOJ_DEL_REINO));
     await store.init();
-    service = new QuestService(store, undefined, directory, "torreon-living-test");
+    service = new QuestService(store, undefined, directory, "torreon-living-test", fixedClock(RELOJ_DEL_REINO));
   });
 
   afterEach(async () => {

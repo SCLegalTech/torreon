@@ -23,7 +23,7 @@ tareas con espadas.
 ```bash
 npm install
 npm run dev          # interfaz en :5173, MCP y API en :3000
-npm test             # 239 pruebas: dominio, acceso y arquitectura
+npm test             # 269 pruebas: dominio, acceso y arquitectura
 npm run typecheck
 ```
 
@@ -101,5 +101,6 @@ Dos cosas que conviene saber antes de prometer nada:
 - La API ya tiene llave (`TORREON_API_TOKEN`) **en el código**, pero el reino de
   la nube sigue abierto hasta que alguien ponga el secreto en Fly y recompile la
   APK. Ver la mitigación inmediata de la hoja de ruta.
-- `quick-battles-finance.test.ts > F-001` falla 25 días de cada 30 porque el
-  reloj está cableado. No es una regresión tuya: es el hallazgo A-4.
+- **El Núcleo no consulta el reloj.** Recibe `nowMs`, o un `Clock` si es el
+  servicio o el almacén. `new Date()` dentro del Núcleo es un fallo de build.
+  En una prueba, planta el reloj con `fixedClock(...)`.

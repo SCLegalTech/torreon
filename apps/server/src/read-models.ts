@@ -21,6 +21,7 @@ import type {
   WorldSystemView,
 } from "./domain.js";
 import { battleStatusOf } from "./battle.js";
+import { notFound } from "./errors.js";
 import { PARTY_MAX_HEALTH, PARTY_ORDER, recoveryHealth } from "./party.js";
 
 /**
@@ -160,11 +161,7 @@ export function consistencyFor(state: RealmState, instance: string, currentQuest
 /** Une la quest con sus artefactos y veredictos, paso por paso. */
 export function questDetailFor(state: RealmState, questId: string): QuestDetail {
   const quest = state.quests.find((candidate) => candidate.id === questId);
-  if (!quest) {
-    const error = new Error(`Quest no encontrada: ${questId}`);
-    (error as Error & { code?: string }).code = "QUEST_NOT_FOUND";
-    throw error;
-  }
+  if (!quest) throw notFound(`Quest no encontrada: ${questId}`);
 
   return {
     id: quest.id,

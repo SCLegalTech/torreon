@@ -1,4 +1,5 @@
 import type { InventoryItemId, InventoryState, PartyMemberId, PartyState } from "./domain.js";
+import { deny } from "./errors.js";
 
 /**
  * LOS OBJETOS SE GASTAN.
@@ -70,17 +71,17 @@ export interface ItemUseResult {
  */
 export function useItem(inventory: InventoryState, party: PartyState, itemId: InventoryItemId, target: PartyMemberId): ItemUseResult {
   const item = ITEMS[itemId];
-  if (!item) throw new Error(`Objeto desconocido: ${itemId}`);
+  if (!item) throw deny(`Objeto desconocido: ${itemId}`);
   const entry = inventory.items.find((candidate) => candidate.itemId === itemId);
-  if (!entry || entry.quantity <= 0) throw new Error(`No queda ningún ${item.name} en el zurrón.`);
+  if (!entry || entry.quantity <= 0) throw deny(`No queda ningún ${item.name} en el zurrón.`);
   const member = party[target];
-  if (!member) throw new Error(`Miembro del grupo desconocido: ${target}`);
+  if (!member) throw deny(`Miembro del grupo desconocido: ${target}`);
 
   if (item.requires === "ko" && member.health > 0) {
-    throw new Error(`${member.name} sigue en pie: el ${item.name} es para levantar a un caído.`);
+    throw deny(`${member.name} sigue en pie: el ${item.name} es para levantar a un caído.`);
   }
   if (item.requires === "alive" && member.health === 0) {
-    throw new Error(`${member.name} está caído: la ${item.name} cierra heridas, no resucita.`);
+    throw deny(`${member.name} está caído: la ${item.name} cierra heridas, no resucita.`);
   }
 
   const before = member.health;

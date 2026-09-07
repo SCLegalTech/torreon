@@ -1,6 +1,6 @@
 # ADR-0006 · Toda infraestructura entra por un puerto, empezando por el reloj
 
-- **Estado:** propuesto (etapa 1)
+- **Estado:** aceptado — el reloj, implementado en E1; los archivos, pendientes
 - **Fecha:** 2026-09-06
 - **Artículos:** 6, 8
 

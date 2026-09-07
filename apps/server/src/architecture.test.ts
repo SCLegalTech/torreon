@@ -101,7 +101,7 @@ describe("Artículo IV — el monolito sólo puede encoger", () => {
    * presupuesto es su marca máxima histórica: cada extracción debe BAJARLO.
    * Nunca se sube. Si una función nueva no cabe, es que no vive aquí.
    */
-  const BUDGET = 2792;
+  const BUDGET = 2767;
 
   it(`quest-service.ts no supera las ${BUDGET} líneas`, () => {
     const lines = serverSource("quest-service.ts").split("\n").length;

@@ -17,6 +17,7 @@ import {
   type RecurringObligationInput,
 } from "./finance.js";
 import { addEvent, markEntityNotificationsRead } from "./realm-events.js";
+import { deny, notFound } from "./errors.js";
 
 /**
  * TESORERÍA VIVA.
@@ -33,7 +34,7 @@ import { addEvent, markEntityNotificationsRead } from "./realm-events.js";
 const TRANSACTION_LIMIT = 500;
 
 export function createObligation(state: RealmState, input: RecurringObligationInput, nowMs: number): RecurringObligation {
-  if (input.name.trim().length < 2) throw new Error("La obligación necesita un nombre.");
+  if (input.name.trim().length < 2) throw deny("La obligación necesita un nombre.");
   const obligation = buildRecurringObligation(input, nowMs);
   state.recurringObligations.unshift(obligation);
   addEvent(
@@ -60,7 +61,7 @@ export function updateObligation(
   nowMs: number,
 ): RecurringObligation {
   const obligation = state.recurringObligations.find((candidate) => candidate.id === obligationId);
-  if (!obligation) throw new Error(`Obligación no encontrada: ${obligationId}`);
+  if (!obligation) throw notFound(`Obligación no encontrada: ${obligationId}`);
   if (patch.name !== undefined) obligation.name = patch.name.trim().slice(0, 120);
   if (patch.expectedAmount !== undefined) {
     obligation.expectedAmount = patch.expectedAmount === null ? null : Math.max(0, Math.round(patch.expectedAmount));
@@ -109,13 +110,13 @@ export interface TransactionOutcome {
  */
 export function recordTransaction(state: RealmState, input: FinancialTransactionInput, nowMs: number): TransactionOutcome {
   if (!Number.isFinite(input.amount) || input.amount <= 0) {
-    throw new Error("El monto real es obligatorio y debe ser mayor que cero. No se infiere del impacto de la Quest.");
+    throw deny("El monto real es obligatorio y debe ser mayor que cero. No se infiere del impacto de la Quest.");
   }
   const obligation = input.recurringObligationId
     ? state.recurringObligations.find((candidate) => candidate.id === input.recurringObligationId) ?? null
     : null;
   if (input.recurringObligationId && !obligation) {
-    throw new Error(`Obligación no encontrada: ${input.recurringObligationId}`);
+    throw notFound(`Obligación no encontrada: ${input.recurringObligationId}`);
   }
 
   const occurredAt = input.occurredAt ? new Date(input.occurredAt).toISOString() : isoAt(nowMs);

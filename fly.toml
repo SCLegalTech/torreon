@@ -23,6 +23,16 @@ primary_region = "dfw"
   auto_stop_machines = "suspend"
   auto_start_machines = true
   min_machines_running = 0
+  # UNA SOLA MÁQUINA, Y NO ES UN DETALLE DE COSTE.
+  #
+  # El reino entero es un archivo JSON y su único control de concurrencia es una
+  # cola de promesas EN MEMORIA (`JsonRealmStore`). Con dos máquinas, dos
+  # escrituras se pisan y se pierden sin error. Hoy no ocurre por una propiedad
+  # accidental de los volúmenes de Fly, no por diseño.
+  #
+  # Este límite deja de ser crítico cuando llegue la persistencia real
+  # (etapa 3 de la hoja de ruta, ADR-0003). Hasta entonces: no se sube.
+  max_machines_running = 1
 
   [[http_service.checks]]
     grace_period = "10s"

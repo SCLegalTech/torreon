@@ -8,6 +8,13 @@ import { JsonRealmStore } from "./store.js";
 import { fixedClock } from "./clock.js";
 
 /**
+ * EL RELOJ DEL REINO SE PLANTA (artículo 8, ADR-0006). Sin esto, la presión y
+ * las ventanas críticas dependían del tiempo real que tardara la suite, y la
+ * misma prueba pasaba aislada y fallaba bajo carga.
+ */
+const RELOJ_DEL_REINO = "2026-05-11T09:00:00.000Z";
+
+/**
  * NOT EVERY REAL ACTION IS A CAMPAIGN.
  * BACKLOG IS NOT FOCUS. FOCUS IS NOT ENGAGEMENT.
  * REAL MONEY IS NOT GAME CURRENCY.
@@ -32,9 +39,9 @@ describe("Quick Battles y foco", () => {
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-qb-"));
-    const store = new JsonRealmStore(join(directory, "state.json"));
+    const store = new JsonRealmStore(join(directory, "state.json"), fixedClock(RELOJ_DEL_REINO));
     await store.init();
-    service = new QuestService(store, undefined, directory, "torreon-qb-test");
+    service = new QuestService(store, undefined, directory, "torreon-qb-test", fixedClock(RELOJ_DEL_REINO));
   });
 
   afterEach(async () => {
@@ -98,9 +105,9 @@ describe("Actos en paralelo", () => {
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-acts-"));
-    const store = new JsonRealmStore(join(directory, "state.json"));
+    const store = new JsonRealmStore(join(directory, "state.json"), fixedClock(RELOJ_DEL_REINO));
     await store.init();
-    service = new QuestService(store, undefined, directory, "torreon-acts-test");
+    service = new QuestService(store, undefined, directory, "torreon-acts-test", fixedClock(RELOJ_DEL_REINO));
   });
 
   afterEach(async () => {
@@ -142,9 +149,9 @@ describe("Borrado de borradores", () => {
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-del-"));
-    const store = new JsonRealmStore(join(directory, "state.json"));
+    const store = new JsonRealmStore(join(directory, "state.json"), fixedClock(RELOJ_DEL_REINO));
     await store.init();
-    service = new QuestService(store, undefined, directory, "torreon-del-test");
+    service = new QuestService(store, undefined, directory, "torreon-del-test", fixedClock(RELOJ_DEL_REINO));
   });
 
   afterEach(async () => {
@@ -309,9 +316,9 @@ describe("Entitlements y telemetría de uso", () => {
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-plan-"));
-    store = new JsonRealmStore(join(directory, "state.json"));
+    store = new JsonRealmStore(join(directory, "state.json"), fixedClock(RELOJ_DEL_REINO));
     await store.init();
-    service = new QuestService(store, undefined, directory, "torreon-plan-test");
+    service = new QuestService(store, undefined, directory, "torreon-plan-test", fixedClock(RELOJ_DEL_REINO));
   });
 
   afterEach(async () => {

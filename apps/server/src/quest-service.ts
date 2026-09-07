@@ -84,7 +84,11 @@ import type {
 } from "./domain.js";
 import {
   addNotification,
+  archive,
   attemptPush,
+  markRead,
+  resend,
+  resendForEntity,
   notificationViewsFor,
   notifyFromEvent,
   settleNotificationsFor,
@@ -136,12 +140,13 @@ import { JsonRealmStore } from "./store.js";
 import { addEvent, markEntityNotificationsRead, pushGameEvent } from "./realm-events.js";
 import { createObligation, obligationsView, recordTransaction, updateObligation, type ObligationPatch } from "./treasury-flow.js";
 import { isoAt, systemClock, type Clock } from "./clock.js";
+import { deny, notFound } from "./errors.js";
 
 export { questFromIntent } from "./codice.js";
 
 function requireQuest(state: RealmState, questId: string): Quest {
   const quest = state.quests.find((candidate) => candidate.id === questId);
-  if (!quest) throw new Error(`Quest no encontrada: ${questId}`);
+  if (!quest) throw notFound(`Quest no encontrada: ${questId}`);
   return quest;
 }
 
@@ -715,7 +720,7 @@ function engagedOrRecoverable(state: RealmState): Quest | null {
 
 function requireCampaign(state: RealmState, campaignId: string): Campaign {
   const campaign = state.campaigns.find((candidate) => candidate.id === campaignId);
-  if (!campaign) throw new Error(`Campaña no encontrada: ${campaignId}`);
+  if (!campaign) throw notFound(`Campaña no encontrada: ${campaignId}`);
   return campaign;
 }
 
@@ -744,7 +749,7 @@ function buildAct(
 
 function requireStep(quest: Quest, stepId: string): QuestStep {
   const step = quest.steps.find((candidate) => candidate.id === stepId);
-  if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
+  if (!step) throw notFound(`Paso no encontrado: ${stepId}`);
   return step;
 }
 
@@ -764,20 +769,20 @@ function applyAmendmentChanges(quest: Quest, changes: QuestAmendmentChange[], ti
 
     const step = requireStep(quest, change.stepId);
     if (change.type === "MODIFY_STEP") {
-      if (["completed", "superseded"].includes(step.status)) throw new Error(`No se puede modificar el paso histórico «${step.title}».`);
+      if (["completed", "superseded"].includes(step.status)) throw deny(`No se puede modificar el paso histórico «${step.title}».`);
       if (change.patch.weight !== undefined && change.patch.weight < step.impactAwarded) {
-        throw new Error(`El nuevo peso de «${step.title}» no puede ser menor que su impacto ya concedido (${step.impactAwarded}).`);
+        throw deny(`El nuevo peso de «${step.title}» no puede ser menor que su impacto ya concedido (${step.impactAwarded}).`);
       }
       Object.assign(step, change.patch);
     } else if (change.type === "SUPERSEDE_STEP") {
-      if (step.status === "completed") throw new Error(`El paso completado «${step.title}» ya es historia validada y no puede sustituirse.`);
+      if (step.status === "completed") throw deny(`El paso completado «${step.title}» ya es historia validada y no puede sustituirse.`);
       step.status = "superseded";
       step.supersededAt = timestamp;
       step.supersededReason = change.reason.trim();
       // El impacto no adjudicado vuelve al contrato; el impacto histórico queda intacto.
       step.weight = step.impactAwarded;
     } else if (change.type === "MARK_EXTERNAL_BLOCKER") {
-      if (["completed", "superseded"].includes(step.status)) throw new Error(`El paso «${step.title}» ya no puede bloquearse.`);
+      if (["completed", "superseded"].includes(step.status)) throw deny(`El paso «${step.title}» ya no puede bloquearse.`);
       step.status = "blocked";
       step.blockedBy = change.blockedBy.trim();
       step.blockedReason = change.blockedReason.trim();
@@ -785,7 +790,7 @@ function applyAmendmentChanges(quest: Quest, changes: QuestAmendmentChange[], ti
       step.playerActionAvailable = change.playerActionAvailable;
       step.followUpAfter = change.followUpAfter;
     } else if (change.type === "UNBLOCK_STEP") {
-      if (step.status !== "blocked") throw new Error(`El paso «${step.title}» no está bloqueado.`);
+      if (step.status !== "blocked") throw deny(`El paso «${step.title}» no está bloqueado.`);
       step.status = step.impactAwarded > 0 ? "in_progress" : "pending";
       delete step.blockedBy;
       delete step.blockedReason;
@@ -796,7 +801,7 @@ function applyAmendmentChanges(quest: Quest, changes: QuestAmendmentChange[], ti
   }
 
   const total = quest.steps.reduce((sum, step) => sum + step.weight, 0);
-  if (total !== 100) throw new Error(`Tras el amendment, el impacto total debe seguir siendo 100; actualmente suma ${total}. Redistribuye sólo el impacto restante.`);
+  if (total !== 100) throw deny(`Tras el amendment, el impacto total debe seguir siendo 100; actualmente suma ${total}. Redistribuye sólo el impacto restante.`);
 }
 
 function reconcileExternalWaiting(quest: Quest): "waiting" | "active" {
@@ -969,14 +974,14 @@ export class QuestService {
       // Varias campañas pueden tener quests listas a la vez. Lo que no puede
       // duplicarse es la Battle comprometida, y eso lo defiende start().
       const act = parents.actId ? state.acts.find((candidate) => candidate.id === parents.actId) : undefined;
-      if (parents.actId && !act) throw new Error(`Acto no encontrado: ${parents.actId}`);
+      if (parents.actId && !act) throw notFound(`Acto no encontrado: ${parents.actId}`);
       if (act && act.questIds.length >= MAX_QUESTS_PER_ACT) {
-        throw new Error(`El acto «${act.title}» ya sostiene ${MAX_QUESTS_PER_ACT} Battles: parte el trabajo en otro Acto.`);
+        throw deny(`El acto «${act.title}» ya sostiene ${MAX_QUESTS_PER_ACT} Battles: parte el trabajo en otro Acto.`);
       }
       // Una quest puede colgar directamente de la campaña, sin Acto intermedio.
       const campaign = parents.campaignId ? requireCampaign(state, parents.campaignId) : act?.campaignId ? requireCampaign(state, act.campaignId) : undefined;
       if (act && campaign && act.campaignId && act.campaignId !== campaign.id) {
-        throw new Error(`El acto «${act.title}» pertenece a otra campaña.`);
+        throw deny(`El acto «${act.title}» pertenece a otra campaña.`);
       }
       const timestamp = this.clock.iso();
       const quest: Quest = {
@@ -1020,7 +1025,7 @@ export class QuestService {
    */
   async createDraftFromIntent(intent: string, minutesAvailable?: number, actId?: string, campaignId?: string): Promise<Quest> {
     const clean = intent.trim();
-    if (clean.length < 8) throw new Error("Describe una quest con un poco más de detalle.");
+    if (clean.length < 8) throw deny("Describe una quest con un poco más de detalle.");
     const realm = await this.store.read();
     const plan = await this.codice.plan({
       intent: clean,
@@ -1051,7 +1056,7 @@ export class QuestService {
     validatePlan(plan);
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
-      if (quest.status !== "draft") throw new Error("Solo se puede reformular una quest en borrador.");
+      if (quest.status !== "draft") throw deny("Solo se puede reformular una quest en borrador.");
       Object.assign(quest, plan, {
         steps: plan.steps.map((step) => ({ ...step, id: randomUUID(), status: "pending" as const, impactAwarded: 0, evidenceIds: [], artifactIds: [] })),
         updatedAt: this.clock.iso(),
@@ -1063,10 +1068,10 @@ export class QuestService {
   }
 
   async accept(questId: string, userAccepted: boolean): Promise<Quest> {
-    if (!userAccepted) throw new Error("La aceptación explícita del usuario es obligatoria.");
+    if (!userAccepted) throw deny("La aceptación explícita del usuario es obligatoria.");
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
-      if (quest.status !== "draft") throw new Error("Solo se puede aceptar una quest en borrador.");
+      if (quest.status !== "draft") throw deny("Solo se puede aceptar una quest en borrador.");
       quest.status = "accepted";
       quest.acceptedAt = this.clock.iso();
       quest.updatedAt = quest.acceptedAt;
@@ -1087,27 +1092,27 @@ export class QuestService {
   async start(questId: string, durationMinutes?: number): Promise<Quest> {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
-      if (quest.status !== "accepted") throw new Error("La quest debe estar aceptada antes de comenzar.");
+      if (quest.status !== "accepted") throw deny("La quest debe estar aceptada antes de comenzar.");
       // PREFLIGHT: NADIE ENTRA A UN FRENTE NUEVO DESDE EL SUELO.
       //
       // Una Battle nueva estrena grupo entero, así que aquí el caso real es
       // reabrir una que ya tiene registro con el Marqués caído: eso no es
       // empezar, es reintentar, y reintentar exige levantarlo primero.
       if (quest.battle && quest.battle.party.marques.health === 0) {
-        throw new Error(
+        throw deny(
           "El Marqués está KO en este frente. Levántalo con un Tónico de Retorno o retira al grupo a las Barracas antes de volver a entrar.",
         );
       }
       const engaged = engagedQuest(state);
       if (engaged && engaged.id !== questId) {
-        throw new Error(`Ya hay una Battle comprometida: «${engaged.title}». Termínala, o espera a que un bloqueo externo libere el frente, antes de iniciar otra.`);
+        throw deny(`Ya hay una Battle comprometida: «${engaged.title}». Termínala, o espera a que un bloqueo externo libere el frente, antes de iniciar otra.`);
       }
       // DAILY BATTLE LIMIT: sólo cuenta inicios iniciales. Un reintento, un
       // replan o un recontrato del mismo Quest NO consumen cupo. El plan `dev`
       // no tiene tope: `dailyBattleLimit` es null y esto no bloquea a nadie.
       rolloverUsage(state.usage, this.clock.now());
       const gate = battleStartAllowed(state.entitlements, state.usage);
-      if (!gate.allowed) throw new Error(gate.reason!);
+      if (!gate.allowed) throw deny(gate.reason!);
       state.usage.battlesStartedToday += 1;
       const startedAtMs = this.clock.now();
       const duration = clampBattleMinutes(durationMinutes ?? quest.durationMinutes);
@@ -1156,18 +1161,18 @@ export class QuestService {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       const record = quest.battle;
-      if (!record) throw new Error("Esta quest todavía no tiene Battle que reintentar.");
-      if (record.status === "active") throw new Error("La Battle sigue en curso.");
-      if (record.status === "suspended_external") throw new Error("Este frente espera a un tercero: se reanuda al desbloquearse, no se reintenta.");
-      if (record.status === "won") throw new Error("Esta Battle ya está ganada.");
-      if (!["active", "waiting_external"].includes(quest.status)) throw new Error("Esta quest ya no tiene frente abierto: no hay Battle que reintentar.");
+      if (!record) throw deny("Esta quest todavía no tiene Battle que reintentar.");
+      if (record.status === "active") throw deny("La Battle sigue en curso.");
+      if (record.status === "suspended_external") throw deny("Este frente espera a un tercero: se reanuda al desbloquearse, no se reintenta.");
+      if (record.status === "won") throw deny("Esta Battle ya está ganada.");
+      if (!["active", "waiting_external"].includes(quest.status)) throw deny("Esta quest ya no tiene frente abierto: no hay Battle que reintentar.");
       // EL MARQUÉS CAÍDO NO VUELVE GRATIS: hay que levantarlo primero.
       if (record.party.marques.health === 0) {
-        throw new Error("El Marqués sigue en el suelo. Levántalo con un Tónico de Retorno antes de abrir otro intento.");
+        throw deny("El Marqués sigue en el suelo. Levántalo con un Tónico de Retorno antes de abrir otro intento.");
       }
       const engaged = engagedQuest(state);
       if (engaged && engaged.id !== questId) {
-        throw new Error(`Ya hay una Battle comprometida: «${engaged.title}». No puedes sostener dos frentes con reloj a la vez.`);
+        throw deny(`Ya hay una Battle comprometida: «${engaged.title}». No puedes sostener dos frentes con reloj a la vez.`);
       }
       const startedAtMs = this.clock.now();
       // El nuevo pacto se declara: no se restaura la duración original sola.
@@ -1220,7 +1225,7 @@ export class QuestService {
     await this.tick();
     const { result } = await this.store.mutate((state) => {
       const offer = recoveryOfferFor(state, questId);
-      if (!offer.available) throw new Error(offer.reason ?? "La retirada táctica no está disponible ahora.");
+      if (!offer.available) throw deny(offer.reason ?? "La retirada táctica no está disponible ahora.");
       const quest = requireQuest(state, questId);
       const record = quest.battle!;
       const raised = recoverFallen(record.party);
@@ -1270,12 +1275,12 @@ export class QuestService {
    * pasar de 60 minutos: 55 + 30 no son 85.
    */
   async proposeBattleRecontract(questId: string, input: { reason: string; newDurationMinutes: number }): Promise<BattleState> {
-    if (input.reason.trim().length < 10) throw new Error("Explica qué cambió en la realidad antes de repactar el tiempo.");
+    if (input.reason.trim().length < 10) throw deny("Explica qué cambió en la realidad antes de repactar el tiempo.");
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       const record = quest.battle;
-      if (!record) throw new Error("Esta quest todavía no tiene Battle.");
-      if (record.status !== "active") throw new Error("Sólo una Battle en curso puede repactar su tiempo.");
+      if (!record) throw deny("Esta quest todavía no tiene Battle.");
+      if (record.status !== "active") throw deny("Sólo una Battle en curso puede repactar su tiempo.");
       // Proponer otra vez sustituye la anterior: sólo hay un pacto sobre la mesa.
       record.pendingRecontract = {
         id: randomUUID(),
@@ -1295,16 +1300,16 @@ export class QuestService {
   }
 
   async acceptBattleRecontract(questId: string, recontractId: string, userAccepted: boolean): Promise<BattleState> {
-    if (!userAccepted) throw new Error("Repactar el tiempo requiere aceptación explícita del jugador.");
+    if (!userAccepted) throw deny("Repactar el tiempo requiere aceptación explícita del jugador.");
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       const record = quest.battle;
-      if (!record?.pendingRecontract) throw new Error("No hay ningún nuevo pacto temporal esperando decisión.");
+      if (!record?.pendingRecontract) throw deny("No hay ningún nuevo pacto temporal esperando decisión.");
       const proposal = record.pendingRecontract;
       // Se sella una propuesta concreta: si Códice propuso 30 min y luego 15,
       // el jugador tiene que estar aceptando exactamente la que está mirando.
       if (proposal.id !== recontractId) {
-        throw new Error(`Ese pacto ya no está sobre la mesa. El vigente propone ${proposal.newDurationMinutes} min: acéptalo por su propio id.`);
+        throw deny(`Ese pacto ya no está sobre la mesa. El vigente propone ${proposal.newDurationMinutes} min: acéptalo por su propio id.`);
       }
       // Todo el estado de combate se preserva: sólo cambia el reloj.
       openAttempt(record, this.clock.now(), proposal.newDurationMinutes, "recontracted");
@@ -1344,8 +1349,8 @@ export class QuestService {
   ): Promise<{ battle: BattleState | null; remaining: number; message: string }> {
     const { result } = await this.store.mutate((state) => {
       const quest = questId ? requireQuest(state, questId) : engagedOrRecoverable(state);
-      if (!quest?.battle) throw new Error("No hay ningún frente abierto donde usar objetos.");
-      if (quest.battle.status === "won") throw new Error("Esta Battle ya está ganada: no hay a quién curar.");
+      if (!quest?.battle) throw deny("No hay ningún frente abierto donde usar objetos.");
+      if (quest.battle.status === "won") throw deny("Esta Battle ya está ganada: no hay a quién curar.");
       const applied = useItem(state.inventory, quest.battle.party, itemId, target);
       const timestamp = this.clock.iso();
       const member = quest.battle.party[target];
@@ -1412,7 +1417,7 @@ export class QuestService {
     executionRef?: string;
     contributionSummary: string;
   }): Promise<{ assist: CompanionAssist; duplicate: boolean }> {
-    if (input.contributionSummary.trim().length < 5) throw new Error("Describe qué hizo realmente el compañero.");
+    if (input.contributionSummary.trim().length < 5) throw deny("Describe qué hizo realmente el compañero.");
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, input.questId);
       requireStep(quest, input.stepId);
@@ -1519,29 +1524,29 @@ export class QuestService {
   ): Promise<{ quest: Quest; battle: BattleState; evidenceId: string; lifeEventId: string; gameEventId: string | null }> {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
-      if (quest.status !== "active") throw new Error("La quest debe estar activa para evaluar evidencia.");
+      if (quest.status !== "active") throw deny("La quest debe estar activa para evaluar evidencia.");
       if (quest.battle && ["awaiting_replan", "awaiting_recovery"].includes(quest.battle.status)) {
-        throw new Error("Este intento se cerró. Replanifica el tiempo —y levanta al Marqués si cayó— antes de entregar más evidencia.");
+        throw deny("Este intento se cerró. Replanifica el tiempo —y levanta al Marqués si cayó— antes de entregar más evidencia.");
       }
       const step = quest.steps.find((candidate) => candidate.id === stepId);
-      if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
-      if (step.status === "completed") throw new Error("Este paso ya recibió todo su impacto.");
-      if (step.status === "blocked") throw new Error("Este frente está bloqueado; no hay evidencia que entregar hasta resolver la dependencia.");
-      if (step.status === "superseded") throw new Error("Este paso fue sustituido por un amendment y ya no exige acción.");
-      if (!input.summary.trim()) throw new Error("Describe brevemente la evidencia aportada.");
-      if (!input.reasoning.trim()) throw new Error("Códice debe explicar el veredicto.");
+      if (!step) throw notFound(`Paso no encontrado: ${stepId}`);
+      if (step.status === "completed") throw deny("Este paso ya recibió todo su impacto.");
+      if (step.status === "blocked") throw deny("Este frente está bloqueado; no hay evidencia que entregar hasta resolver la dependencia.");
+      if (step.status === "superseded") throw deny("Este paso fue sustituido por un amendment y ya no exige acción.");
+      if (!input.summary.trim()) throw deny("Describe brevemente la evidencia aportada.");
+      if (!input.reasoning.trim()) throw deny("Códice debe explicar el veredicto.");
       const remaining = step.weight - step.impactAwarded;
       if (!Number.isInteger(input.impactAwarded) || input.impactAwarded < 0 || input.impactAwarded > remaining) {
-        throw new Error(`El impacto debe ser un entero entre 0 y ${remaining}.`);
+        throw deny(`El impacto debe ser un entero entre 0 y ${remaining}.`);
       }
       if (input.verdict === "rejected" && input.impactAwarded !== 0) {
-        throw new Error("La evidencia rechazada no puede causar daño.");
+        throw deny("La evidencia rechazada no puede causar daño.");
       }
       if (input.verdict === "partial" && (input.impactAwarded <= 0 || input.impactAwarded >= remaining)) {
-        throw new Error("La evidencia parcial debe conceder parte, pero no todo, del impacto restante.");
+        throw deny("La evidencia parcial debe conceder parte, pero no todo, del impacto restante.");
       }
       if (input.verdict === "accepted" && input.impactAwarded !== remaining) {
-        throw new Error("La evidencia aceptada debe conceder todo el impacto restante.");
+        throw deny("La evidencia aceptada debe conceder todo el impacto restante.");
       }
 
       const timestamp = this.clock.iso();
@@ -1759,16 +1764,16 @@ export class QuestService {
     const state = await this.store.read();
     const quest = requireQuest(state, questId);
     if (["completed", "abandoned"].includes(quest.status)) {
-      throw new Error("Esta quest ya no admite evidencia.");
+      throw deny("Esta quest ya no admite evidencia.");
     }
-    if (!quest.steps.some((step) => step.id === stepId)) throw new Error(`Paso no encontrado: ${stepId}`);
+    if (!quest.steps.some((step) => step.id === stepId)) throw notFound(`Paso no encontrado: ${stepId}`);
 
     const artifact = await ingestArtifact(this.clock.now(), input, questId, stepId, this.dataDir);
 
     const { result } = await this.store.mutate((fresh) => {
       const freshQuest = requireQuest(fresh, questId);
       const step = freshQuest.steps.find((candidate) => candidate.id === stepId);
-      if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
+      if (!step) throw notFound(`Paso no encontrado: ${stepId}`);
       fresh.artifacts.unshift(artifact);
       fresh.artifacts = fresh.artifacts.slice(0, 200);
       step.artifactIds.push(artifact.id);
@@ -1791,10 +1796,10 @@ export class QuestService {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (["completed", "abandoned"].includes(quest.status)) {
-        throw new Error("Esta quest ya no admite evidencia.");
+        throw deny("Esta quest ya no admite evidencia.");
       }
       const step = quest.steps.find((candidate) => candidate.id === stepId);
-      if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
+      if (!step) throw notFound(`Paso no encontrado: ${stepId}`);
 
       const artifact = witnessArtifact(input, questId, stepId, this.clock.now());
       state.artifacts.unshift(artifact);
@@ -1832,16 +1837,16 @@ export class QuestService {
 
     const state = await this.store.read();
     const quest = requireQuest(state, questId);
-    if (quest.status !== "active") throw new Error("La quest debe estar activa para evaluar evidencia.");
+    if (quest.status !== "active") throw deny("La quest debe estar activa para evaluar evidencia.");
     const step: QuestStep | undefined = quest.steps.find((candidate) => candidate.id === stepId);
-    if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
-    if (step.status === "completed") throw new Error("Este paso ya recibió todo su impacto.");
+    if (!step) throw notFound(`Paso no encontrado: ${stepId}`);
+    if (step.status === "completed") throw deny("Este paso ya recibió todo su impacto.");
 
     const wanted = input.artifactIds?.length ? new Set(input.artifactIds) : new Set(step.artifactIds);
     const artifacts = state.artifacts.filter((artifact) => artifact.questId === questId && artifact.stepIds.includes(stepId) && wanted.has(artifact.id));
     const note = (input.note ?? "").trim();
     if (!note && artifacts.length === 0) {
-      throw new Error("Entrega un artefacto o describe la evidencia antes de pedir el veredicto.");
+      throw deny("Entrega un artefacto o describe la evidencia antes de pedir el veredicto.");
     }
 
     const remainingImpact = step.weight - step.impactAwarded;
@@ -1878,7 +1883,7 @@ export class QuestService {
   async completeStep(questId: string, stepId: string, evidenceNote: string): Promise<{ quest: Quest; battle: BattleState }> {
     const snapshot = await this.snapshot();
     const step = snapshot.realm.quests.find((quest) => quest.id === questId)?.steps.find((candidate) => candidate.id === stepId);
-    if (!step) throw new Error(`Paso no encontrado: ${stepId}`);
+    if (!step) throw notFound(`Paso no encontrado: ${stepId}`);
     const result = await this.submitEvidence(questId, stepId, {
       summary: evidenceNote,
       source: "user_declaration",
@@ -1893,13 +1898,13 @@ export class QuestService {
     questId: string,
     input: { reason: string; proposedBy: string; changes: QuestAmendmentChange[] },
   ): Promise<QuestAmendment> {
-    if (input.reason.trim().length < 10) throw new Error("Explica qué cambió en la realidad antes de proponer el amendment.");
-    if (input.changes.length === 0) throw new Error("El amendment debe proponer al menos un cambio.");
+    if (input.reason.trim().length < 10) throw deny("Explica qué cambió en la realidad antes de proponer el amendment.");
+    if (input.changes.length === 0) throw deny("El amendment debe proponer al menos un cambio.");
 
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
-      if (!["active", "waiting_external"].includes(quest.status)) throw new Error("Sólo una quest iniciada puede recibir un amendment.");
-      if (quest.amendments.some((candidate) => candidate.status === "proposed")) throw new Error("Ya existe un amendment esperando decisión del jugador.");
+      if (!["active", "waiting_external"].includes(quest.status)) throw deny("Sólo una quest iniciada puede recibir un amendment.");
+      if (quest.amendments.some((candidate) => candidate.status === "proposed")) throw deny("Ya existe un amendment esperando decisión del jugador.");
 
       // Validar sobre una copia garantiza que la propuesta aceptada será aplicable,
       // sin tocar todavía el contrato ni el impacto histórico.
@@ -1925,19 +1930,19 @@ export class QuestService {
   }
 
   async acceptAmendment(questId: string, amendmentId: string, userAccepted: boolean): Promise<{ quest: Quest; amendment: QuestAmendment; battle: BattleState }> {
-    if (!userAccepted) throw new Error("Los cambios materiales requieren aceptación explícita del jugador.");
+    if (!userAccepted) throw deny("Los cambios materiales requieren aceptación explícita del jugador.");
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       const amendment = quest.amendments.find((candidate) => candidate.id === amendmentId);
-      if (!amendment) throw new Error(`Amendment no encontrado: ${amendmentId}`);
-      if (amendment.status !== "proposed") throw new Error("Este amendment ya fue resuelto.");
+      if (!amendment) throw notFound(`Amendment no encontrado: ${amendmentId}`);
+      if (amendment.status !== "proposed") throw deny("Este amendment ya fue resuelto.");
 
       const historicalImpact = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
       const previousStatus = quest.status;
       const timestamp = this.clock.iso();
       applyAmendmentChanges(quest, amendment.changes, timestamp);
       const preservedImpact = quest.steps.reduce((sum, step) => sum + step.impactAwarded, 0);
-      if (preservedImpact !== historicalImpact) throw new Error("El amendment intentó alterar impacto histórico.");
+      if (preservedImpact !== historicalImpact) throw deny("El amendment intentó alterar impacto histórico.");
 
       amendment.status = "accepted";
       amendment.acceptedAt = timestamp;
@@ -1960,7 +1965,7 @@ export class QuestService {
       const quest = requireQuest(state, questId);
       const step = requireStep(quest, targetStepId);
       const artifact = state.artifacts.find((candidate) => candidate.id === artifactId && candidate.questId === questId);
-      if (!artifact) throw new Error(`Artefacto no encontrado en esta quest: ${artifactId}`);
+      if (!artifact) throw notFound(`Artefacto no encontrado en esta quest: ${artifactId}`);
       if (!artifact.stepIds.includes(targetStepId)) artifact.stepIds.push(targetStepId);
       if (!step.artifactIds.includes(artifactId)) step.artifactIds.push(artifactId);
       quest.updatedAt = this.clock.iso();
@@ -1983,16 +1988,16 @@ export class QuestService {
     questId: string,
     input: { reason: string; damage: number; stepId?: string },
   ): Promise<{ battle: BattleState; lifeEventId: string; gameEventId: string }> {
-    if (input.reason.trim().length < 10) throw new Error("Describe el requisito inesperado que representa este ataque.");
-    if (!Number.isInteger(input.damage) || input.damage < 1 || input.damage > 50) throw new Error("El daño debe ser un entero entre 1 y 50.");
+    if (input.reason.trim().length < 10) throw deny("Describe el requisito inesperado que representa este ataque.");
+    if (!Number.isInteger(input.damage) || input.damage < 1 || input.damage > 50) throw deny("El daño debe ser un entero entre 1 y 50.");
     if (FORBIDDEN_REQUIREMENT_REASON.test(input.reason)) {
-      throw new Error(
+      throw deny(
         "Un reintento, un error técnico, la latencia, un assist duplicado o el tiempo transcurrido NO son exigencias nuevas de la realidad. La presión del reloj ya la cobra el servidor: no la cobres otra vez a mano.",
       );
     }
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
-      if (quest.status !== "active") throw new Error("La Horda sólo puede atacar un frente activo con presión real; una espera externa no recibe daño automático.");
+      if (quest.status !== "active") throw deny("La Horda sólo puede atacar un frente activo con presión real; una espera externa no recibe daño automático.");
       if (input.stepId) requireStep(quest, input.stepId);
       const timestamp = this.clock.iso();
       const lifeEventId = randomUUID();
@@ -2083,15 +2088,15 @@ export class QuestService {
     reason: string;
     invalidatedBy?: string;
   }): Promise<{ eventId: string; type: string; healed: number; shieldRestored: number; message: string }> {
-    if (input.reason.trim().length < 10) throw new Error("Explica por qué este hecho fue un error operativo antes de anularlo.");
+    if (input.reason.trim().length < 10) throw deny("Explica por qué este hecho fue un error operativo antes de anularlo.");
     const { result } = await this.store.mutate((state) => {
       const timestamp = this.clock.iso();
       const by = input.invalidatedBy?.trim().slice(0, 60) || "codice";
       const lifeEvent = (state.lifeEvents ?? []).find((candidate) => candidate.id === input.eventId);
       const gameEvent = (state.gameEvents ?? []).find((candidate) => candidate.id === input.eventId);
-      if (!lifeEvent && !gameEvent) throw new Error(`Hecho no encontrado: ${input.eventId}`);
+      if (!lifeEvent && !gameEvent) throw notFound(`Hecho no encontrado: ${input.eventId}`);
       if (lifeEvent?.status === "invalidated" || gameEvent?.status === "invalidated") {
-        throw new Error("Ese hecho ya estaba anulado. Anular dos veces no devuelve el doble.");
+        throw deny("Ese hecho ya estaba anulado. Anular dos veces no devuelve el doble.");
       }
 
       let healed = 0;
@@ -2171,7 +2176,7 @@ export class QuestService {
         return null;
       }
       const campaign = requireCampaign(state, campaignId);
-      if (campaign.status === "draft") throw new Error("Sella el pacto antes de poner esta campaña en foco.");
+      if (campaign.status === "draft") throw deny("Sella el pacto antes de poner esta campaña en foco.");
       // Idempotente: enfocar dos veces no genera dos hechos.
       if (state.focusedCampaignId === campaign.id) return campaign;
       state.focusedCampaignId = campaign.id;
@@ -2187,7 +2192,7 @@ export class QuestService {
   }
 
   async createSaga(input: { title: string; summary?: string; estimatedActiveMinutes?: number }): Promise<Saga> {
-    if (input.title.trim().length < 3) throw new Error("La saga necesita un título.");
+    if (input.title.trim().length < 3) throw deny("La saga necesita un título.");
     const { result } = await this.store.mutate((state) => {
       const timestamp = this.clock.iso();
       const saga: Saga = {
@@ -2227,10 +2232,10 @@ export class QuestService {
     bossDescription?: string;
     initialActs?: Array<{ title: string; subtitle?: string; outcome?: string; estimatedActiveMinutes?: number }>;
   }): Promise<{ campaign: Campaign; acts: Act[] }> {
-    if (input.title.trim().length < 3) throw new Error("La campaña necesita un título.");
+    if (input.title.trim().length < 3) throw deny("La campaña necesita un título.");
     const { result } = await this.store.mutate((state) => {
       const saga = input.sagaId ? state.sagas.find((candidate) => candidate.id === input.sagaId) : undefined;
-      if (input.sagaId && !saga) throw new Error(`Saga no encontrada: ${input.sagaId}`);
+      if (input.sagaId && !saga) throw notFound(`Saga no encontrada: ${input.sagaId}`);
       const timestamp = this.clock.iso();
       const campaign: Campaign = {
         id: randomUUID(),
@@ -2288,7 +2293,7 @@ export class QuestService {
     const { result } = await this.store.mutate((state) => {
       const campaign = requireCampaign(state, campaignId);
       if (campaign.status === "abandoned") return campaign;
-      if (campaign.status === "completed") throw new Error("Una campaña conquistada es historia: no se retira.");
+      if (campaign.status === "completed") throw deny("Una campaña conquistada es historia: no se retira.");
       campaign.status = "abandoned";
       campaign.updatedAt = this.clock.iso();
       if (state.focusedCampaignId === campaign.id) delete state.focusedCampaignId;
@@ -2318,11 +2323,11 @@ export class QuestService {
     fronts?: string[];
   }): Promise<{ campaign: Campaign; acts: Act[]; proposal: ScaleProposal }> {
     const intent = input.intent.trim();
-    if (intent.length < 8) throw new Error("Describe el objetivo con un poco más de detalle.");
+    if (intent.length < 8) throw deny("Describe el objetivo con un poco más de detalle.");
     const fronts = (input.fronts ?? []).map((front) => front.trim()).filter(Boolean).slice(0, MAX_ACTS_PER_CAMPAIGN);
     const proposal = this.classifyObjective(intent, { activeMinutes: input.activeMinutes, naturalCampaigns: 1 });
     if (proposal.scale === "quest") {
-      throw new Error(
+      throw deny(
         `Esto son ${proposal.activeMinutes} min de trabajo activo: cabe en una sola Battle. Crea una Quest y no una Campaña; no hagas jerarquía ceremonial.`,
       );
     }
@@ -2357,7 +2362,7 @@ export class QuestService {
   ): Promise<{ campaign: Campaign; acts: Act[] }> {
     const { result } = await this.store.mutate((state) => {
       const campaign = requireCampaign(state, campaignId);
-      if (campaign.status !== "draft") throw new Error("Sólo se puede reformular una campaña en borrador.");
+      if (campaign.status !== "draft") throw deny("Sólo se puede reformular una campaña en borrador.");
       const timestamp = this.clock.iso();
       if (patch.title !== undefined) campaign.title = patch.title.trim().slice(0, 120);
       if (patch.intent !== undefined) campaign.intent = patch.intent.trim().slice(0, 1000);
@@ -2379,7 +2384,7 @@ export class QuestService {
         state.acts = state.acts.filter((act) => act.campaignId !== campaign.id || keep.includes(act.id));
         campaign.actIds = keep;
         if (keep.length + patch.initialActs.length > MAX_ACTS_PER_CAMPAIGN) {
-          throw new Error(`Una campaña no sostiene más de ${MAX_ACTS_PER_CAMPAIGN} Actos.`);
+          throw deny(`Una campaña no sostiene más de ${MAX_ACTS_PER_CAMPAIGN} Actos.`);
         }
         for (const proposal of patch.initialActs) {
           const act = buildAct(campaign, proposal, timestamp);
@@ -2405,12 +2410,12 @@ export class QuestService {
    * ninguna otra campaña: sólo la incorpora a los frentes vivos del reino.
    */
   async acceptCampaign(campaignId: string, userAccepted: boolean): Promise<Campaign> {
-    if (!userAccepted) throw new Error("La aceptación explícita del usuario es obligatoria.");
+    if (!userAccepted) throw deny("La aceptación explícita del usuario es obligatoria.");
     const { result } = await this.store.mutate((state) => {
       const campaign = requireCampaign(state, campaignId);
       // Idempotente: reintentar un sello ya puesto no rompe nada.
       if (campaign.status === "active") return campaign;
-      if (campaign.status !== "draft") throw new Error(`Esta campaña ya está ${campaign.status}.`);
+      if (campaign.status !== "draft") throw deny(`Esta campaña ya está ${campaign.status}.`);
       campaign.status = "active";
       campaign.acceptedAt = this.clock.iso();
       campaign.updatedAt = campaign.acceptedAt;
@@ -2436,11 +2441,11 @@ export class QuestService {
     /** Dependencias EXPLÍCITAS. Sin esto el Acto nace disponible, en paralelo. */
     dependsOnActIds?: string[];
   }): Promise<Act> {
-    if (input.title.trim().length < 3) throw new Error("El acto necesita un título.");
+    if (input.title.trim().length < 3) throw deny("El acto necesita un título.");
     const { result } = await this.store.mutate((state) => {
       const campaign = input.campaignId ? requireCampaign(state, input.campaignId) : undefined;
       if (campaign && campaign.actIds.length >= MAX_ACTS_PER_CAMPAIGN) {
-        throw new Error(`La campaña «${campaign.title}» ya sostiene ${MAX_ACTS_PER_CAMPAIGN} Actos: abre otra Campaña bajo una Saga.`);
+        throw deny(`La campaña «${campaign.title}» ya sostiene ${MAX_ACTS_PER_CAMPAIGN} Actos: abre otra Campaña bajo una Saga.`);
       }
       const timestamp = this.clock.iso();
       const act = buildAct(campaign, input, timestamp);
@@ -2467,18 +2472,18 @@ export class QuestService {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       const act = target.actId ? state.acts.find((candidate) => candidate.id === target.actId) ?? null : null;
-      if (target.actId && !act) throw new Error(`Acto no encontrado: ${target.actId}`);
+      if (target.actId && !act) throw notFound(`Acto no encontrado: ${target.actId}`);
       const campaign = target.campaignId
         ? requireCampaign(state, target.campaignId)
         : act?.campaignId
           ? requireCampaign(state, act.campaignId)
           : null;
       if (act && campaign && act.campaignId && act.campaignId !== campaign.id) {
-        throw new Error(`El acto «${act.title}» pertenece a otra campaña.`);
+        throw deny(`El acto «${act.title}» pertenece a otra campaña.`);
       }
-      if (!act && !campaign) throw new Error("Indica al menos una campaña o un acto de destino.");
+      if (!act && !campaign) throw deny("Indica al menos una campaña o un acto de destino.");
       if (act && act.questIds.length >= MAX_QUESTS_PER_ACT && !act.questIds.includes(questId)) {
-        throw new Error(`El acto «${act.title}» ya sostiene ${MAX_QUESTS_PER_ACT} Battles: parte el trabajo en otro Acto.`);
+        throw deny(`El acto «${act.title}» ya sostiene ${MAX_QUESTS_PER_ACT} Battles: parte el trabajo en otro Acto.`);
       }
 
       const timestamp = this.clock.iso();
@@ -2552,7 +2557,7 @@ export class QuestService {
         return null;
       }
       const act = state.acts.find((candidate) => candidate.id === actId);
-      if (!act) throw new Error(`Acto no encontrado: ${actId}`);
+      if (!act) throw notFound(`Acto no encontrado: ${actId}`);
       if (state.focusedActId === act.id) return act;
       state.focusedActId = act.id;
       addEvent(state, {
@@ -2577,13 +2582,13 @@ export class QuestService {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (quest.status !== "draft" || quest.acceptedAt) {
-        throw new Error("Sólo un borrador nunca aceptado puede eliminarse. Usa abandon_quest para una Quest ya iniciada.");
+        throw deny("Sólo un borrador nunca aceptado puede eliminarse. Usa abandon_quest para una Quest ya iniciada.");
       }
       const hasValidatedEvidence = state.evidence.some(
         (record) => record.questId === questId && record.impactAwarded > 0,
       );
       if (hasValidatedEvidence) {
-        throw new Error("Este borrador tiene evidencia validada: es historia real y no se borra.");
+        throw deny("Este borrador tiene evidencia validada: es historia real y no se borra.");
       }
       state.quests = state.quests.filter((candidate) => candidate.id !== questId);
       for (const act of state.acts) {
@@ -2623,56 +2628,26 @@ export class QuestService {
   }
 
   async markNotificationRead(notificationId: string): Promise<NotificationRecord> {
-    const { result } = await this.store.mutate((state) => {
-      const record = (state.notifications ?? []).find((candidate) => candidate.id === notificationId);
-      if (!record) throw new Error(`Notificación no encontrada: ${notificationId}`);
-      record.readAt ??= this.clock.iso();
-      return record;
-    });
+    const { result } = await this.store.mutate((state) => markRead(state, notificationId, this.clock.now()));
     return result;
   }
 
   async archiveNotification(notificationId: string): Promise<NotificationRecord> {
-    const { result } = await this.store.mutate((state) => {
-      const record = (state.notifications ?? []).find((candidate) => candidate.id === notificationId);
-      if (!record) throw new Error(`Notificación no encontrada: ${notificationId}`);
-      record.archivedAt ??= this.clock.iso();
-      record.readAt ??= this.clock.iso();
-      return record;
-    });
+    const { result } = await this.store.mutate((state) => archive(state, notificationId, this.clock.now()));
     return result;
   }
 
-  /** Un intento de entrega NUEVO sobre el registro existente. Nada más. */
   async resendNotification(notificationId: string): Promise<NotificationRecord> {
-    const { result } = await this.store.mutate((state) => {
-      const record = (state.notifications ?? []).find((candidate) => candidate.id === notificationId);
-      if (!record) throw new Error(`Notificación no encontrada: ${notificationId}`);
-      attemptPush(record, this.clock.now());
-      return record;
-    });
+    const { result } = await this.store.mutate((state) => resend(state, notificationId, this.clock.now()));
     return result;
   }
 
-  /** Reenvía la última notificación de una entidad/tipo. No crea una nueva. */
   async resendEntityNotification(input: {
     entityType: NotificationEntityType;
     entityId: string;
     notificationType?: NotificationType;
   }): Promise<NotificationRecord> {
-    const { result } = await this.store.mutate((state) => {
-      const record = (state.notifications ?? []).find(
-        (candidate) =>
-          candidate.entityId === input.entityId &&
-          candidate.entityType === input.entityType &&
-          (input.notificationType ? candidate.type === input.notificationType : true),
-      );
-      if (!record) {
-        throw new Error("No existe ninguna notificación para esa entidad. Reenviar no crea una nueva.");
-      }
-      attemptPush(record, this.clock.now());
-      return record;
-    });
+    const { result } = await this.store.mutate((state) => resendForEntity(state, input, this.clock.now()));
     return result;
   }
 
@@ -2723,8 +2698,8 @@ export class QuestService {
   async discardQuest(questId: string, reason: string): Promise<{ questId: string; title: string; outcome: "deleted" | "abandoned" }> {
     const state = await this.tick();
     const quest = state.quests.find((candidate) => candidate.id === questId);
-    if (!quest) throw new Error(`Quest no encontrada: ${questId}`);
-    if (quest.status === "completed") throw new Error("Esta Quest ya está completada: su historia no se descarta.");
+    if (!quest) throw notFound(`Quest no encontrada: ${questId}`);
+    if (quest.status === "completed") throw deny("Esta Quest ya está completada: su historia no se descarta.");
     if (quest.status === "abandoned") return { questId, title: quest.title, outcome: "abandoned" };
 
     const pristineDraft =
@@ -2744,7 +2719,7 @@ export class QuestService {
     const { result } = await this.store.mutate((state) => {
       const quest = requireQuest(state, questId);
       if (!["draft", "accepted", "active", "waiting_external"].includes(quest.status)) {
-        throw new Error("Esta quest ya no puede abandonarse.");
+        throw deny("Esta quest ya no puede abandonarse.");
       }
       quest.status = "abandoned";
       quest.abandonedAt = this.clock.iso();

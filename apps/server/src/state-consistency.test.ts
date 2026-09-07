@@ -6,6 +6,14 @@ import type { QuestPlanInput, RealmState } from "./domain.js";
 import { backfillEncounter } from "./horde.js";
 import { QuestService } from "./quest-service.js";
 import { JsonRealmStore } from "./store.js";
+import { fixedClock } from "./clock.js";
+
+/**
+ * EL RELOJ DEL REINO SE PLANTA (artículo 8, ADR-0006). Sin esto, la presión y
+ * las ventanas críticas dependían del tiempo real que tardara la suite, y la
+ * misma prueba pasaba aislada y fallaba bajo carga.
+ */
+const RELOJ_DEL_REINO = "2026-05-11T09:00:00.000Z";
 
 /**
  * UNA MIGRACIÓN NO PUEDE RESUCITAR AL ENEMIGO.
@@ -40,9 +48,9 @@ describe("Consistencia de estado", () => {
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-consistency-"));
     statePath = join(directory, "state.json");
-    store = new JsonRealmStore(statePath);
+    store = new JsonRealmStore(statePath, fixedClock(RELOJ_DEL_REINO));
     await store.init();
-    service = new QuestService(store, undefined, directory, "torreon-consistency-test");
+    service = new QuestService(store, undefined, directory, "torreon-consistency-test", fixedClock(RELOJ_DEL_REINO));
   });
 
   afterEach(async () => {
@@ -65,7 +73,7 @@ describe("Consistencia de estado", () => {
     delete (raw.quests[0].battle as { enemies?: unknown }).enemies;
     await writeFile(statePath, JSON.stringify(raw, null, 2), "utf8");
 
-    const migrated = await new QuestService(new JsonRealmStore(statePath), undefined, directory, "torreon-consistency-test").snapshot();
+    const migrated = await new QuestService(new JsonRealmStore(statePath, fixedClock(RELOJ_DEL_REINO)), undefined, directory, "torreon-consistency-test", fixedClock(RELOJ_DEL_REINO)).snapshot();
     expect(migrated.battle?.enemies).toHaveLength(4);
     // El invariante: la suma de la formación es la vida histórica, no 100.
     expect(migrated.battle!.enemies.reduce((sum, enemy) => sum + enemy.health, 0)).toBe(10);
@@ -88,7 +96,7 @@ describe("Consistencia de estado", () => {
     for (const enemy of raw.quests[0].battle!.enemies) enemy.health = enemy.maxHealth;
     await writeFile(statePath, JSON.stringify(raw, null, 2), "utf8");
 
-    const repaired = await new QuestService(new JsonRealmStore(statePath), undefined, directory, "torreon-consistency-test").snapshot();
+    const repaired = await new QuestService(new JsonRealmStore(statePath, fixedClock(RELOJ_DEL_REINO)), undefined, directory, "torreon-consistency-test", fixedClock(RELOJ_DEL_REINO)).snapshot();
     expect(repaired.battle!.enemies.reduce((sum, enemy) => sum + enemy.health, 0)).toBe(10);
     expect(repaired.battle?.progress).toBe(90);
   });

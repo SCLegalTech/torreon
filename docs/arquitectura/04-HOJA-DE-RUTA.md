@@ -12,7 +12,7 @@ añadiendo juego entre etapas.
 |---|---|---|---|
 | 🔑 | **Mitigación inmediata** — cerrar la API abierta | nada; **detiene un daño en curso** | bajo · *código listo, falta desplegar* |
 | ✅ | **E0** — guardarraíles | que lo demás no se deshaga | — |
-| | **E1** — puertos y bordes | pruebas deterministas, errores útiles | bajo |
+| OK | **E1** — puertos y bordes | pruebas deterministas, errores útiles | — |
 | | **E2** — el jugador en el modelo | todo lo multiusuario | medio |
 | | **E3** — persistencia real | concurrencia, auditoría, escala | **alto** |
 | | **E4** — contrato versionado + SSE | **Unity** | medio |
@@ -77,28 +77,32 @@ publicación. Es un tapón mientras llega E5.
 
 ---
 
-## E1 — Puertos y bordes
+## E1 — Puertos y bordes *(hecho)*
 
-Lo barato que hace posible todo lo demás.
+1. **Reloj inyectable** — hecho (art. 8, ADR-0006). `clock.ts` define el puerto
+   y tres relojes: el de pared, uno detenido (`fixedClock`) y uno que sólo
+   avanza cuando alguien lo mueve (`manualClock`). Las 33 llamadas a
+   `new Date()` salieron del Núcleo; una prueba de aptitud impide que vuelvan.
+2. **Validación con esquema en HTTP** — hecho (art. 7). `contracts.ts` es ahora
+   la fuente única de las formas de entrada: `mcp.ts` importa las suyas de ahí
+   y las 21 rutas `/api` con cuerpo se validan en el borde. Una petición sin
+   forma se rechaza con `422` **diciendo qué campo**.
+3. **Errores tipados** — hecho. `errors.ts` define `DomainError` con clase
+   (`not_found` 404, `conflict` 409, `invalid` 422, `forbidden` 403), y lo que
+   NO es una regla del reino sale como `500`: se acabó culpar al cliente de un
+   fallo nuestro.
+4. **Retirar `mobile-store.ts`** — hecho en E0.
+5. **`max_machines_running = 1` en `fly.toml`** — hecho, con el porqué escrito
+   al lado: hasta E3, la integridad del reino depende de que no se escale.
 
-1. **Reloj inyectable** (art. 8). Un puerto `Clock`; el Núcleo lo recibe. Se
-   eliminan las 33 llamadas a `new Date()` de los módulos de dominio.
-   *Se sabe que funcionó cuando `quick-battles-finance.test.ts` pasa cualquier
-   día del mes* — hoy falla 25 de cada 30.
-2. **Validación con esquema en HTTP** (art. 7). Las 59 rutas dejan de hacer
-   `String(req.body?.x ?? "")`. Zod ya está en el proyecto y `mcp.ts` ya define
-   los esquemas: se comparten, no se reescriben.
-3. **Errores tipados.** Un `DomainError` con clase (`not_found`, `conflict`,
-   `forbidden`, `invalid`) que el borde traduce a HTTP y a MCP. Se acaba el
-   `400` para todo.
-4. ~~Retirar `mobile-store.ts`~~ ✅ hecho en E0.
-5. **`max_machines = 1` explícito en `fly.toml`**, con el comentario de por qué
-   es crítico hasta E3.
+**Además, forzado por el trinquete:** al crecer `quest-service.ts` no se subió
+el presupuesto, se extrajeron tres módulos —`realm-events.ts`,
+`treasury-flow.ts` y las operaciones del Centro de Notificaciones—. El
+orquestador bajó de 2 922 a 2 767 líneas.
 
-*Criterio:* suite verde cualquier día del mes y **estable en 20 ejecuciones
-seguidas** —hoy `battle-timer.test.ts` falla intermitentemente bajo carga—; una
-petición inválida a `/api` y una a `/mcp` fallan con el mismo mensaje y el
-código correcto.
+*Criterio cumplido:* **269 pruebas, verdes tres ejecuciones seguidas y verdes
+cualquier día del mes.** `battle-timer` y `combat-continuity` dejaron de fallar
+bajo carga: todas las pruebas de servicio plantan el reloj del reino.
 
 ---
 

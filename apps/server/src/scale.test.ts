@@ -6,6 +6,14 @@ import type { QuestPlanInput } from "./domain.js";
 import { QuestService } from "./quest-service.js";
 import { classifyScale, MAX_ACTS_PER_CAMPAIGN, MAX_QUESTS_PER_ACT } from "./scale.js";
 import { JsonRealmStore } from "./store.js";
+import { fixedClock } from "./clock.js";
+
+/**
+ * EL RELOJ DEL REINO SE PLANTA (artículo 8, ADR-0006). Sin esto, la presión y
+ * las ventanas críticas dependían del tiempo real que tardara la suite, y la
+ * misma prueba pasaba aislada y fallaba bajo carga.
+ */
+const RELOJ_DEL_REINO = "2026-05-11T09:00:00.000Z";
 
 /**
  * LA ESCALA DEL MUNDO SIGUE LA ESCALA DE LA VIDA.
@@ -80,9 +88,9 @@ describe("Jerarquía Saga → Campaña → Acto → Quest", () => {
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-scale-"));
-    const store = new JsonRealmStore(join(directory, "state.json"));
+    const store = new JsonRealmStore(join(directory, "state.json"), fixedClock(RELOJ_DEL_REINO));
     await store.init();
-    service = new QuestService(store, undefined, directory, "torreon-scale-test");
+    service = new QuestService(store, undefined, directory, "torreon-scale-test", fixedClock(RELOJ_DEL_REINO));
   });
 
   afterEach(async () => {

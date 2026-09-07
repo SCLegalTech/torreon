@@ -103,17 +103,21 @@ sola regla del juego. Hoy se cumple; mañana es lo que hace barata la etapa 2.
 respuesta. No leen el almacén, no aplican reglas, no derivan estado.
 
 *Corolario:* toda entrada se valida con esquema (Zod) en el borde, en **ambos**
-transportes, y los errores se traducen a códigos que distinguen «no existe» de
-«no puedes» de «mandaste basura». 🕐 (etapa 1)
+transportes y desde la misma fuente (`contracts.ts`), y los errores se traducen
+a códigos que distinguen «no existe» de «no puedes» de «mandaste basura»
+(`errors.ts`). 🔒
 
-### Artículo 8 · Toda infraestructura entra por un puerto 🕐 (etapa 1)
+### Artículo 8 · Toda infraestructura entra por un puerto 🔒 (reloj) · 🕐 (archivos)
 
 Reloj, generación de identificadores, aleatoriedad y almacenamiento de archivos
 se reciben como dependencia. `new Date()` dentro del Núcleo queda prohibido.
 
-*Por qué:* hoy hay 33 relojes cableados y una prueba que **falla 25 días de cada
+*Por qué:* había 33 relojes cableados y una prueba que **fallaba 25 días de cada
 30** por eso. Un dominio con plazos, ventanas críticas y períodos de facturación
 no se puede probar contra el reloj de pared.
+
+*Estado:* el reloj ya entra por `clock.ts` y una prueba de aptitud lo defiende.
+Falta el almacenamiento de artefactos, que sigue cableado al disco local.
 
 ### Artículo 9 · El monolito sólo puede encoger 🔒
 

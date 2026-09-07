@@ -3,6 +3,7 @@ import { copyFile, mkdir, stat, readFile, writeFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import type { ArtifactKind, EvidenceArtifact } from "./domain.js";
 import { isoAt } from "./clock.js";
+import { deny } from "./errors.js";
 
 const MIME_BY_EXTENSION: Record<string, string> = {
   ".pdf": "application/pdf",
@@ -74,7 +75,7 @@ export async function ingestArtifact(
   // Entrega desde el juego: los bytes vienen en el cuerpo, no en el disco.
   if (input.kind === "file" && input.dataBase64) {
     const buffer = Buffer.from(input.dataBase64, "base64");
-    if (buffer.length === 0) throw new Error("El archivo llegó vacío.");
+    if (buffer.length === 0) throw deny("El archivo llegó vacío.");
     const filename = (input.filename ?? "").trim();
     const declared = (input.mimeType ?? "").trim().toLowerCase();
     const extension = extname(filename).toLowerCase() || EXTENSION_BY_MIME[declared] || "";
@@ -100,7 +101,7 @@ export async function ingestArtifact(
   }
 
   if (input.kind === "file") {
-    if (!input.path?.trim()) throw new Error("Indica la ruta del documento que quieres entregar al Códice.");
+    if (!input.path?.trim()) throw deny("Indica la ruta del documento que quieres entregar al Códice.");
     const sourcePath = resolve(input.path.trim());
     let stats;
     try {
@@ -171,7 +172,7 @@ export async function ingestArtifact(
   }
 
   const text = input.text?.trim() ?? "";
-  if (!text) throw new Error("El artefacto de texto está vacío.");
+  if (!text) throw deny("El artefacto de texto está vacío.");
   return {
     ...base,
     label: input.label?.trim() || `Texto de ${text.length} caracteres`,
@@ -210,7 +211,7 @@ export interface WitnessInput {
 export function witnessArtifact(input: WitnessInput, questId: string, stepId: string, nowMs: number): EvidenceArtifact {
   const observed = input.observed.trim();
   if (observed.length < 10) {
-    throw new Error("El testigo debe describir qué vio en el artefacto, no solo afirmar que existe.");
+    throw deny("El testigo debe describir qué vio en el artefacto, no solo afirmar que existe.");
   }
   const createdAt = isoAt(nowMs);
   return {

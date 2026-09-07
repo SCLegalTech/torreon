@@ -27,6 +27,7 @@ import { obligationPeriodStatus, periodOf } from "./finance.js";
 /** Una Quest en estos estados ya no pide nada: ni avisos, ni atención. */
 const CLOSED_QUEST_STATUS = new Set(["completed", "abandoned"]);
 import { isoAt } from "./clock.js";
+import { deny, notFound } from "./errors.js";
 
 export function notificationKey(
   type: NotificationType,
@@ -446,4 +447,55 @@ export function settleClosedNotifications(state: RealmState, nowMs: number): boo
     settled += settleNotificationsFor(state, quest.id, nowMs);
   }
   return settled > 0;
+}
+
+// ---------------------------------------------------------------------------
+// EL CENTRO, DESDE FUERA.
+//
+// Extraído de `quest-service.ts` (artículo 9). Push es entrega efímera; el
+// registro es la verdad. `resend` sólo abre otro intento de entrega: nunca
+// recrea la Quest ni un segundo NotificationRecord.
+// ---------------------------------------------------------------------------
+
+function requireNotification(state: RealmState, notificationId: string): NotificationRecord {
+  const record = (state.notifications ?? []).find((candidate) => candidate.id === notificationId);
+  if (!record) throw notFound(`Notificación no encontrada: ${notificationId}`);
+  return record;
+}
+
+export function markRead(state: RealmState, notificationId: string, nowMs: number): NotificationRecord {
+  const record = requireNotification(state, notificationId);
+  record.readAt ??= isoAt(nowMs);
+  return record;
+}
+
+/** Jubilar un aviso NO es borrarlo: sigue consultable con `includeArchived`. */
+export function archive(state: RealmState, notificationId: string, nowMs: number): NotificationRecord {
+  const record = requireNotification(state, notificationId);
+  record.archivedAt ??= isoAt(nowMs);
+  record.readAt ??= isoAt(nowMs);
+  return record;
+}
+
+export function resend(state: RealmState, notificationId: string, nowMs: number): NotificationRecord {
+  const record = requireNotification(state, notificationId);
+  attemptPush(record, nowMs);
+  return record;
+}
+
+/** Reenvía el último aviso de una entidad/tipo. No crea uno nuevo. */
+export function resendForEntity(
+  state: RealmState,
+  input: { entityType: NotificationEntityType; entityId: string; notificationType?: NotificationType },
+  nowMs: number,
+): NotificationRecord {
+  const record = (state.notifications ?? []).find(
+    (candidate) =>
+      candidate.entityId === input.entityId &&
+      candidate.entityType === input.entityType &&
+      (input.notificationType ? candidate.type === input.notificationType : true),
+  );
+  if (!record) throw deny("No existe ninguna notificación para esa entidad. Reenviar no crea una nueva.");
+  attemptPush(record, nowMs);
+  return record;
 }

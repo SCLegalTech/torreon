@@ -237,18 +237,24 @@ que leer entero antes de tocar nada.
 `barracks`, `read-models`— sí están bien separados. El problema es sólo el
 orquestador, y por eso es extraíble.)*
 
-### A-3 · Dos capas de transporte con dos disciplinas de validación distintas
+### A-3 · Dos capas de transporte con dos disciplinas de validación distintas *(resuelto)*
 
 | | `mcp.ts` (52 herramientas) | `app.ts` (59 rutas) |
 |---|---|---|
 | Validación | esquemas Zod, límites, `.uuid()`, uniones discriminadas | `String(req.body?.x ?? "")` a mano |
 | Errores | tipados por herramienta | **todo 400**, incluso «no existe» y «conflicto» |
 
-`zod` está en las dependencias y **sólo lo usa `mcp.ts`**. La misma operación
-tiene dos contratos de entrada según por dónde entre, y el cliente HTTP no puede
-distinguir «no lo encontré» de «no puedes hacer eso ahora» de «mandaste basura».
+`zod` estaba en las dependencias y **sólo lo usaba `mcp.ts`**. La misma
+operación tenía dos contratos de entrada según por dónde entrara, y el cliente
+HTTP no podía distinguir «no lo encontré» de «no puedes hacer eso ahora» de
+«mandaste basura».
 
-### A-4 · No hay reloj inyectable
+**Resuelto en E1.** `contracts.ts` es la fuente única de las formas —`mcp.ts`
+importa de ahí— y las 21 rutas `/api` con cuerpo validan en el borde.
+`errors.ts` da clase a los fallos del dominio y el borde los traduce: 404, 409,
+422, 403, y `500` para lo que es culpa nuestra.
+
+### A-4 · No hay reloj inyectable *(resuelto)*
 
 33 llamadas directas a `new Date()` / `Date.now()` en módulos de producción.
 Consecuencia demostrada, no teórica:
@@ -263,7 +269,11 @@ falla los otros 25.** Hoy (día 6) la suite está roja: **182 pasan, 1 falla**, 
 como no hay CI nadie se enteró. Un dominio con plazos, ventanas críticas,
 períodos de facturación y presión temporal **no puede** tener el reloj cableado.
 
-**Y hay un segundo síntoma, peor para el CI que se acaba de añadir: la suite es
+**Resuelto en E1** (ADR-0006): `clock.ts` define el puerto, el Núcleo recibe el
+instante, y una prueba de aptitud impide que `new Date()` vuelva. La suite pasa
+cualquier día del mes.
+
+**Y había un segundo síntoma, peor para el CI recién añadido: la suite era
 inestable bajo carga.** `battle-timer.test.ts > «el plazo vencido con la Horda
 viva cierra el intento sin borrar nada»` falló en una ejecución completa y pasó
 en la siguiente; aislado pasa siempre. Las pruebas de tiempo esperan de verdad

@@ -5,6 +5,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { QuestPlanInput, RealmState } from "./domain.js";
 import { QuestService } from "./quest-service.js";
 import { JsonRealmStore } from "./store.js";
+import { fixedClock } from "./clock.js";
+
+/**
+ * EL RELOJ DEL REINO SE PLANTA (artículo 8, ADR-0006). Sin esto, la presión y
+ * las ventanas críticas dependían del tiempo real que tardara la suite, y la
+ * misma prueba pasaba aislada y fallaba bajo carga.
+ */
+const RELOJ_DEL_REINO = "2026-05-11T09:00:00.000Z";
 
 /**
  * CENTRO DE NOTIFICACIONES.
@@ -36,9 +44,9 @@ describe("Centro de Notificaciones", () => {
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-notif-"));
     statePath = join(directory, "state.json");
-    store = new JsonRealmStore(statePath);
+    store = new JsonRealmStore(statePath, fixedClock(RELOJ_DEL_REINO));
     await store.init();
-    service = new QuestService(store, undefined, directory, "torreon-notif-test");
+    service = new QuestService(store, undefined, directory, "torreon-notif-test", fixedClock(RELOJ_DEL_REINO));
   });
 
   afterEach(async () => {
@@ -141,7 +149,7 @@ describe("Centro de Notificaciones", () => {
     delete (raw as { notificationsBackfilledAt?: string }).notificationsBackfilledAt;
     await writeFile(statePath, JSON.stringify(raw, null, 2), "utf8");
 
-    const migrated = await new QuestService(new JsonRealmStore(statePath), undefined, directory, "torreon-notif-test").snapshot();
+    const migrated = await new QuestService(new JsonRealmStore(statePath, fixedClock(RELOJ_DEL_REINO)), undefined, directory, "torreon-notif-test", fixedClock(RELOJ_DEL_REINO)).snapshot();
     const notif = migrated.notifications.find((n) => n.entityId === draft.id);
     expect(notif).toBeTruthy();
     expect(notif!.type).toBe("quest_created");
@@ -155,7 +163,7 @@ describe("Centro de Notificaciones", () => {
     const raw = JSON.parse(await readFile(statePath, "utf8")) as RealmState;
     raw.notifications = [];
     await writeFile(statePath, JSON.stringify(raw, null, 2), "utf8");
-    const fresh = new QuestService(new JsonRealmStore(statePath), undefined, directory, "torreon-notif-test");
+    const fresh = new QuestService(new JsonRealmStore(statePath, fixedClock(RELOJ_DEL_REINO)), undefined, directory, "torreon-notif-test", fixedClock(RELOJ_DEL_REINO));
 
     const first = (await fresh.getNotifications({})).notifications.find((n) => n.entityId === draft.id)!;
     const second = (await fresh.getNotifications({})).notifications.find((n) => n.entityId === draft.id)!;

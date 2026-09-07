@@ -5,6 +5,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { distributeWeights } from "./codice.js";
 import { demoQuest, enforceArtifactRule, QuestService } from "./quest-service.js";
 import { JsonRealmStore } from "./store.js";
+import { fixedClock } from "./clock.js";
+
+/**
+ * EL RELOJ DEL REINO SE PLANTA (artículo 8, ADR-0006). Sin esto, la presión y
+ * las ventanas críticas dependían del tiempo real que tardara la suite, y la
+ * misma prueba pasaba aislada y fallaba bajo carga.
+ */
+const RELOJ_DEL_REINO = "2026-05-11T09:00:00.000Z";
 
 describe("QuestService", () => {
   let directory: string;
@@ -12,9 +20,9 @@ describe("QuestService", () => {
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-"));
-    const store = new JsonRealmStore(join(directory, "state.json"));
+    const store = new JsonRealmStore(join(directory, "state.json"), fixedClock(RELOJ_DEL_REINO));
     await store.init();
-    service = new QuestService(store);
+    service = new QuestService(store, undefined, undefined, undefined, fixedClock(RELOJ_DEL_REINO));
   });
 
   afterEach(async () => {

@@ -5,6 +5,8 @@ import { dirname, resolve } from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpServer } from "./mcp.js";
 import { demoQuest, QuestService } from "./quest-service.js";
+import { describeFailure, invalid } from "./errors.js";
+import { HTTP_BODIES, type HttpRoute } from "./contracts.js";
 
 export function createHttpApp(service: QuestService) {
   const app = express();
@@ -50,6 +52,29 @@ export function createHttpApp(service: QuestService) {
     res.status(401).json({ error: "Este reino está cerrado con llave." });
   });
 
+  // ---------------------------------------------------------------------------
+  // VALIDACIÓN EN EL BORDE (artículo 7).
+  //
+  // El mismo contrato que ya defendía MCP, aplicado a HTTP: una petición mal
+  // formada se rechaza aquí, con 422 y diciendo QUÉ campo, en vez de convertirse
+  // en un error incomprensible tres capas más adentro. Las reglas del reino
+  // siguen siendo del Núcleo: esto sólo comprueba la forma.
+  // ---------------------------------------------------------------------------
+  const validate =
+    <P = Record<string, string>>(route: HttpRoute): express.RequestHandler<P> =>
+    (req, _res, next) => {
+      const parsed = HTTP_BODIES[route].safeParse(req.body ?? {});
+      if (parsed.success) {
+        req.body = parsed.data;
+        next();
+        return;
+      }
+      const detalle = parsed.error.issues
+        .map((issue) => `${issue.path.join(".") || "cuerpo"}: ${issue.message}`)
+        .join("; ");
+      next(invalid(`La petición no tiene la forma que esta ruta espera — ${detalle}`));
+    };
+
   app.get("/health", async (_req, res) => {
     const snapshot = await service.snapshot();
     res.json({
@@ -92,7 +117,7 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/quests/from-intent", async (req, res, next) => {
+  app.post("/api/quests/from-intent", validate("POST /api/quests/from-intent"), async (req, res, next) => {
     try {
       const snapshot = await service.snapshot();
       if (snapshot.currentQuest && !["completed", "abandoned"].includes(snapshot.currentQuest.status)) {
@@ -114,7 +139,7 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/quests/:questId/accept", async (req, res, next) => {
+  app.post("/api/quests/:questId/accept", validate("POST /api/quests/:questId/accept"), async (req, res, next) => {
     try {
       res.json({ quest: await service.accept(req.params.questId, req.body?.userAccepted === true) });
     } catch (error) {
@@ -123,7 +148,7 @@ export function createHttpApp(service: QuestService) {
   });
 
   // El reloj arranca aquí y sólo aquí: nunca al redactar ni al aceptar.
-  app.post("/api/quests/:questId/start", async (req, res, next) => {
+  app.post("/api/quests/:questId/start", validate("POST /api/quests/:questId/start"), async (req, res, next) => {
     try {
       const minutes = Number(req.body?.durationMinutes);
       res.json({ quest: await service.start(req.params.questId, Number.isFinite(minutes) ? minutes : undefined) });
@@ -141,7 +166,7 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/inventory/use", async (req, res, next) => {
+  app.post("/api/inventory/use", validate("POST /api/inventory/use"), async (req, res, next) => {
     try {
       // El frente se nombra: con dos Battles esperando auxilio, adivinar
       // significaba gastar el Tónico en la que no era.
@@ -158,7 +183,7 @@ export function createHttpApp(service: QuestService) {
   // ELIMINAR: la misión deja de estar entre los asuntos pendientes y deja de
   // generar avisos. El Core decide si eso es borrar un borrador virgen o
   // abandonar una Quest con historia; la pantalla sólo ofrece la decisión.
-  app.post("/api/quests/:questId/discard", async (req, res, next) => {
+  app.post("/api/quests/:questId/discard", validate("POST /api/quests/:questId/discard"), async (req, res, next) => {
     try {
       res.json(await service.discardQuest(req.params.questId, String(req.body?.reason ?? "")));
     } catch (error) {
@@ -182,7 +207,7 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/quests/:questId/battle/recontract", async (req, res, next) => {
+  app.post("/api/quests/:questId/battle/recontract", validate("POST /api/quests/:questId/battle/recontract"), async (req, res, next) => {
     try {
       res.json({
         battle: await service.proposeBattleRecontract(req.params.questId, {
@@ -195,7 +220,7 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/quests/:questId/battle/recontract/accept", async (req, res, next) => {
+  app.post("/api/quests/:questId/battle/recontract/accept", validate("POST /api/quests/:questId/battle/recontract/accept"), async (req, res, next) => {
     try {
       res.json({
         battle: await service.acceptBattleRecontract(req.params.questId, String(req.body?.recontractId ?? ""), req.body?.userAccepted === true),
@@ -205,7 +230,7 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/quests/:questId/steps/:stepId/companion-assist", async (req, res, next) => {
+  app.post("/api/quests/:questId/steps/:stepId/companion-assist", validate("POST /api/quests/:questId/steps/:stepId/companion-assist"), async (req, res, next) => {
     try {
       res.status(201).json({
         assist: await service.recordCompanionAssist({
@@ -224,7 +249,7 @@ export function createHttpApp(service: QuestService) {
   });
 
   // Replanificar repacta el tiempo: no resucita a nadie ni cura gratis.
-  app.post("/api/quests/:questId/battle/retry", async (req, res, next) => {
+  app.post("/api/quests/:questId/battle/retry", validate("POST /api/quests/:questId/battle/retry"), async (req, res, next) => {
     try {
       const minutes = Number(req.body?.durationMinutes);
       res.json(await service.retryBattle(req.params.questId, Number.isFinite(minutes) ? minutes : undefined));
@@ -234,7 +259,7 @@ export function createHttpApp(service: QuestService) {
   });
 
   // Códice elige la escala; esta lectura no crea nada, sólo propone.
-  app.post("/api/scale/classify", async (req, res, next) => {
+  app.post("/api/scale/classify", validate("POST /api/scale/classify"), async (req, res, next) => {
     try {
       const activeMinutes = Number(req.body?.activeMinutes);
       const externalWaitMinutes = Number(req.body?.externalWaitMinutes);
@@ -297,7 +322,7 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/campaigns/:campaignId/accept", async (req, res, next) => {
+  app.post("/api/campaigns/:campaignId/accept", validate("POST /api/campaigns/:campaignId/accept"), async (req, res, next) => {
     try {
       res.json({ campaign: await service.acceptCampaign(req.params.campaignId, req.body?.userAccepted === true) });
     } catch (error) {
@@ -387,7 +412,7 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/quests/:questId/amendments", async (req, res, next) => {
+  app.post("/api/quests/:questId/amendments", validate("POST /api/quests/:questId/amendments"), async (req, res, next) => {
     try {
       res.status(201).json({ amendment: await service.proposeAmendment(req.params.questId, {
         reason: String(req.body?.reason ?? ""),
@@ -399,7 +424,7 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/quests/:questId/amendments/:amendmentId/accept", async (req, res, next) => {
+  app.post("/api/quests/:questId/amendments/:amendmentId/accept", validate("POST /api/quests/:questId/amendments/:amendmentId/accept"), async (req, res, next) => {
     try {
       res.json(await service.acceptAmendment(req.params.questId, req.params.amendmentId, req.body?.userAccepted === true));
     } catch (error) {
@@ -415,7 +440,7 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/quests/:questId/steps/:stepId/evidence", async (req, res, next) => {
+  app.post("/api/quests/:questId/steps/:stepId/evidence", validate("POST /api/quests/:questId/steps/:stepId/evidence"), async (req, res, next) => {
     try {
       res.json(await service.submitEvidence(req.params.questId, req.params.stepId, {
         summary: String(req.body?.summary ?? ""),
@@ -429,7 +454,7 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/quests/:questId/steps/:stepId/artifacts", async (req, res, next) => {
+  app.post("/api/quests/:questId/steps/:stepId/artifacts", validate("POST /api/quests/:questId/steps/:stepId/artifacts"), async (req, res, next) => {
     try {
       const artifact = await service.attachArtifact(req.params.questId, req.params.stepId, {
         kind: req.body?.kind === "file" || req.body?.kind === "link" ? req.body.kind : "text",
@@ -455,7 +480,7 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/quests/:questId/horde-attacks/unexpected-requirement", async (req, res, next) => {
+  app.post("/api/quests/:questId/horde-attacks/unexpected-requirement", validate("POST /api/quests/:questId/horde-attacks/unexpected-requirement"), async (req, res, next) => {
     try {
       res.status(201).json(await service.recordUnexpectedRequirement(req.params.questId, {
         stepId: req.body?.stepId ? String(req.body.stepId) : undefined,
@@ -467,7 +492,7 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/quests/:questId/steps/:stepId/verify", async (req, res, next) => {
+  app.post("/api/quests/:questId/steps/:stepId/verify", validate("POST /api/quests/:questId/steps/:stepId/verify"), async (req, res, next) => {
     try {
       res.json(
         await service.verifyStep(req.params.questId, req.params.stepId, {
@@ -518,7 +543,7 @@ export function createHttpApp(service: QuestService) {
   });
 
   // Disponible no es desplegado: esto declara acceso, nunca participación.
-  app.post("/api/barracks/:heroId/availability", async (req, res, next) => {
+  app.post("/api/barracks/:heroId/availability", validate("POST /api/barracks/:heroId/availability"), async (req, res, next) => {
     try {
       res.json({ barracks: await service.setHeroAvailability(req.params.heroId as never, req.body?.availability) });
     } catch (error) {
@@ -535,7 +560,7 @@ export function createHttpApp(service: QuestService) {
   });
 
   // Sugerencia de planificación. NUNCA repacta un contrato ya aceptado.
-  app.post("/api/battle-memory/hint", async (req, res, next) => {
+  app.post("/api/battle-memory/hint", validate("POST /api/battle-memory/hint"), async (req, res, next) => {
     try {
       res.json({ hint: await service.planningHint(String(req.body?.intent ?? "")) });
     } catch (error) {
@@ -552,7 +577,7 @@ export function createHttpApp(service: QuestService) {
   });
 
   // Anular no es borrar: la auditoría conserva el hecho marcado como inválido.
-  app.post("/api/events/:eventId/invalidate", async (req, res, next) => {
+  app.post("/api/events/:eventId/invalidate", validate("POST /api/events/:eventId/invalidate"), async (req, res, next) => {
     try {
       res.json(
         await service.invalidateEvent({
@@ -675,7 +700,7 @@ export function createHttpApp(service: QuestService) {
   });
 
   // El monto es explícito y obligatorio; nunca se infiere del impacto.
-  app.post("/api/finance/transactions", async (req, res, next) => {
+  app.post("/api/finance/transactions", validate("POST /api/finance/transactions"), async (req, res, next) => {
     try {
       res.status(201).json(await service.recordFinancialTransaction(req.body ?? {}));
     } catch (error) {
@@ -728,9 +753,15 @@ export function createHttpApp(service: QuestService) {
     app.get("*splat", (_req, res) => res.sendFile(resolve(webDist, "index.html")));
   }
 
+  // EL BORDE TRADUCE, NO DECIDE (artículo 7).
+  //
+  // Antes todo salía `400`: «no existe», «ya hay un frente comprometido» y un
+  // fallo nuestro eran indistinguibles, y Unity no podía reaccionar a ninguno.
+  // Ahora cada clase de fallo lleva su código y su motivo, y lo que NO es una
+  // regla del reino sale como `500`: no se le echa la culpa a quien llamó.
   app.use((error: unknown, _req: Request, res: Response, _next: express.NextFunction) => {
-    const message = error instanceof Error ? error.message : "Error inesperado";
-    res.status(400).json({ error: message });
+    const failure = describeFailure(error);
+    res.status(failure.status).json({ error: failure.message, kind: failure.kind });
   });
 
   return app;

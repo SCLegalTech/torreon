@@ -4,6 +4,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { demoQuest, QuestService } from "./quest-service.js";
 import { JsonRealmStore } from "./store.js";
+import { fixedClock } from "./clock.js";
+
+/**
+ * EL RELOJ DEL REINO SE PLANTA (artículo 8, ADR-0006). Sin esto, la presión y
+ * las ventanas críticas dependían del tiempo real que tardara la suite, y la
+ * misma prueba pasaba aislada y fallaba bajo carga.
+ */
+const RELOJ_DEL_REINO = "2026-05-11T09:00:00.000Z";
 
 /**
  * Regresiones del reporte TORREON_FIX_MISSION_STATE_DESYNC.
@@ -23,7 +31,7 @@ describe("Lectura del reino para el Dungeon Master", () => {
     statePath = join(directory, "state.json");
     const store = new JsonRealmStore(statePath);
     await store.init();
-    service = new QuestService(store, undefined, directory, "torreon-prueba");
+    service = new QuestService(store, undefined, directory, "torreon-prueba", fixedClock(RELOJ_DEL_REINO));
   });
 
   afterEach(async () => {
@@ -38,7 +46,7 @@ describe("Lectura del reino para el Dungeon Master", () => {
     // Servicio y store nuevos: si el estado viviera en memoria, esto fallaría.
     const otroStore = new JsonRealmStore(statePath);
     await otroStore.init();
-    const otroServicio = new QuestService(otroStore, undefined, directory, "torreon-prueba");
+    const otroServicio = new QuestService(otroStore, undefined, directory, "torreon-prueba", fixedClock(RELOJ_DEL_REINO));
 
     const snapshot = await otroServicio.snapshot();
     expect(snapshot.currentQuest?.id).toBe(draft.id);
@@ -136,9 +144,11 @@ describe("Lectura del reino para el Dungeon Master", () => {
     await expect(service.abandon(draft.id, "otra vez")).rejects.toThrow("no puede abandonarse");
   });
 
-  it("QUEST_NOT_FOUND es un error identificable, no genérico", async () => {
+  it("una quest que no existe es un error identificable, no genérico", async () => {
+    // El `code: QUEST_NOT_FOUND` improvisado se convirtió en una clase del
+    // dominio, que el borde traduce a 404 sin adivinar por el texto.
     await expect(service.questDetail("00000000-0000-4000-8000-000000000000")).rejects.toMatchObject({
-      code: "QUEST_NOT_FOUND",
+      kind: "not_found",
     });
   });
 });

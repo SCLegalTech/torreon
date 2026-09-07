@@ -6,6 +6,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createHttpApp } from "./app.js";
 import { QuestService } from "./quest-service.js";
 import { JsonRealmStore } from "./store.js";
+import { fixedClock } from "./clock.js";
+
+/**
+ * EL RELOJ DEL REINO SE PLANTA (artículo 8, ADR-0006). Sin esto, la presión y
+ * las ventanas críticas dependían del tiempo real que tardara la suite, y la
+ * misma prueba pasaba aislada y fallaba bajo carga.
+ */
+const RELOJ_DEL_REINO = "2026-05-11T09:00:00.000Z";
 
 /**
  * LA PUERTA DEL REINO.
@@ -22,9 +30,9 @@ describe("La puerta del reino", () => {
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-puerta-"));
-    const store = new JsonRealmStore(join(directory, "state.json"));
+    const store = new JsonRealmStore(join(directory, "state.json"), fixedClock(RELOJ_DEL_REINO));
     await store.init();
-    app = createHttpApp(new QuestService(store, undefined, directory, "torreon-puerta-test"));
+    app = createHttpApp(new QuestService(store, undefined, directory, "torreon-puerta-test", fixedClock(RELOJ_DEL_REINO)));
   });
 
   afterEach(async () => {

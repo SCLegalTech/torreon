@@ -4,8 +4,16 @@ import { join } from "node:path";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createHttpApp } from "./app.js";
-import { QuestService } from "./quest-service.js";
+import { demoQuest, QuestService } from "./quest-service.js";
 import { JsonRealmStore } from "./store.js";
+import { fixedClock } from "./clock.js";
+
+/**
+ * EL RELOJ DEL REINO SE PLANTA (artículo 8, ADR-0006). Sin esto, la presión y
+ * las ventanas críticas dependían del tiempo real que tardara la suite, y la
+ * misma prueba pasaba aislada y fallaba bajo carga.
+ */
+const RELOJ_DEL_REINO = "2026-05-11T09:00:00.000Z";
 
 describe("HTTP app", () => {
   let directory: string;
@@ -14,9 +22,9 @@ describe("HTTP app", () => {
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-http-"));
-    const store = new JsonRealmStore(join(directory, "state.json"));
+    const store = new JsonRealmStore(join(directory, "state.json"), fixedClock(RELOJ_DEL_REINO));
     await store.init();
-    service = new QuestService(store, undefined, directory, "torreon-test-authoritative");
+    service = new QuestService(store, undefined, directory, "torreon-test-authoritative", fixedClock(RELOJ_DEL_REINO));
     app = createHttpApp(service);
   });
 
@@ -128,5 +136,79 @@ describe("HTTP app", () => {
     expect(accepted.body.quest.status).toBe("waiting_external");
     expect(accepted.body.battle.progress).toBe(20);
     expect(accepted.body.battle.enemyHealth).toBe(80);
+  });
+});
+
+/**
+ * EL BORDE TRADUCE, NO DECIDE (artículo 7).
+ *
+ * Antes todo fallo salía como `400`. Unity no puede reaccionar bien a eso: no
+ * es lo mismo «esa Quest ya no existe, vuelve atrás» que «hay un frente con
+ * reloj corriendo, muéstraselo al jugador» que «esto es un fallo nuestro».
+ */
+describe("Cuando el reino dice que no", () => {
+  let directory: string;
+  let app: ReturnType<typeof createHttpApp>;
+  let service: QuestService;
+
+  beforeEach(async () => {
+    directory = await mkdtemp(join(tmpdir(), "torreon-errores-"));
+    const store = new JsonRealmStore(join(directory, "state.json"), fixedClock(RELOJ_DEL_REINO));
+    await store.init();
+    service = new QuestService(store, undefined, directory, "torreon-errores-test", fixedClock(RELOJ_DEL_REINO));
+    app = createHttpApp(service);
+  });
+
+  afterEach(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  it("lo que no existe se dice con 404, no con «petición mal formada»", async () => {
+    const response = await request(app).get("/api/quests/no-existe-esta-quest").expect(404);
+    expect(response.body.kind).toBe("not_found");
+    expect(response.body.error).toMatch(/no encontrada/i);
+  });
+
+  it("una regla del reino se dice con 409 y con el motivo escrito para el jugador", async () => {
+    const draft = await service.createDraft(demoQuest);
+    const response = await request(app)
+      .post(`/api/quests/${draft.id}/accept`)
+      .send({ userAccepted: false })
+      .expect(409);
+    expect(response.body.kind).toBe("conflict");
+    // El mensaje viaja tal cual: el renderer lo muestra, no lo reescribe.
+    expect(response.body.error).toMatch(/aceptación explícita/i);
+  });
+
+  it("una petición sin forma se rechaza en el borde, diciendo qué campo", async () => {
+    const draft = await service.createDraft(demoQuest);
+    const response = await request(app)
+      .post(`/api/quests/${draft.id}/steps/${draft.steps[0].id}/evidence`)
+      .send({ summary: "Hice la tarea", verdict: "milagro", reasoning: "confía en mí", impactAwarded: 40 })
+      .expect(422);
+    expect(response.body.kind).toBe("invalid");
+    expect(response.body.error).toMatch(/verdict/);
+  });
+
+  it("el borde comprueba la forma; la regla sigue siendo del Núcleo", async () => {
+    const draft = await service.createDraft(demoQuest);
+    // Forma correcta, momento equivocado: esto NO lo decide el borde.
+    const response = await request(app)
+      .post(`/api/quests/${draft.id}/steps/${draft.steps[0].id}/evidence`)
+      .send({ summary: "Hice la tarea", verdict: "accepted", reasoning: "sin iniciar la quest", impactAwarded: 40 })
+      .expect(409);
+    expect(response.body.kind).toBe("conflict");
+  });
+
+  it("un frente ya comprometido no es basura del cliente: es el estado del reino", async () => {
+    const primera = await service.createDraft(demoQuest);
+    await service.accept(primera.id, true);
+    await service.start(primera.id);
+
+    const segunda = await service.createDraft({ ...demoQuest, title: "Otro frente" });
+    await service.accept(segunda.id, true);
+    const response = await request(app).post(`/api/quests/${segunda.id}/start`).expect(409);
+    expect(response.body.kind).toBe("conflict");
+    expect(response.body.error).toMatch(/Battle comprometida/);
   });
 });
