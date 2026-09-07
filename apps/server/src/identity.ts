@@ -117,6 +117,21 @@ export function mintToken(prefix: "tor_s" | "tor_a"): string {
 export interface RegistrationInput {
   deviceKey: string;
   displayName: string;
+  /** El código de la beta. Obligatorio sólo si el reino declara uno. */
+  inviteCode?: string;
+}
+
+/**
+ * UNA BETA CERRADA SE CIERRA CON ALGO.
+ *
+ * Con el repositorio público, la dirección del reino deja de ser un secreto:
+ * cualquiera que lo clone sabe a dónde apuntar. Si `TORREON_INVITE_CODE` está
+ * definido, registrarse exige el código; sin él, el registro sigue abierto —que
+ * es lo que hace falta mientras la beta es de tres amigos.
+ */
+export function invitationRequired(raw = process.env.TORREON_INVITE_CODE): string | null {
+  const codigo = raw?.trim();
+  return codigo ? codigo : null;
 }
 
 /**
@@ -133,6 +148,10 @@ export function registerPlayer(
 ): { player: PlayerRecord; token: string; session: SessionRecord; claimedLegacyRealm: boolean } {
   if (!input.deviceKey || input.deviceKey.trim().length < 16) {
     throw deny("La llave del dispositivo necesita al menos 16 caracteres.");
+  }
+  const esperado = invitationRequired();
+  if (esperado && input.inviteCode?.trim() !== esperado) {
+    throw deny("Torreón está en beta cerrada. Necesitas un código de invitación para entrar.");
   }
   const displayName = input.displayName.trim().replace(/\s+/g, " ").slice(0, 40);
   if (displayName.length < 2) throw deny("El nombre necesita al menos dos letras.");

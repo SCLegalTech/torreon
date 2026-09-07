@@ -103,6 +103,38 @@ describe("Registrarse en el reino", () => {
     expect(ocupado.body.available).toBe(false);
   });
 
+  /**
+   * UNA BETA CERRADA SE CIERRA CON ALGO.
+   *
+   * Con el repositorio público, la dirección del reino deja de ser un secreto.
+   * Si el reino declara un código, sin él no entra nadie.
+   */
+  it("con código declarado, registrarse sin él no entra", async () => {
+    process.env.TORREON_INVITE_CODE = "los-compadres-2026";
+    try {
+      const sinCodigo = await registrar({ deviceKey: LLAVE_A, displayName: "Colado", archetype: "marques" }).expect(409);
+      expect(sinCodigo.body.error).toMatch(/beta cerrada/i);
+
+      await registrar({ deviceKey: LLAVE_A, displayName: "Colado", archetype: "marques", inviteCode: "cualquiera" }).expect(409);
+      await registrar({ deviceKey: LLAVE_A, displayName: "Invitado", archetype: "marques", inviteCode: "los-compadres-2026" }).expect(201);
+    } finally {
+      delete process.env.TORREON_INVITE_CODE;
+    }
+  });
+
+  it("la pantalla sabe si esta beta pide código", async () => {
+    const abierta = await request(app).get("/v1/session/gate").expect(200);
+    expect(abierta.body.inviteRequired).toBe(false);
+
+    process.env.TORREON_INVITE_CODE = "los-compadres-2026";
+    try {
+      const cerrada = await request(app).get("/v1/session/gate").expect(200);
+      expect(cerrada.body.inviteRequired).toBe(true);
+    } finally {
+      delete process.env.TORREON_INVITE_CODE;
+    }
+  });
+
   it("un nombre de una letra no registra a nadie", async () => {
     await registrar({ deviceKey: LLAVE_A, displayName: "M", archetype: "marques" }).expect(422);
   });

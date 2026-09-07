@@ -2784,11 +2784,21 @@ function Battle({
  * encarna. El id interno del grupo no cambia nunca: aquí sólo se eligen los
  * nombres que el reino resuelve al leer, así que renombrar no toca la historia.
  */
-function CharacterGate({ busy, onCreate }: { busy: boolean; onCreate: (ficha: { archetype: "marques" | "cordera"; displayName: string; petName: string }) => void }) {
+function CharacterGate({ busy, onCreate }: { busy: boolean; onCreate: (ficha: { archetype: "marques" | "cordera"; displayName: string; petName: string; inviteCode?: string }) => void }) {
   const [archetype, setArchetype] = useState<"marques" | "cordera">("marques");
   const [displayName, setDisplayName] = useState("");
   const [petName, setPetName] = useState("Roku");
   const [libre, setLibre] = useState<boolean | null>(null);
+  const [inviteCode, setInviteCode] = useState("");
+  const [invitePedido, setInvitePedido] = useState(false);
+
+  // La beta puede estar cerrada con código. Se pregunta al reino en vez de
+  // adivinarlo: así el campo aparece sólo cuando de verdad hace falta.
+  useEffect(() => {
+    void api<{ inviteRequired: boolean }>("/v1/session/gate")
+      .then((puerta) => setInvitePedido(puerta.inviteRequired))
+      .catch(() => setInvitePedido(false));
+  }, []);
 
   /*
     EL NOMBRE ES ÚNICO EN EL REINO.
@@ -2814,7 +2824,7 @@ function CharacterGate({ busy, onCreate }: { busy: boolean; onCreate: (ficha: { 
     return () => window.clearTimeout(id);
   }, [displayName]);
 
-  const listo = displayName.trim().length >= 2 && petName.trim().length >= 1 && libre !== false;
+  const listo = displayName.trim().length >= 2 && petName.trim().length >= 1 && libre !== false && (!invitePedido || inviteCode.trim().length > 0);
 
   return (
     <main className="scene character-scene">
@@ -2855,6 +2865,13 @@ function CharacterGate({ busy, onCreate }: { busy: boolean; onCreate: (ficha: { 
           {libre === true ? <small className="nombre-libre">Nombre disponible.</small> : null}
         </label>
 
+        {invitePedido ? (
+          <label className="character-field">
+            <span>CÓDIGO DE INVITACIÓN</span>
+            <input value={inviteCode} maxLength={120} placeholder="El que te pasaron" onChange={(event) => setInviteCode(event.target.value)} />
+          </label>
+        ) : null}
+
         <label className="character-field">
           <span>TU MASCOTA</span>
           <input value={petName} maxLength={40} placeholder="Roku" onChange={(event) => setPetName(event.target.value)} />
@@ -2865,7 +2882,7 @@ function CharacterGate({ busy, onCreate }: { busy: boolean; onCreate: (ficha: { 
           className="expedition-button"
           type="button"
           disabled={busy || !listo}
-          onClick={() => onCreate({ archetype, displayName: displayName.trim(), petName: petName.trim() })}
+          onClick={() => onCreate({ archetype, displayName: displayName.trim(), petName: petName.trim(), inviteCode: inviteCode.trim() || undefined })}
         >
           ⚔ ENTRAR AL REINO
         </button>

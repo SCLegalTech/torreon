@@ -2,7 +2,7 @@ import express, { type Router } from "express";
 import { z } from "zod";
 import { bearerOf, requireCaller } from "./auth.js";
 import { invalid } from "./errors.js";
-import { agentsOf, closeSession, grantAgent, nameAvailable, openDeviceSession, registerPlayer, revokeAgent, ALL_SCOPES, type Scope } from "./identity.js";
+import { agentsOf, closeSession, grantAgent, invitationRequired, nameAvailable, openDeviceSession, registerPlayer, revokeAgent, ALL_SCOPES, type Scope } from "./identity.js";
 import type { Kingdom } from "./kingdom.js";
 import { exportPlayer, forgetPlayer } from "./player-data.js";
 
@@ -35,6 +35,7 @@ const registerBody = z.object({
   displayName: z.string().min(2).max(40),
   archetype: z.enum(["marques", "cordera"]),
   petName: z.string().min(1).max(40).optional(),
+  inviteCode: z.string().min(1).max(120).optional(),
 });
 
 function parse<T>(schema: z.ZodType<T>, body: unknown): T {
@@ -85,7 +86,7 @@ export function createIdentityRouter(kingdom: Kingdom): Router {
     try {
       const body = parse(registerBody, req.body);
       const outcome = await kingdom.identity.mutate((identity) =>
-        registerPlayer(identity, { deviceKey: body.deviceKey, displayName: body.displayName }, clock.now()),
+        registerPlayer(identity, { deviceKey: body.deviceKey, displayName: body.displayName, inviteCode: body.inviteCode }, clock.now()),
       );
       const player = await kingdom
         .realmOf(outcome.player.playerId)
@@ -101,6 +102,11 @@ export function createIdentityRouter(kingdom: Kingdom): Router {
     } catch (error) {
       next(error);
     }
+  });
+
+  /** ¿Esta beta pide código? La pantalla lo pregunta para no inventarse un campo. */
+  router.get("/session/gate", async (_req, res) => {
+    res.json({ inviteRequired: invitationRequired() !== null });
   });
 
   /** ¿Está libre este nombre? La pantalla lo pregunta antes de dejar seguir. */

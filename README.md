@@ -1,5 +1,9 @@
 # Torreón
 
+> **¿Vas a contribuir?** Empieza por [CONTRIBUTING.md](CONTRIBUTING.md): cómo
+> levantarlo, cómo compilar tu propia APK contra el reino de la nube, y las
+> cinco reglas que más se rompen.
+
 > **¿Vas a tocar el código?** Empieza por [CLAUDE.md](CLAUDE.md) y por la
 > [constitución del proyecto](docs/arquitectura/01-CONSTITUCION.md). La base
 > arquitectónica completa —auditoría, arquitectura objetivo, contrato para
