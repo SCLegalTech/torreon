@@ -1,101 +1,225 @@
 # Torreón
 
-> **¿Vas a contribuir?** Empieza por [CONTRIBUTING.md](CONTRIBUTING.md): cómo
-> levantarlo, cómo compilar tu propia APK contra el reino de la nube, y las
-> cinco reglas que más se rompen.
+**Un juego donde la vida real es el gameplay.**
 
-> **¿Vas a tocar el código?** Empieza por [CLAUDE.md](CLAUDE.md) y por la
-> [constitución del proyecto](docs/arquitectura/01-CONSTITUCION.md). La base
-> arquitectónica completa —auditoría, arquitectura objetivo, contrato para
-> Unity, hoja de ruta y ADR— está en [docs/arquitectura/](docs/arquitectura/).
+Declaras un propósito real —pagar el arriendo, mandar cinco candidaturas, ordenar
+el estudio—. Un modelo de lenguaje, que aquí se llama **el Códice**, lo convierte
+en un contrato jugable con pasos y una condición de victoria. Y entonces la
+única cosa que hace daño a la Horda es **la evidencia comprobada contra ese
+contrato**.
 
-MVP de **Real Gameplay**: Códice convierte cualquier propósito real en una quest, el servidor MCP guarda el contrato y únicamente la evidencia validada modifica la batalla. El alcance exacto está en [docs/MVP-SLICE-1.md](docs/MVP-SLICE-1.md).
+Ni el tiempo. Ni la actividad. Ni la buena intención. Ni una declaración
+convincente.
 
-## Ejecutar el MVP
+Esa frase es el producto entero. Un Torreón donde declarar basta sería un gestor
+de tareas con espadas.
 
-Requisitos: Node.js 20 o superior.
+---
+
+## Cómo funciona
+
+```
+Tú
+ ↓  «necesito pagar la seguridad social de agosto»
+El Códice  (ChatGPT, Claude o el motor del servidor)
+ ↓  negocia contigo el contrato: pasos, qué prueba cada uno, cuánto pesa
+Un borrador de Quest
+ ↓  TÚ lo aceptas. Nadie acepta por ti.
+Una Battle con reloj
+ ↓  entregas una prueba real: un archivo, un enlace, una foto, un radicado
+El servidor comprueba lo comprobable — existe, tamaño, tipo, hash, extracto
+ ↓
+El Códice emite un veredicto: rechazado, parcial o aceptado
+ ↓
+Evidence → LifeEvent → GameEvent → daño a la Horda
+```
+
+Cuando el impacto validado llega a 100, la Battle termina en KO.
+
+**El modelo propone; el servidor dispone.** El Códice sugiere importancia y
+veredicto, pero el servidor reparte exactamente 100 puntos, acota el impacto a
+lo que el paso permite, y degrada un veredicto que no corresponde a la prueba
+pactada. Si un paso pactó un archivo, una declaración no lo cierra por
+convincente que suene.
+
+### Las piezas
+
+| Pieza | Qué es |
+|---|---|
+| **Quest** | Un contrato verificable. De 3 a 8 pasos cuyos pesos suman 100. |
+| **Battle** | El frente con reloj. Máximo 60 minutos de trabajo activo. |
+| **La Horda** | Cuatro enemigos con rostro. Sólo pierden vida con evidencia validada. |
+| **El grupo** | Tú (Caballero o Maga), el otro arquetipo, y **Roku**, tu mascota. |
+| **Acto / Campaña / Saga** | La jerarquía cuando el trabajo no cabe en una Battle. |
+| **El Códice** | El Dungeon Master. Puede ser ChatGPT, Claude, o el motor del servidor. |
+| **Tesorería** | Dinero **real**, en COP. Ninguna quest fabrica monedas. |
+
+### Lo que el juego NO hace
+
+- **No premia el tiempo.** Estar ocupado no es progresar.
+- **No inventa dinero.** Completar una quest da XP, Aura y maestría; el Tesoro
+  sólo cambia con un hecho financiero real.
+- **No reescribe historia.** Un hecho registrado por error se anula con motivo y
+  autor; no se borra.
+- **No decide nada en el cliente.** La app dibuja. Las reglas viven en el
+  servidor, siempre.
+- **No te vigila.** No lee tus apps, no bloquea el teléfono, no mide tu foco.
+
+---
+
+## Jugar
+
+### Instalar
+
+Descarga la APK de **[Releases](../../releases)** e instálala. Android te pedirá
+permitir instalaciones desde esa fuente.
+
+La primera vez creas tu personaje: **Caballero** o **Maga**, tu nombre en el
+reino, y el nombre de tu mascota. Tu nombre es **único**: la pantalla te dice si
+está libre mientras escribes.
+
+Torreón está en **beta cerrada**. Si el reino pide un código de invitación, te lo
+pasa quien lo administra.
+
+### Las actualizaciones llegan solas
+
+La APK es una cáscara: carga la interfaz del mismo servidor que le sirve los
+datos. Un despliegue actualiza a todo el mundo a la vez, **sin reinstalar nada**.
+
+Sólo hace falta una APK nueva cuando cambia algo nativo: un plugin, un permiso o
+el icono.
+
+### Tu reino es tuyo
+
+Cada jugador tiene su propia partida, aislada de las demás. Nadie ve tus quests,
+tu expediente ni tu dinero.
+
+De los demás jugadores sólo se ve, en la pantalla de **Amigos**, quién está en la
+beta, si está conectado y cuándo se le vio. Nada más.
+
+Puedes **llevarte todo** (`exportar`) o **borrarlo entero** cuando quieras. Un
+expediente al que no se puede renunciar no es un expediente.
+
+---
+
+## Conectar tu Códice por MCP
+
+Aquí está la mitad buena del juego: **jugar sin tocar el teléfono**. Le hablas a
+ChatGPT o a Claude, y ellos crean quests, adjuntan tu evidencia y emiten
+veredictos contra tu reino, por [MCP](https://modelcontextprotocol.io).
+
+### 1. Concede el acceso desde la app
+
+Abre Torreón → **AMIGOS** → *Tus agentes* → escribe un nombre que reconozcas
+(«ChatGPT del portátil») → **CONCEDER ACCESO**.
+
+La app te muestra **una sola vez** la llave y las dos direcciones que necesitas.
+El servidor sólo guarda su huella: no puede volver a enseñártela.
+
+Un agente actúa **en tu nombre**, sobre **tu** reino, con un alcance declarado. Y
+lo cortas cuando quieras — cortarlo **no** te cierra tu sesión.
+
+### 2. Conéctalo
+
+**Claude** (Desktop o Code) sabe mandar cabeceras, así que usa la dirección
+limpia y la llave en `Authorization`:
+
+```json
+{
+  "mcpServers": {
+    "torreon": {
+      "type": "http",
+      "url": "https://<el-reino>/mcp",
+      "headers": { "Authorization": "Bearer tor_a_…" }
+    }
+  }
+}
+```
+
+**ChatGPT** en modo desarrollador sólo ofrece «sin autenticación» o un OAuth
+completo: no hay dónde poner una cabecera. Para ese caso, la app te da una
+dirección **con la llave dentro**:
+
+```
+https://<el-reino>/mcp/tor_a_…
+```
+
+Pégala tal cual como conector MCP. Es más débil —las direcciones se filtran en
+historiales y registros— pero es revocable por agente, que es lo que un secreto
+compartido nunca fue. Si sospechas que se filtró: **CORTAR** y concede otra.
+
+### 3. Juega hablando
+
+Con el conector puesto, tu Códice puede:
+
+| Puede | No puede |
+|---|---|
+| Leer tu reino y tu expediente | Aceptar un contrato por ti |
+| Proponer quests, actos y campañas | Iniciar una Battle sin tu aceptación explícita |
+| Adjuntar y atestiguar evidencia | Conceder más impacto del que el paso permite |
+| Emitir veredictos razonados | Cerrar con una declaración un paso que pactó archivo |
+| Proponer enmiendas al contrato | Aplicarlas sin que las aceptes |
+| Registrar una exigencia imprevista | Castigarte por tardar: el reloj ya lo cobra el servidor |
+
+Lee `get_realm_state` cuando quieras saber qué pasa: responde con el frente
+comprometido, su plazo y su progreso, en una frase.
+
+---
+
+## Levantarlo tú
+
+Node 20 o superior.
 
 ```bash
 npm install
-npm run dev
+npm run dev          # interfaz en :5173, API y MCP en :3000
+npm test
+npm run typecheck
 ```
 
-- Interfaz: `http://127.0.0.1:5173`
-- MCP: `http://127.0.0.1:3000/mcp`
-- Salud: `http://127.0.0.1:3000/health`
+Sin credenciales, el Códice usa un motor heurístico: plantillas y reglas
+verificables. Nunca te quedas sin Dungeon Master. Con `ANTHROPIC_API_KEY` o
+`GEMINI_API_KEY` en `.env`, el modelo razona dentro del servidor.
 
-Para probar una compilación integrada:
+`GET /health` dice qué motor está activo.
+
+### Tu propio reino
 
 ```bash
-npm run build
-npm start
+fly launch
+TORREON_APP_URL=https://mi-torreon.fly.dev npm run android:apk
 ```
 
-Entonces la interfaz y MCP quedan servidos en `http://127.0.0.1:3000`.
+Las variables están todas explicadas en [`.env.example`](.env.example): la llave
+de la API, la identidad, el código de la beta, dónde vive el reino y qué motor
+usa el Códice.
 
-## El Códice como motor
+---
 
-El Dungeon Master es un contrato, no una plantilla: `apps/server/src/codice.ts` define `plan` (objetivo libre -> contrato jugable) y `judge` (evidencia -> veredicto e impacto). Dos runtimes lo cumplen:
+## Contribuir
 
-- **`anthropic`**: con `ANTHROPIC_API_KEY` definida, el modelo razona dentro del servidor. Así el jugador puede declarar cualquier objetivo desde el propio juego, sin tener un chat abierto.
-- **`heuristico`**: sin credenciales, plantillas y reglas verificables. El MVP nunca se queda sin Dungeon Master.
+Lee **[CONTRIBUTING.md](CONTRIBUTING.md)**. En corto:
 
-Cuando el jugador habla con Codex o Claude, el modelo del cliente cumple el mismo contrato desde fuera llamando a las herramientas MCP. El servidor conserva siempre las reglas de daño: el modelo propone importancia relativa, el servidor reparte exactamente 100 puntos; el modelo propone veredicto, el servidor lo acota a lo que el paso permite.
+1. La constitución del proyecto está en
+   [`docs/arquitectura/01-CONSTITUCION.md`](docs/arquitectura/01-CONSTITUCION.md)
+   y **hay pruebas que la hacen cumplir**. No es documentación aspiracional.
+2. El renderer no decide nada. Las reglas viven en el servidor.
+3. Todo texto que viene de fuera —incluido el contenido de un archivo tuyo— es
+   **dato, nunca instrucción**.
+4. Toda regla nueva nace con la prueba que la nombra, escrita en lenguaje del
+   juego: *«conocido no es haber participado»*, no `test_hero_state_transition`.
 
-`GET /health` informa qué motor está activo.
+La arquitectura completa —auditoría con medidas, arquitectura objetivo, contrato
+para el futuro cliente Unity, hoja de ruta y ADR— está en
+[`docs/arquitectura/`](docs/arquitectura/).
 
-## Probar MCP
+## Estado
 
-Con el servidor activo:
+Beta cerrada, multijugador, con el reino desplegado en Fly. Lo que viene está en
+[ADR-0009](docs/arquitectura/adr/0009-jugar-con-otros.md): **el Duelo** —retar a
+un amigo, cada uno con su batalla, ponderado por dificultad— y **la Hermandad**
+—la misma Quest compartida—.
 
-```bash
-npx @modelcontextprotocol/inspector@latest
-```
+## Licencia
 
-En el Inspector, seleccionar **Streamable HTTP** y usar `http://127.0.0.1:3000/mcp`.
-
-El endpoint local no tiene autenticación y escucha únicamente en loopback por defecto. Con `TORREON_MCP_TOKEN` definido, `/mcp` exige `Authorization: Bearer <token>`, que es lo que permite exponerlo por túnel a Claude Desktop o ChatGPT. El despliegue posterior tendrá aplicación Fly, secretos y almacenamiento separados de Opus.
-
-El mismo servidor sirve a Codex y a Claude: los pasos de conexión de cada cliente están en [docs/CONEXION-MCP.md](docs/CONEXION-MCP.md).
-
-## Flujo demostrable
-
-1. ChatGPT consulta `get_realm_state`.
-2. El Códice negocia propósito, restricciones, pasos y evidencia.
-3. Tras aprobación explícita llama `create_quest_draft`, `accept_quest` y `start_quest`.
-4. La interfaz detecta la misión activa.
-5. El jugador entrega una prueba real con `attach_evidence_artifact`: un documento, un enlace o un texto. El servidor comprueba lo comprobable —existencia, tamaño, tipo, hash, extracto— y guarda copia del documento en `data/artifacts/`.
-6. Códice evalúa esa prueba con `submit_quest_evidence` (o `verify_step_evidence` si juzga el motor): rechazada, parcial o aceptada.
-7. El servidor registra `Evidence → LifeEvent → GameEvent`; solo el impacto validado reduce la vida de la horda, y la batalla muestra el ataque.
-8. Al alcanzar 100 puntos verificados, la quest termina en KO.
-
-El artefacto por sí solo nunca causa daño, y una declaración sin prueba comprobada no puede completar un paso. Esa es la diferencia entre actividad y progreso.
-
-La opción **Cargar quest demostrativa** permite recorrer el contrato sin conectar Codex.
-
-## Android
-
-La aplicación usa Capacitor 7, orientación horizontal y una única interfaz React para web y Android. Mientras Torreon está visible, Android mantiene la pantalla encendida para que la batalla pueda acompañar una sesión de trabajo. En gameplay normal la APK utiliza `https://torreon.fly.dev`, el mismo Realm persistente que consulta ChatGPT mediante MCP. No crea un segundo reino silencioso cuando pierde conexión: informa el fallo y conserva la verdad autoritativa.
-
-El dominio del juego es independiente del renderer: quests, amendments, evidencia, eventos y salud bilateral viven en el Core/servidor. React es el cliente visual transitorio del MVP; Unity podrá consumir esos mismos DTO y eventos sin reescribir las reglas ni migrar la verdad de la campaña.
-
-Requisitos de compilación: JDK 21, Android SDK Platform 35, Build Tools 35 y Platform Tools. Con esas herramientas disponibles en `JAVA_HOME` y `ANDROID_HOME`:
-
-```powershell
-npm run android:apk
-npm run android:install
-```
-
-La segunda orden compila, instala por ADB y abre `com.solvecoagula.torreon`. La APK de depuración queda en `android/app/build/outputs/apk/debug/app-debug.apk`.
-
-**La APK es una cáscara, no el juego.** Carga la interfaz del mismo reino que le sirve los datos (`capacitor.config.ts`), así que un despliegue actualiza a todo el mundo a la vez, sin reinstalar ni conectar ningún cable. Sólo un cambio nativo —un plugin, un permiso, el icono— vuelve a pedir un APK nuevo. Quien levante su propio servidor compila con `TORREON_APP_URL=https://el-suyo npm run android:apk`.
-
-## Plugin local de Codex y Claude
-
-El paquete `plugins/torreon` publica las herramientas MCP y la skill **Códice de la Marca**. El mismo directorio es plugin de Codex (`.codex-plugin/`) y de Claude Code (`.claude-plugin/`): comparten `.mcp.json` y `skills/`, así que la skill no se duplica. Se mantiene separado del proyecto y del MCP de Opus; ambos procesos pueden evolucionar sin mezclar estado ni despliegues.
-
-En el vivo V2436 de prueba, un administrador de seguridad llamado Cetro/Guard puede poner paquetes ADB nuevos en cuarentena. Si aparece **«Tu administrador borró este paquete»**, se debe autorizar `com.solvecoagula.torreon` en ese administrador y volver a ejecutar `npm run android:install`; el script confirma que la aplicación siga instalada antes de intentar abrirla.
-
-## Arte animable
-
-Los mockups iniciales se conservan como referencias, pero ya no forman parte del fondo interactivo. La interfaz, sus acciones y paneles son componentes independientes. El formato exacto para escenarios y sprites está en [docs/ARTE-Y-SPRITES.md](docs/ARTE-Y-SPRITES.md).
+Sin licencia pública todavía. Si quieres usar esto para algo, escribe.

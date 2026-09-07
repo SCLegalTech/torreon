@@ -16,7 +16,7 @@ import {
 import type { ActView, AfterActionReport, AgentSlot, BarracksView, BattleClock, BattleStatus, CampaignView, CharacterStats, EnemyCombatant, EntityType, HeroProfileView, InventoryItemId, InventoryState, NotificationView, ObligationView, OpenFrontView, PartyMemberId, PartyState, Quest, QuestNode, RealmSnapshot, RecoveryOffer, TreasuryView, WorldSystemView } from "./types";
 import "./styles.css";
 
-type Screen = "loading" | "realm" | "thinking" | "campaign" | "act" | "quest" | "battle" | "stats" | "notifications" | "treasury" | "barracks" | "battles";
+type Screen = "loading" | "realm" | "thinking" | "campaign" | "act" | "quest" | "battle" | "stats" | "notifications" | "treasury" | "barracks" | "battles" | "friends";
 
 /**
  * DÓNDE VIVE EL REINO.
@@ -209,6 +209,7 @@ function RealmMenu({
   onCodex,
   onStats,
   onNotifications,
+  onFriends,
   onTreasury,
   onBarracks,
   onBattles,
@@ -219,6 +220,7 @@ function RealmMenu({
   onCodex: () => void;
   onStats: () => void;
   onNotifications: () => void;
+  onFriends: () => void;
   onTreasury: () => void;
   onBarracks: () => void;
   onBattles: () => void;
@@ -319,6 +321,10 @@ function RealmMenu({
         >
           <span aria-hidden="true">AVISOS</span>
           {unread > 0 ? <span className="realm-bell-badge">{unread > 99 ? "99+" : unread}</span> : null}
+        </button>
+        {/* En una beta cerrada el reino es un sitio pequeño: se ve quién hay. */}
+        <button className="realm-icon-button" type="button" onClick={onFriends} aria-label="Amigos y agentes">
+          <span aria-hidden="true">AMIGOS</span>
         </button>
       </header>
 
@@ -2867,7 +2873,7 @@ function CharacterGate({ busy, onCreate }: { busy: boolean; onCreate: (ficha: { 
           <input
             value={displayName}
             maxLength={40}
-            placeholder={archetype === "marques" ? "Marqués" : "Maga"}
+            placeholder="Elige tu nombre"
             onChange={(event) => setDisplayName(event.target.value)}
           />
           {libre === false ? <small className="nombre-tomado">Ese nombre ya está en uso. Elige otro.</small> : null}
@@ -2898,6 +2904,176 @@ function CharacterGate({ busy, onCreate }: { busy: boolean; onCreate: (ficha: { 
       </div>
     </main>
   );
+}
+
+/**
+ * AMIGOS Y AGENTES.
+ *
+ * Dos cosas que van juntas porque las dos responden a «¿con quién juego?».
+ *
+ * De los demás jugadores se ve lo mínimo: nombre, si están conectados y cuándo
+ * se les vio. Nada de su campaña, su expediente ni su dinero — para retar a
+ * alguien no hace falta espiarle (artículo 12).
+ *
+ * Y los agentes: cada uno entra por SU concesión, revocable sin cerrarte la
+ * sesión a ti. La llave se enseña UNA vez, al crearla: el servidor sólo guarda
+ * su huella y no puede volver a enseñarla.
+ */
+function FriendsScreen({ busy, onBack }: { busy: boolean; onBack: () => void }) {
+  type Jugador = { playerId: string; displayName: string; online: boolean; lastSeenAt: string | null; itsYou: boolean };
+  type Agente = { id: string; label: string; scopes: string[]; lastUsedAt: string | null; revokedAt?: string; used: boolean };
+
+  const [jugadores, setJugadores] = useState<Jugador[]>([]);
+  const [agentes, setAgentes] = useState<Agente[]>([]);
+  const [etiqueta, setEtiqueta] = useState("");
+  const [recien, setRecien] = useState<{ label: string; mcpUrl: string; mcpHeaderUrl: string; token: string } | null>(null);
+  const [fallo, setFallo] = useState<string | null>(null);
+
+  const cargar = useCallback(async () => {
+    try {
+      const [reino, mios] = await Promise.all([
+        api<{ players: Jugador[] }>("/v1/players"),
+        api<{ agents: Agente[] }>("/v1/agents"),
+      ]);
+      setJugadores(reino.players);
+      setAgentes(mios.agents);
+      setFallo(null);
+    } catch (caught) {
+      setFallo(caught instanceof Error ? caught.message : "No fue posible leer el reino.");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+    const id = window.setInterval(() => void cargar(), 30000);
+    return () => window.clearInterval(id);
+  }, [cargar]);
+
+  const conceder = async () => {
+    try {
+      const alta = await api<{ agent: Agente; token: string; mcpUrl: string; mcpHeaderUrl: string }>("/v1/agents", {
+        method: "POST",
+        body: JSON.stringify({ label: etiqueta.trim() }),
+      });
+      setRecien({ label: alta.agent.label, mcpUrl: alta.mcpUrl, mcpHeaderUrl: alta.mcpHeaderUrl, token: alta.token });
+      setEtiqueta("");
+      await cargar();
+    } catch (caught) {
+      setFallo(caught instanceof Error ? caught.message : "No fue posible conceder el acceso.");
+    }
+  };
+
+  const cortar = async (id: string) => {
+    try {
+      await api(`/v1/agents/${id}`, { method: "DELETE", body: JSON.stringify({ reason: "revocada desde el reino" }) });
+      await cargar();
+    } catch (caught) {
+      setFallo(caught instanceof Error ? caught.message : "No fue posible cortar el acceso.");
+    }
+  };
+
+  const copiar = (texto: string) => {
+    void navigator.clipboard?.writeText(texto).catch(() => undefined);
+  };
+
+  return (
+    <main className="scene friends-scene">
+      <div className="friends-body">
+        <header>
+          <p className="eyebrow">BETA CERRADA</p>
+          <h1>Amigos y agentes</h1>
+        </header>
+
+        <section className="friends-panel">
+          <p className="eyebrow">EN EL REINO · {jugadores.length}</p>
+          <ul className="friends-list">
+            {jugadores.map((jugador) => (
+              <li key={jugador.playerId} className={jugador.online ? "online" : ""}>
+                <span className="friends-dot" aria-hidden="true" />
+                <strong>
+                  {jugador.displayName}
+                  {jugador.itsYou ? " (tú)" : ""}
+                </strong>
+                <small>{jugador.online ? "EN LÍNEA" : jugador.lastSeenAt ? `visto ${desde(jugador.lastSeenAt)}` : "nunca entró"}</small>
+              </li>
+            ))}
+            {jugadores.length === 0 ? <li><small>Todavía no hay nadie más. Pásales el código.</small></li> : null}
+          </ul>
+        </section>
+
+        <section className="friends-panel">
+          <p className="eyebrow">TUS AGENTES</p>
+          <p className="friends-help">
+            Un agente —ChatGPT, Claude, Codex— juega <b>en tu nombre</b> sobre <b>tu</b> reino. Cada uno entra por su propia
+            llave y se corta solo, sin cerrarte la sesión a ti.
+          </p>
+
+          <div className="friends-grant">
+            <input
+              value={etiqueta}
+              maxLength={80}
+              placeholder="ChatGPT del portátil"
+              onChange={(event) => setEtiqueta(event.target.value)}
+            />
+            <button type="button" className="expedition-button" disabled={busy || etiqueta.trim().length < 2} onClick={() => void conceder()}>
+              CONCEDER ACCESO
+            </button>
+          </div>
+
+          {recien ? (
+            <div className="friends-key" role="status">
+              <p className="eyebrow">LA LLAVE DE «{recien.label}» — SE ENSEÑA UNA VEZ</p>
+              <p className="friends-help">
+                <b>ChatGPT</b> (modo desarrollador, «sin autenticación»): pega esta dirección. Lleva la llave dentro.
+              </p>
+              <code onClick={() => copiar(recien.mcpUrl)}>{recien.mcpUrl}</code>
+              <p className="friends-help">
+                <b>Claude</b>: usa esta dirección y manda la llave en la cabecera{" "}
+                <code className="inline">Authorization: Bearer {recien.token.slice(0, 12)}…</code>
+              </p>
+              <code onClick={() => copiar(recien.mcpHeaderUrl)}>{recien.mcpHeaderUrl}</code>
+              <button type="button" className="back-button" onClick={() => copiar(recien.token)}>COPIAR SÓLO LA LLAVE</button>
+            </div>
+          ) : null}
+
+          <ul className="friends-list">
+            {agentes.map((agente) => (
+              <li key={agente.id} className={agente.revokedAt ? "cortado" : ""}>
+                <strong>{agente.label}</strong>
+                <small>
+                  {agente.revokedAt ? "CORTADO" : agente.used ? `actuó ${desde(agente.lastUsedAt!)}` : "nunca ha actuado"}
+                </small>
+                {agente.revokedAt ? null : (
+                  <button type="button" className="back-button" disabled={busy} onClick={() => void cortar(agente.id)}>
+                    CORTAR
+                  </button>
+                )}
+              </li>
+            ))}
+            {agentes.length === 0 ? <li><small>Ningún agente tiene acceso todavía.</small></li> : null}
+          </ul>
+        </section>
+
+        {fallo ? <p className="friends-error" role="alert">{fallo}</p> : null}
+      </div>
+
+      <nav className="map-nav">
+        <button className="map-nav-button" type="button" onClick={onBack}>VOLVER AL REINO</button>
+      </nav>
+    </main>
+  );
+}
+
+/** «hace 3 min», «hace 2 h». Sin librerías y sin mentir sobre la precisión. */
+function desde(iso: string): string {
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return "hace un momento";
+  const minutos = Math.floor(ms / 60000);
+  if (minutos < 1) return "hace un momento";
+  if (minutos < 60) return `hace ${minutos} min`;
+  const horas = Math.floor(minutos / 60);
+  if (horas < 24) return `hace ${horas} h`;
+  return `hace ${Math.floor(horas / 24)} d`;
 }
 
 function App() {
@@ -3294,6 +3470,7 @@ function App() {
           onCodex={() => setComposerOpen(true)}
           onStats={() => setScreen("stats")}
           onNotifications={() => setScreen("notifications")}
+          onFriends={() => setScreen("friends")}
           onTreasury={() => setScreen("treasury")}
           onBarracks={() => setScreen("barracks")}
           onBattles={() => setScreen("battles")}
@@ -3333,6 +3510,8 @@ function App() {
           onArchive={(id) => void act(() => api(`/api/notifications/${id}/archive`, { method: "POST" }))}
           onResend={(id) => void act(() => api(`/api/notifications/${id}/resend`, { method: "POST" }))}
         />
+      ) : screen === "friends" ? (
+        <FriendsScreen busy={busy} onBack={() => setScreen("realm")} />
       ) : screen === "battles" ? (
         <BattlesScreen
           openFronts={snapshot.openFronts ?? fallbackOpenFronts(snapshot)}

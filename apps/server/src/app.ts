@@ -9,6 +9,7 @@ import { describeFailure, invalid } from "./errors.js";
 import { HTTP_BODIES, type HttpRoute } from "./contracts.js";
 import { createV1Router } from "./v1.js";
 import { callerMiddleware, identityEnabled, requireCaller } from "./auth.js";
+import { resolveCaller } from "./identity.js";
 import { createIdentityRouter } from "./identity-routes.js";
 import type { Kingdom } from "./kingdom.js";
 import { DEFAULT_PLAYER_ID } from "./players.js";
@@ -781,7 +782,38 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   // historiales— pero evita que el MCP quede colgando de un nombre adivinable.
   const mcpPath = process.env.TORREON_MCP_PATH?.trim() || "/mcp";
 
+  /**
+   * LA CREDENCIAL DEL AGENTE, TAMBIÉN EN LA RUTA.
+   *
+   * Claude sabe mandar cabeceras y entra con `Authorization: Bearer <token>`.
+   * ChatGPT en modo desarrollador sólo ofrece «sin autenticación» o un OAuth
+   * completo: no hay dónde poner una cabecera. Para ese caso el token va como
+   * último tramo de la URL, y la URL misma es la llave.
+   *
+   * Es más débil —las direcciones se filtran en historiales y en registros— y
+   * por eso se dice aquí en voz alta. Pero es revocable por agente y por
+   * jugador, que es lo que un secreto compartido nunca fue.
+   */
+  const conCredencialEnRuta: express.RequestHandler = async (req, _res, next) => {
+    const token = String((req.params as Record<string, string>).agentToken ?? "").trim();
+    if (!kingdom || !token || req.caller) return next();
+    try {
+      req.caller = (await kingdom.identity.mutate((state) => resolveCaller(state, token, kingdom.realmClock.now()))) ?? undefined;
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  app.post(`${mcpPath}/:agentToken`, conCredencialEnRuta, async (req: Request, res: Response) => {
+    await atenderMcp(req, res);
+  });
+
   app.post(mcpPath, async (req: Request, res: Response) => {
+    await atenderMcp(req, res);
+  });
+
+  async function atenderMcp(req: Request, res: Response): Promise<void> {
     // Con TORREON_MCP_TOKEN el mismo endpoint puede exponerse por túnel a los
     // clientes que no alcanzan loopback (por ejemplo Claude Desktop o ChatGPT).
     // CON IDENTIDAD, UN AGENTE ENTRA POR SU PROPIA CONCESIÓN (artículo 11).
@@ -814,9 +846,10 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
         res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "Error interno de MCP" }, id: null });
       }
     }
-  });
+  }
 
   app.get(mcpPath, (req, res) => res.status(405).json({ error: "Este MVP usa MCP stateless por POST." }));
+  app.get(`${mcpPath}/:agentToken`, (req, res) => res.status(405).json({ error: "Este MVP usa MCP stateless por POST." }));
   app.delete(mcpPath, (req, res) => res.status(405).json({ error: "Este MVP no mantiene sesiones MCP." }));
 
   // Con ruta secreta activa, /mcp no debe confirmar que aquí vive un Torreón.

@@ -2,7 +2,7 @@ import express, { type Router } from "express";
 import { z } from "zod";
 import { bearerOf, requireCaller } from "./auth.js";
 import { invalid } from "./errors.js";
-import { agentsOf, closeSession, grantAgent, invitationRequired, nameAvailable, openDeviceSession, registerPlayer, revokeAgent, ALL_SCOPES, type Scope } from "./identity.js";
+import { agentsOf, closeSession, grantAgent, invitationRequired, nameAvailable, playersInRealm, openDeviceSession, registerPlayer, revokeAgent, ALL_SCOPES, type Scope } from "./identity.js";
 import type { Kingdom } from "./kingdom.js";
 import { exportPlayer, forgetPlayer } from "./player-data.js";
 
@@ -37,6 +37,16 @@ const registerBody = z.object({
   petName: z.string().min(1).max(40).optional(),
   inviteCode: z.string().min(1).max(120).optional(),
 });
+
+/** Dónde vive este reino visto desde fuera. Detrás de Fly manda el proxy. */
+function publicOrigin(req: express.Request): string {
+  const declarado = process.env.TORREON_PUBLIC_URL?.trim();
+  if (declarado) return declarado.replace(/\/+$/, "");
+  const protocolo = String(req.header("x-forwarded-proto") ?? req.protocol ?? "https").split(",")[0];
+  return `${protocolo}://${req.header("host") ?? "localhost"}`;
+}
+
+const mcpPath = (): string => process.env.TORREON_MCP_PATH?.trim() || "/mcp";
 
 function parse<T>(schema: z.ZodType<T>, body: unknown): T {
   const parsed = schema.safeParse(body ?? {});
@@ -129,6 +139,21 @@ export function createIdentityRouter(kingdom: Kingdom): Router {
     }
   });
 
+  /**
+   * QUIÉN MÁS ESTÁ EN EL REINO.
+   *
+   * Sólo nombre, si está conectado y cuándo se le vio. Nada de su campaña, su
+   * expediente ni su dinero: para retar a alguien no hace falta espiarle.
+   */
+  router.get("/players", requireCaller, async (req, res, next) => {
+    try {
+      const identity = await kingdom.identity.read();
+      res.json({ players: playersInRealm(identity, clock.now(), req.caller!.playerId) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get("/agents", requireCaller, async (req, res, next) => {
     try {
       const identity = await kingdom.identity.read();
@@ -148,6 +173,16 @@ export function createIdentityRouter(kingdom: Kingdom): Router {
         agent: { id: outcome.grant.id, label: outcome.grant.label, scopes: outcome.grant.scopes },
         // La única vez que esta llave existe fuera de su huella.
         token: outcome.token,
+        /**
+         * LISTO PARA PEGAR.
+         *
+         * `mcpUrl` lleva la llave dentro y sirve para clientes que sólo aceptan
+         * una dirección —ChatGPT en modo desarrollador—. `mcpHeaderUrl` es la
+         * dirección limpia para clientes que sí saben mandar cabeceras, como
+         * Claude: ahí la llave va en `Authorization: Bearer`.
+         */
+        mcpUrl: `${publicOrigin(req)}${mcpPath()}/${outcome.token}`,
+        mcpHeaderUrl: `${publicOrigin(req)}${mcpPath()}`,
       });
     } catch (error) {
       next(error);

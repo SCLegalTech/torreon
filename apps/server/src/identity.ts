@@ -345,6 +345,48 @@ export function agentsOf(identity: IdentityState, playerId: PlayerId): AgentGran
     }));
 }
 
+/**
+ * QUIÉN MÁS ESTÁ EN LA BETA.
+ *
+ * En una beta cerrada el reino es un sitio pequeño: se ve quién hay, si está
+ * conectado y cuándo se le vio por última vez. Nada más — ni su campaña, ni su
+ * expediente, ni su dinero (artículo 12). Lo que hace falta para retar a
+ * alguien, y nada de lo que hace falta para espiarle.
+ */
+export interface PlayerInRealm {
+  playerId: PlayerId;
+  displayName: string;
+  online: boolean;
+  lastSeenAt: string | null;
+  /** `true` si eres tú. La pantalla no debería tener que adivinarlo. */
+  itsYou: boolean;
+}
+
+/** Cinco minutos sin dar señales ya no es «conectado». */
+export const ONLINE_WINDOW_MS = 5 * 60 * 1000;
+
+export function playersInRealm(identity: IdentityState, nowMs: number, viewer?: PlayerId): PlayerInRealm[] {
+  return identity.players
+    .map((player) => {
+      const suyas = identity.sessions.filter((session) => session.playerId === player.playerId && !session.revokedAt);
+      const ultima = suyas.reduce<string | null>(
+        (mas, session) => (!mas || Date.parse(session.lastSeenAt) > Date.parse(mas) ? session.lastSeenAt : mas),
+        null,
+      );
+      return {
+        playerId: player.playerId,
+        displayName: player.displayName,
+        online: ultima !== null && nowMs - Date.parse(ultima) <= ONLINE_WINDOW_MS,
+        lastSeenAt: ultima,
+        itsYou: player.playerId === viewer,
+      };
+    })
+    .sort((a, b) => {
+      if (a.online !== b.online) return a.online ? -1 : 1;
+      return Date.parse(b.lastSeenAt ?? "1970-01-01") - Date.parse(a.lastSeenAt ?? "1970-01-01");
+    });
+}
+
 /** Cerrar la sesión de este dispositivo. No toca a los agentes concedidos. */
 export function closeSession(identity: IdentityState, token: string, nowMs: number): boolean {
   const digest = hash(token);

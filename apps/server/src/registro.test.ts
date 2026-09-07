@@ -135,6 +135,55 @@ describe("Registrarse en el reino", () => {
     }
   });
 
+  /**
+   * EL AGENTE SE CONECTA SOLO, SIN QUE NADIE LE PASE UN SECRETO POR DEBAJO.
+   *
+   * Claude sabe mandar cabeceras y usa la dirección limpia. ChatGPT en modo
+   * desarrollador sólo ofrece una URL: ahí la llave va dentro de la dirección,
+   * que es más débil —se filtra en historiales— pero revocable por agente.
+   */
+  it("crear una concesión devuelve la dirección lista para pegar", async () => {
+    const { body: diego } = await registrar({ deviceKey: LLAVE_A, displayName: "Marqués", archetype: "marques" }).expect(201);
+    const { body } = await request(app)
+      .post("/v1/agents")
+      .set("authorization", `Bearer ${diego.token}`)
+      .send({ label: "ChatGPT del portátil" })
+      .expect(201);
+
+    expect(body.mcpUrl).toContain(body.token);
+    expect(body.mcpHeaderUrl).not.toContain(body.token);
+    expect(body.mcpUrl.startsWith(body.mcpHeaderUrl)).toBe(true);
+  });
+
+  it("un agente entra por la llave en la ruta, y deja de entrar cuando lo cortan", async () => {
+    const { body: diego } = await registrar({ deviceKey: LLAVE_A, displayName: "Marqués", archetype: "marques" }).expect(201);
+    const { body: agente } = await request(app)
+      .post("/v1/agents")
+      .set("authorization", `Bearer ${diego.token}`)
+      .send({ label: "ChatGPT del portátil" })
+      .expect(201);
+
+    const llamada = () =>
+      request(app)
+        .post(`/mcp/${agente.token}`)
+        .set("accept", "application/json, text/event-stream")
+        .send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "x", version: "1" } } });
+
+    expect((await llamada()).status).toBe(200);
+
+    await request(app).delete(`/v1/agents/${agente.agent.id}`).set("authorization", `Bearer ${diego.token}`).expect(200);
+
+    expect((await llamada()).status).toBe(401);
+  });
+
+  it("sin credencial, MCP no habla con nadie", async () => {
+    const respuesta = await request(app)
+      .post("/mcp")
+      .set("accept", "application/json, text/event-stream")
+      .send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "x", version: "1" } } });
+    expect(respuesta.status).toBe(401);
+  });
+
   it("un nombre de una letra no registra a nadie", async () => {
     await registrar({ deviceKey: LLAVE_A, displayName: "M", archetype: "marques" }).expect(422);
   });
