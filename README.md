@@ -86,7 +86,9 @@ npm run android:apk
 npm run android:install
 ```
 
-La segunda orden compila, instala por ADB, crea el puente local y abre `com.solvecoagula.torreon`. La APK de depuración queda en `android/app/build/outputs/apk/debug/app-debug.apk`.
+La segunda orden compila, instala por ADB y abre `com.solvecoagula.torreon`. La APK de depuración queda en `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+**La APK es una cáscara, no el juego.** Carga la interfaz del mismo reino que le sirve los datos (`capacitor.config.ts`), así que un despliegue actualiza a todo el mundo a la vez, sin reinstalar ni conectar ningún cable. Sólo un cambio nativo —un plugin, un permiso, el icono— vuelve a pedir un APK nuevo. Quien levante su propio servidor compila con `TORREON_APP_URL=https://el-suyo npm run android:apk`.
 
 ## Plugin local de Codex y Claude
 

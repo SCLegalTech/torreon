@@ -38,6 +38,24 @@ Puedes romperlo, borrarlo y empezar de cero sin miedo.
 
 ---
 
+## Cómo llegan las actualizaciones
+
+**La APK es una cáscara, no el juego.** Carga la interfaz del mismo reino que le
+sirve los datos, así que un despliegue actualiza a todo el mundo a la vez: no
+hay que reinstalar nada ni conectar ningún cable.
+
+Sólo vuelve a hacer falta un APK nuevo cuando cambia algo **nativo**: un plugin
+de Capacitor, un permiso de Android, el icono o el nombre de la app.
+
+| Cambiaste… | ¿APK nueva? |
+|---|---|
+| Una pantalla, un estilo, una regla del juego, el servidor | No. Se despliega y ya. |
+| Un plugin, un permiso, el icono, el `appId` | Sí. |
+
+Si no compilas, descarga la última APK de
+**[Releases](https://github.com/SCLegalTech/torreon/releases)** e instálala una
+vez. A partir de ahí, las actualizaciones te llegan solas.
+
 ## Probar tu propia APK contra el reino de la nube
 
 Esta es la parte que hace que se pueda jugar de verdad mientras se desarrolla.
@@ -74,15 +92,17 @@ reino. Sin él no entras.
 
 ### Apuntar a tu propio servidor
 
-Si prefieres no tocar el reino compartido, levanta el tuyo y apunta la APK ahí:
+Si prefieres no tocar el reino compartido, levanta el tuyo y compila la cáscara
+apuntando ahí:
 
 ```bash
-fly launch                       # tu propia app en Fly
-# o simplemente `npm run dev` y usa ADB reverse contra tu máquina
+fly launch                                                   # tu propia app
+TORREON_APP_URL=https://mi-torreon.fly.dev npm run android:apk
 ```
 
-El servidor es el mismo código; lo único que cambia es a dónde apunta
-`API_BASE` en `apps/web/src/main.tsx`.
+El servidor es el mismo código. La app carga la interfaz de la dirección que le
+digas, y las llamadas van al mismo origen: no hay ninguna dirección cableada que
+haya que cambiar en dos sitios.
 
 ---
 

@@ -1,5 +1,4 @@
 import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
-import { Capacitor } from "@capacitor/core";
 import { createRoot } from "react-dom/client";
 import { Sprite } from "./Sprite";
 import {
@@ -19,7 +18,17 @@ import "./styles.css";
 
 type Screen = "loading" | "realm" | "thinking" | "campaign" | "act" | "quest" | "battle" | "stats" | "notifications" | "treasury" | "barracks" | "battles";
 
-const API_BASE = Capacitor.isNativePlatform() ? "https://torreon.fly.dev" : "";
+/**
+ * DÓNDE VIVE EL REINO.
+ *
+ * La APK carga esta interfaz DESDE el reino (`capacitor.config.ts`), así que su
+ * origen ya es el del servidor y basta con rutas relativas: mismo origen, sin
+ * CORS y sin una dirección cableada que haya que cambiar en dos sitios.
+ *
+ * El caso `https://localhost` es una APK antigua, con la interfaz empaquetada
+ * dentro. Se le deja el camino de siempre para que no se quede muerta.
+ */
+const API_BASE = /^https?:\/\/localhost/.test(location.origin) ? "https://torreon.fly.dev" : "";
 /**
  * La llave del reino, horneada en la APK con `VITE_TORREON_API_TOKEN`.
  *
