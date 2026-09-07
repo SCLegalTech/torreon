@@ -2,7 +2,7 @@ import express, { type Router } from "express";
 import { z } from "zod";
 import { bearerOf, requireCaller } from "./auth.js";
 import { invalid } from "./errors.js";
-import { agentsOf, closeSession, grantAgent, openDeviceSession, revokeAgent, ALL_SCOPES, type Scope } from "./identity.js";
+import { agentsOf, closeSession, grantAgent, nameAvailable, openDeviceSession, registerPlayer, revokeAgent, ALL_SCOPES, type Scope } from "./identity.js";
 import type { Kingdom } from "./kingdom.js";
 import { exportPlayer, forgetPlayer } from "./player-data.js";
 
@@ -29,6 +29,13 @@ const grantBody = z.object({
 });
 
 const revokeBody = z.object({ reason: z.string().max(200).optional() });
+
+const registerBody = z.object({
+  deviceKey: z.string().min(16).max(512),
+  displayName: z.string().min(2).max(40),
+  archetype: z.enum(["marques", "cordera"]),
+  petName: z.string().min(1).max(40).optional(),
+});
 
 function parse<T>(schema: z.ZodType<T>, body: unknown): T {
   const parsed = schema.safeParse(body ?? {});
@@ -59,6 +66,48 @@ export function createIdentityRouter(kingdom: Kingdom): Router {
         token: outcome.token,
         expiresAt: outcome.session.expiresAt,
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
+   * REGISTRARSE EN LA BETA CERRADA.
+   *
+   * El nombre es único en el reino. Quien reclame el nombre heredado recupera
+   * la partida que ya existía —campañas, frentes, expediente— en vez de
+   * estrenar un reino vacío; se reclama UNA vez.
+   *
+   * La ficha se crea en el mismo paso: registrarse y no saber a quién encarnas
+   * dejaría al jugador a medio entrar.
+   */
+  router.post("/session/register", async (req, res, next) => {
+    try {
+      const body = parse(registerBody, req.body);
+      const outcome = await kingdom.identity.mutate((identity) =>
+        registerPlayer(identity, { deviceKey: body.deviceKey, displayName: body.displayName }, clock.now()),
+      );
+      const player = await kingdom
+        .realmOf(outcome.player.playerId)
+        .createCharacter({ archetype: body.archetype, displayName: body.displayName, petName: body.petName });
+      res.status(201).json({
+        playerId: outcome.player.playerId,
+        player,
+        token: outcome.token,
+        expiresAt: outcome.session.expiresAt,
+        // `true` si este registro recuperó la partida que ya existía.
+        claimedLegacyRealm: outcome.claimedLegacyRealm,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /** ¿Está libre este nombre? La pantalla lo pregunta antes de dejar seguir. */
+  router.get("/session/name-available", async (req, res, next) => {
+    try {
+      const identity = await kingdom.identity.read();
+      res.json({ available: nameAvailable(identity, String(req.query.name ?? "")) });
     } catch (error) {
       next(error);
     }

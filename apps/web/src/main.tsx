@@ -29,12 +29,50 @@ const API_BASE = Capacitor.isNativePlatform() ? "https://torreon.fly.dev" : "";
  */
 const API_TOKEN = (import.meta.env.VITE_TORREON_API_TOKEN ?? "").trim();
 
+/**
+ * LA SESIÓN DEL JUGADOR.
+ *
+ * Se guarda en el dispositivo y viaja en cada petición. La llave del
+ * dispositivo es estable: reinstalar la app no puede fabricar un reino nuevo ni
+ * perder la campaña.
+ */
+const SESSION_KEY = "torreon.session.v1";
+const DEVICE_KEY = "torreon.device.v1";
+
+function sessionToken(): string {
+  try {
+    return localStorage.getItem(SESSION_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberSession(token: string): void {
+  try {
+    localStorage.setItem(SESSION_KEY, token);
+  } catch {
+    // Sin almacenamiento el jugador tendrá que registrarse otra vez; no se pierde el reino.
+  }
+}
+
+function deviceKey(): string {
+  try {
+    const guardada = localStorage.getItem(DEVICE_KEY);
+    if (guardada) return guardada;
+    const nueva = `dispositivo-${crypto.randomUUID()}${crypto.randomUUID()}`;
+    localStorage.setItem(DEVICE_KEY, nueva);
+    return nueva;
+  } catch {
+    return `dispositivo-${crypto.randomUUID()}${crypto.randomUUID()}`;
+  }
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
+      ...(sessionToken() ? { Authorization: `Bearer ${sessionToken()}` } : API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
       ...(init?.headers ?? {}),
     },
   });
@@ -2750,7 +2788,33 @@ function CharacterGate({ busy, onCreate }: { busy: boolean; onCreate: (ficha: { 
   const [archetype, setArchetype] = useState<"marques" | "cordera">("marques");
   const [displayName, setDisplayName] = useState("");
   const [petName, setPetName] = useState("Roku");
-  const listo = displayName.trim().length >= 2 && petName.trim().length >= 1;
+  const [libre, setLibre] = useState<boolean | null>(null);
+
+  /*
+    EL NOMBRE ES ÚNICO EN EL REINO.
+
+    Se pregunta mientras se escribe, para que nadie llegue al final y descubra
+    que su nombre estaba tomado. Y hay uno que además RECUPERA la partida que ya
+    existía: quien lo reclame hereda campañas, frentes y expediente.
+  */
+  useEffect(() => {
+    const nombre = displayName.trim();
+    if (nombre.length < 2) {
+      setLibre(null);
+      return;
+    }
+    const id = window.setTimeout(async () => {
+      try {
+        const respuesta = await api<{ available: boolean }>(`/v1/session/name-available?name=${encodeURIComponent(nombre)}`);
+        setLibre(respuesta.available);
+      } catch {
+        setLibre(null);
+      }
+    }, 350);
+    return () => window.clearTimeout(id);
+  }, [displayName]);
+
+  const listo = displayName.trim().length >= 2 && petName.trim().length >= 1 && libre !== false;
 
   return (
     <main className="scene character-scene">
@@ -2761,8 +2825,8 @@ function CharacterGate({ busy, onCreate }: { busy: boolean; onCreate: (ficha: { 
 
         <div className="character-archetypes" role="radiogroup" aria-label="Arquetipo">
           {([
-            { id: "marques" as const, nombre: "EL MARQUÉS", clase: "Explorador / DPS", sprite: "/assets/sprites/party/marques-idle.gif" },
-            { id: "cordera" as const, nombre: "LA CORDERA", clase: "Sanadora / Apoyo", sprite: "/assets/sprites/party/cordera-idle.gif" },
+            { id: "marques" as const, nombre: "CABALLERO", clase: "Caballero / DPS", sprite: "/assets/sprites/party/marques-idle.gif" },
+            { id: "cordera" as const, nombre: "MAGA", clase: "Maga / Apoyo", sprite: "/assets/sprites/party/cordera-idle.gif" },
           ]).map((opcion) => (
             <button
               key={opcion.id}
@@ -2780,13 +2844,15 @@ function CharacterGate({ busy, onCreate }: { busy: boolean; onCreate: (ficha: { 
         </div>
 
         <label className="character-field">
-          <span>TU NOMBRE</span>
+          <span>TU NOMBRE EN EL REINO</span>
           <input
             value={displayName}
             maxLength={40}
-            placeholder={archetype === "marques" ? "Marqués Phi" : "Cordera"}
+            placeholder={archetype === "marques" ? "Marqués" : "Maga"}
             onChange={(event) => setDisplayName(event.target.value)}
           />
+          {libre === false ? <small className="nombre-tomado">Ese nombre ya está en uso. Elige otro.</small> : null}
+          {libre === true ? <small className="nombre-libre">Nombre disponible.</small> : null}
         </label>
 
         <label className="character-field">
@@ -2819,6 +2885,9 @@ function App() {
           ? "realm"
           : "loading";
   const [screen, setScreen] = useState<Screen>(initialScreen);
+  /* El reino cerrado contesta 403 hasta que alguien se identifica: entonces lo
+     que toca no es un error rojo, es el portal de registro. */
+  const [needsRegistration, setNeedsRegistration] = useState(false);
   const [openActId, setOpenActId] = useState<string | null>(null);
   const [openQuestId, setOpenQuestId] = useState<string | null>(null);
   // Deep link: la entidad exacta que el jugador pidió abrir, no «la actual».
@@ -2892,7 +2961,13 @@ function App() {
       setReceivedAt(Date.now());
       setError(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "No fue posible alcanzar el servidor.");
+      const mensaje = caught instanceof Error ? caught.message : "No fue posible alcanzar el servidor.";
+      if (/identificarse|cerrado con llave/i.test(mensaje)) {
+        setNeedsRegistration(true);
+        setError(null);
+        return;
+      }
+      setError(mensaje);
     }
   }, []);
 
@@ -2926,7 +3001,11 @@ function App() {
         try {
           const response = await fetch(`${API_BASE}/v1/stream`, {
             signal: abort.signal,
-            headers: API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : undefined,
+            headers: sessionToken()
+              ? { Authorization: `Bearer ${sessionToken()}` }
+              : API_TOKEN
+                ? { Authorization: `Bearer ${API_TOKEN}` }
+                : undefined,
           });
           const tipo = response.headers.get("content-type") ?? "";
           if (!response.ok || !response.body || !tipo.includes("text/event-stream")) {
@@ -2988,26 +3067,31 @@ function App() {
     );
   }
   if (screen === "thinking") return <ThinkingScreen intent={pendingIntent} />;
-  if (!snapshot) return <main className="loading"><Codex speaking /><p>El Códice despierta…</p>{error ? <strong>{error}</strong> : null}</main>;
-
-  /*
-    QUIÉN ERES ANTES DE JUGAR.
-
-    Con varios jugadores en el reino, el grupo deja de ser tres nombres
-    cableados: cada uno encarna a alguien. Roku NO se encarna —es la mascota— y
-    sólo lleva nombre. Esto se pregunta una vez y no vuelve a estorbar.
-  */
-  if (!snapshot.realm.player?.createdAt) {
+  if (needsRegistration || (snapshot && !snapshot.realm.player?.createdAt)) {
     return (
       <>
         <CharacterGate
           busy={busy}
-          onCreate={(ficha) => act(() => api("/api/character", { method: "POST", body: JSON.stringify(ficha) }))}
+          onCreate={(ficha) =>
+            act(async () => {
+              const alta = await api<{ token: string; claimedLegacyRealm: boolean }>("/v1/session/register", {
+                method: "POST",
+                body: JSON.stringify({ ...ficha, deviceKey: deviceKey() }),
+              });
+              // La llave se guarda ANTES de refrescar: la siguiente lectura ya
+              // va firmada y trae el reino de quien acaba de entrar.
+              rememberSession(alta.token);
+              setNeedsRegistration(false);
+              return alta;
+            })
+          }
         />
         {error ? <div className="error-toast" role="alert">{error}</div> : null}
       </>
     );
   }
+  if (!snapshot) return <main className="loading"><Codex speaking /><p>El Códice despierta…</p>{error ? <strong>{error}</strong> : null}</main>;
+
 
   const quest = snapshot.currentQuest;
   /*

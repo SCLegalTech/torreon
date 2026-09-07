@@ -33,10 +33,37 @@ export const AGENT_DEFAULT_SCOPES: Scope[] = ["realm:read", "quest:write", "evid
 export interface PlayerRecord {
   playerId: PlayerId;
   displayName: string;
+  /** El nombre normalizado. Es lo que hace que «Marqués» y «marques» choquen. */
+  nameKey: string;
   createdAt: string;
   /** Huella de la llave del dispositivo que estrenó este jugador. */
   deviceKeyHash: string;
 }
+
+/**
+ * EL NOMBRE ES ÚNICO, Y SE COMPARA SIN ADORNOS.
+ *
+ * «Marqués», «marques» y «  MARQUES  » son el mismo nombre. Sin esto, dos
+ * jugadores creerían llamarse distinto y el reino no sabría a quién saluda.
+ */
+export function nameKeyOf(displayName: string): string {
+  return displayName
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+/**
+ * EL REINO QUE YA ESTABA TIENE DUEÑO, Y SE RECLAMA POR NOMBRE.
+ *
+ * La partida de `torreon.fly.dev` lleva meses jugándose. Quien se registre con
+ * este nombre la recupera entera —campañas, frentes, expediente— en vez de
+ * estrenar un reino vacío. Se reclama UNA vez: después, ese nombre está en uso
+ * como cualquier otro.
+ */
+export const LEGACY_CLAIM_NAME = "marques";
 
 export interface SessionRecord {
   id: string;
@@ -87,15 +114,80 @@ export function mintToken(prefix: "tor_s" | "tor_a"): string {
   return `${prefix}_${randomBytes(32).toString("base64url")}`;
 }
 
+export interface RegistrationInput {
+  deviceKey: string;
+  displayName: string;
+}
+
 /**
- * ENTRAR DESDE EL TELÉFONO.
+ * REGISTRARSE EN LA BETA.
  *
- * La primera vez, la llave del dispositivo estrena jugador y reino. Las
- * siguientes, la misma llave devuelve al MISMO jugador: reinstalar la app no
- * puede fabricar un reino nuevo y perder la campaña.
+ * El nombre es único. Quien reclame el nombre heredado recupera el reino que ya
+ * existía; cualquier otro estrena el suyo. Devuelve además si hubo herencia,
+ * para que la pantalla lo pueda decir en vez de dejarlo a la fe.
+ */
+export function registerPlayer(
+  identity: IdentityState,
+  input: RegistrationInput,
+  nowMs: number,
+): { player: PlayerRecord; token: string; session: SessionRecord; claimedLegacyRealm: boolean } {
+  if (!input.deviceKey || input.deviceKey.trim().length < 16) {
+    throw deny("La llave del dispositivo necesita al menos 16 caracteres.");
+  }
+  const displayName = input.displayName.trim().replace(/\s+/g, " ").slice(0, 40);
+  if (displayName.length < 2) throw deny("El nombre necesita al menos dos letras.");
+  const nameKey = nameKeyOf(displayName);
+
+  const tomado = identity.players.find((candidate) => candidate.nameKey === nameKey);
+  if (tomado) throw deny(`Ese nombre ya está en uso en el reino. Elige otro.`);
+
+  // El reino heredado se reclama por nombre, y sólo mientras nadie lo tenga.
+  const herederoLibre = !identity.players.some((candidate) => candidate.playerId === DEFAULT_PLAYER_ID);
+  const claimedLegacyRealm = nameKey === LEGACY_CLAIM_NAME && herederoLibre;
+
+  const timestamp = isoAt(nowMs);
+  const player: PlayerRecord = {
+    playerId: claimedLegacyRealm ? DEFAULT_PLAYER_ID : requirePlayerId(`jugador-${randomUUID().slice(0, 8)}`),
+    displayName,
+    nameKey,
+    createdAt: timestamp,
+    deviceKeyHash: hash(input.deviceKey.trim()),
+  };
+  identity.players.push(player);
+
+  const { token, session } = mintSession(identity, player, nowMs);
+  return { player, token, session, claimedLegacyRealm };
+}
+
+/** ¿Está libre este nombre? La pantalla lo pregunta antes de dejar continuar. */
+export function nameAvailable(identity: IdentityState, displayName: string): boolean {
+  const key = nameKeyOf(displayName);
+  return key.length >= 2 && !identity.players.some((candidate) => candidate.nameKey === key);
+}
+
+function mintSession(identity: IdentityState, player: PlayerRecord, nowMs: number): { token: string; session: SessionRecord } {
+  const token = mintToken("tor_s");
+  const session: SessionRecord = {
+    id: randomUUID(),
+    playerId: player.playerId,
+    tokenHash: hash(token),
+    createdAt: isoAt(nowMs),
+    expiresAt: isoAt(nowMs + SESSION_TTL_MS),
+    lastSeenAt: isoAt(nowMs),
+  };
+  identity.sessions.unshift(session);
+  identity.sessions = identity.sessions.filter(
+    (candidate) => !candidate.revokedAt && Date.parse(candidate.expiresAt) > nowMs,
+  );
+  return { token, session };
+}
+
+/**
+ * ENTRAR DESDE EL TELÉFONO SIN REGISTRARSE.
  *
- * Es una cuenta anónima de dispositivo a propósito: el jugador juega antes de
- * dar ningún dato. Vincularla a una cuenta real después es aditivo.
+ * La llave del dispositivo devuelve siempre al MISMO jugador: reinstalar la app
+ * no fabrica un reino nuevo. Es el camino sin nombre; el registro es el que
+ * reclama uno.
  */
 export function openDeviceSession(
   identity: IdentityState,
@@ -110,10 +202,12 @@ export function openDeviceSession(
 
   let player = identity.players.find((candidate) => sameSecret(candidate.deviceKeyHash, deviceKeyHash));
   if (!player) {
+    const displayName = input.displayName?.trim().slice(0, 40) || "Marqués Phi";
     player = {
       // El primer jugador adopta el reino que ya existía; los demás estrenan.
       playerId: identity.players.length === 0 ? DEFAULT_PLAYER_ID : requirePlayerId(`jugador-${randomUUID().slice(0, 8)}`),
-      displayName: input.displayName?.trim().slice(0, 80) || "Marqués Phi",
+      displayName,
+      nameKey: nameKeyOf(displayName),
       createdAt: timestamp,
       deviceKeyHash,
     };

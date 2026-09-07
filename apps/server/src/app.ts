@@ -25,8 +25,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   app.disable("x-powered-by");
 
   /** Con la identidad apagada nadie tiene que identificarse. Es lo de siempre. */
-  const requireCallerUnlessOpen: express.RequestHandler = (req, res, next) =>
-    identityEnabled() ? requireCaller(req, res, next) : next();
+
   // Con `TORREON_ALLOWED_ORIGINS` la respuesta se acota a los orígenes
   // declarados. Sin ella sigue abierto: la APK de Capacitor no sirve desde este
   // dominio y cerrarlo a ciegas la dejaría fuera de su propio reino. La
@@ -45,7 +44,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     next();
   });
-  app.options("*splat", (_req, res) => res.sendStatus(204));
+  app.options("*splat", (req, res) => res.sendStatus(204));
   // Las capturas y documentos del jugador llegan en base64 dentro del cuerpo.
   app.use(express.json({ limit: "32mb" }));
 
@@ -70,6 +69,14 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   app.use("/api", laLlave);
   app.use("/v1", laLlave);
 
+  // CON IDENTIDAD ENCENDIDA, NINGUNA SUPERFICIE SIRVE EL REINO DE OTRO.
+  //
+  // `/api` es la superficie legada de React, pero eso no la exime: si no se
+  // sabe quién pregunta, no se entrega ningún reino. Se deja fuera el registro,
+  // que es justamente la puerta para llegar a tener identidad.
+  const puerta: express.RequestHandler = (req, res, next) =>
+    identityEnabled() ? requireCaller(req, res, next) : next();
+
   // EL CONTRATO NUEVO. `/api` es la superficie legada del cliente React.
   const reinoDe = (req: Request): QuestService =>
     kingdom ? kingdom.realmOf(req.caller?.playerId ?? DEFAULT_PLAYER_ID) : service;
@@ -78,9 +85,10 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
     // Antes que nada: quién pregunta. También en `/mcp`, donde entran agentes.
     app.use(callerMiddleware(kingdom.identity, kingdom.realmClock));
     app.use("/v1", createIdentityRouter(kingdom));
-    app.use("/v1", requireCallerUnlessOpen);
+    app.use("/v1", puerta);
   }
 
+  app.use("/api", puerta);
   app.use("/v1", createV1Router(reinoDe, service.realmClock, kingdom));
 
   // ---------------------------------------------------------------------------
@@ -106,13 +114,13 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
       next(invalid(`La petición no tiene la forma que esta ruta espera — ${detalle}`));
     };
 
-  app.get("/health", async (_req, res) => {
-    const snapshot = await service.snapshot();
+  app.get("/health", async (req, res) => {
+    const snapshot = await reinoDe(req).snapshot();
     res.json({
       status: "ok",
       server: "torreon",
       version: "0.1.0",
-      codice: service.codiceName,
+      codice: reinoDe(req).codiceName,
       instance: snapshot.consistency.instance,
       realmId: snapshot.consistency.realmId,
       updatedAt: snapshot.realm.updatedAt,
@@ -126,15 +134,15 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
    */
   app.post("/api/character", validate("POST /api/character"), async (req, res, next) => {
     try {
-      res.json({ player: await service.createCharacter(req.body) });
+      res.json({ player: await reinoDe(req).createCharacter(req.body) });
     } catch (error) {
       next(error);
     }
   });
 
-  app.get("/api/state", async (_req, res, next) => {
+  app.get("/api/state", async (req, res, next) => {
     try {
-      res.json(await service.snapshot());
+      res.json(await reinoDe(req).snapshot());
     } catch (error) {
       next(error);
     }
@@ -142,7 +150,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.get("/api/quests/:questId", async (req, res, next) => {
     try {
-      res.json({ quest: await service.questDetail(req.params.questId) });
+      res.json({ quest: await reinoDe(req).questDetail(req.params.questId) });
     } catch (error) {
       next(error);
     }
@@ -151,9 +159,9 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   // La quest demostrativa SÍ se reutiliza: es una sola, y sirve para recorrer
   // el contrato sin conectar a nadie. Pedirla dos veces no llena el reino de
   // demos.
-  app.post("/api/demo/quest", async (_req, res, next) => {
+  app.post("/api/demo/quest", async (req, res, next) => {
     try {
-      const snapshot = await service.snapshot();
+      const snapshot = await reinoDe(req).snapshot();
       const yaEsta = snapshot.realm.quests.find(
         (quest) => quest.title === demoQuest.title && !["completed", "abandoned"].includes(quest.status),
       );
@@ -161,7 +169,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
         res.json({ quest: yaEsta, reused: true });
         return;
       }
-      res.status(201).json({ quest: await service.createDraft(demoQuest), reused: false });
+      res.status(201).json({ quest: await reinoDe(req).createDraft(demoQuest), reused: false });
     } catch (error) {
       next(error);
     }
@@ -185,7 +193,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
     try {
       const minutes = Number(req.body?.minutesAvailable);
       res.status(201).json({
-        quest: await service.createDraftFromIntent(
+        quest: await reinoDe(req).createDraftFromIntent(
           String(req.body?.intent ?? ""),
           Number.isFinite(minutes) ? minutes : undefined,
           req.body?.actId ? String(req.body.actId) : undefined,
@@ -200,7 +208,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/quests/:questId/accept", validate("POST /api/quests/:questId/accept"), async (req, res, next) => {
     try {
-      res.json({ quest: await service.accept(req.params.questId, req.body?.userAccepted === true) });
+      res.json({ quest: await reinoDe(req).accept(req.params.questId, req.body?.userAccepted === true) });
     } catch (error) {
       next(error);
     }
@@ -210,16 +218,16 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   app.post("/api/quests/:questId/start", validate("POST /api/quests/:questId/start"), async (req, res, next) => {
     try {
       const minutes = Number(req.body?.durationMinutes);
-      res.json({ quest: await service.start(req.params.questId, Number.isFinite(minutes) ? minutes : undefined) });
+      res.json({ quest: await reinoDe(req).start(req.params.questId, Number.isFinite(minutes) ? minutes : undefined) });
     } catch (error) {
       next(error);
     }
   });
 
   // El zurrón: el Core valida y decrementa; el cliente nunca resta por su cuenta.
-  app.get("/api/inventory", async (_req, res, next) => {
+  app.get("/api/inventory", async (req, res, next) => {
     try {
-      res.json({ inventory: (await service.snapshot()).inventory });
+      res.json({ inventory: (await reinoDe(req).snapshot()).inventory });
     } catch (error) {
       next(error);
     }
@@ -230,7 +238,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
       // El frente se nombra: con dos Battles esperando auxilio, adivinar
       // significaba gastar el Tónico en la que no era.
       const questId = req.body?.questId ? String(req.body.questId) : undefined;
-      res.json(await service.useInventoryItem(req.body?.itemId, req.body?.target, questId));
+      res.json(await reinoDe(req).useInventoryItem(req.body?.itemId, req.body?.target, questId));
     } catch (error) {
       next(error);
     }
@@ -244,7 +252,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   // abandonar una Quest con historia; la pantalla sólo ofrece la decisión.
   app.post("/api/quests/:questId/discard", validate("POST /api/quests/:questId/discard"), async (req, res, next) => {
     try {
-      res.json(await service.discardQuest(req.params.questId, String(req.body?.reason ?? "")));
+      res.json(await reinoDe(req).discardQuest(req.params.questId, String(req.body?.reason ?? "")));
     } catch (error) {
       next(error);
     }
@@ -252,7 +260,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/quests/:questId/battle/recover", async (req, res, next) => {
     try {
-      res.json(await service.recoverParty(req.params.questId));
+      res.json(await reinoDe(req).recoverParty(req.params.questId));
     } catch (error) {
       next(error);
     }
@@ -260,7 +268,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.get("/api/quests/:questId/battle/recovery", async (req, res, next) => {
     try {
-      res.json({ recovery: await service.recoveryOffer(req.params.questId) });
+      res.json({ recovery: await reinoDe(req).recoveryOffer(req.params.questId) });
     } catch (error) {
       next(error);
     }
@@ -269,7 +277,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   app.post("/api/quests/:questId/battle/recontract", validate("POST /api/quests/:questId/battle/recontract"), async (req, res, next) => {
     try {
       res.json({
-        battle: await service.proposeBattleRecontract(req.params.questId, {
+        battle: await reinoDe(req).proposeBattleRecontract(req.params.questId, {
           reason: String(req.body?.reason ?? ""),
           newDurationMinutes: Number(req.body?.newDurationMinutes ?? 0),
         }),
@@ -282,7 +290,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   app.post("/api/quests/:questId/battle/recontract/accept", validate("POST /api/quests/:questId/battle/recontract/accept"), async (req, res, next) => {
     try {
       res.json({
-        battle: await service.acceptBattleRecontract(req.params.questId, String(req.body?.recontractId ?? ""), req.body?.userAccepted === true),
+        battle: await reinoDe(req).acceptBattleRecontract(req.params.questId, String(req.body?.recontractId ?? ""), req.body?.userAccepted === true),
       });
     } catch (error) {
       next(error);
@@ -292,7 +300,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   app.post("/api/quests/:questId/steps/:stepId/companion-assist", validate("POST /api/quests/:questId/steps/:stepId/companion-assist"), async (req, res, next) => {
     try {
       res.status(201).json({
-        assist: await service.recordCompanionAssist({
+        assist: await reinoDe(req).recordCompanionAssist({
           questId: req.params.questId,
           stepId: req.params.stepId,
           companion: req.body?.companion,
@@ -311,7 +319,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   app.post("/api/quests/:questId/battle/retry", validate("POST /api/quests/:questId/battle/retry"), async (req, res, next) => {
     try {
       const minutes = Number(req.body?.durationMinutes);
-      res.json(await service.retryBattle(req.params.questId, Number.isFinite(minutes) ? minutes : undefined));
+      res.json(await reinoDe(req).retryBattle(req.params.questId, Number.isFinite(minutes) ? minutes : undefined));
     } catch (error) {
       next(error);
     }
@@ -324,7 +332,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
       const externalWaitMinutes = Number(req.body?.externalWaitMinutes);
       const naturalCampaigns = Number(req.body?.naturalCampaigns);
       res.json({
-        proposal: service.classifyObjective(String(req.body?.intent ?? ""), {
+        proposal: reinoDe(req).classifyObjective(String(req.body?.intent ?? ""), {
           activeMinutes: Number.isFinite(activeMinutes) ? activeMinutes : undefined,
           externalWaitMinutes: Number.isFinite(externalWaitMinutes) ? externalWaitMinutes : undefined,
           naturalCampaigns: Number.isFinite(naturalCampaigns) ? naturalCampaigns : undefined,
@@ -338,7 +346,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   app.post("/api/sagas", async (req, res, next) => {
     try {
       res.status(201).json({
-        saga: await service.createSaga({
+        saga: await reinoDe(req).createSaga({
           title: String(req.body?.title ?? ""),
           summary: req.body?.summary ? String(req.body.summary) : undefined,
           estimatedActiveMinutes: Number(req.body?.estimatedActiveMinutes ?? 0),
@@ -353,7 +361,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   app.post("/api/campaigns", async (req, res, next) => {
     try {
       res.status(201).json(
-        await service.createCampaignDraft({
+        await reinoDe(req).createCampaignDraft({
           title: String(req.body?.title ?? ""),
           intent: req.body?.intent ? String(req.body.intent) : undefined,
           summary: req.body?.summary ? String(req.body.summary) : undefined,
@@ -375,7 +383,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/campaigns/:campaignId/revise", async (req, res, next) => {
     try {
-      res.json(await service.reviseCampaignDraft(req.params.campaignId, req.body ?? {}));
+      res.json(await reinoDe(req).reviseCampaignDraft(req.params.campaignId, req.body ?? {}));
     } catch (error) {
       next(error);
     }
@@ -383,7 +391,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/campaigns/:campaignId/accept", validate("POST /api/campaigns/:campaignId/accept"), async (req, res, next) => {
     try {
-      res.json({ campaign: await service.acceptCampaign(req.params.campaignId, req.body?.userAccepted === true) });
+      res.json({ campaign: await reinoDe(req).acceptCampaign(req.params.campaignId, req.body?.userAccepted === true) });
     } catch (error) {
       next(error);
     }
@@ -391,7 +399,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/campaigns/:campaignId/abandon", async (req, res, next) => {
     try {
-      res.json({ campaign: await service.abandonCampaign(req.params.campaignId, String(req.body?.reason ?? "")) });
+      res.json({ campaign: await reinoDe(req).abandonCampaign(req.params.campaignId, String(req.body?.reason ?? "")) });
     } catch (error) {
       next(error);
     }
@@ -402,7 +410,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
       const activeMinutes = Number(req.body?.activeMinutes);
       const calendarDays = Number(req.body?.calendarDays);
       res.status(201).json(
-        await service.planCampaignFromIntent({
+        await reinoDe(req).planCampaignFromIntent({
           intent: String(req.body?.intent ?? ""),
           activeMinutes: Number.isFinite(activeMinutes) ? activeMinutes : undefined,
           calendarDays: Number.isFinite(calendarDays) ? calendarDays : undefined,
@@ -418,7 +426,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   app.post("/api/quests/:questId/assign", async (req, res, next) => {
     try {
       res.json(
-        await service.assignQuest(req.params.questId, {
+        await reinoDe(req).assignQuest(req.params.questId, {
           campaignId: req.body?.campaignId ? String(req.body.campaignId) : undefined,
           actId: req.body?.actId ? String(req.body.actId) : undefined,
         }),
@@ -431,15 +439,15 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   // Cambiar el foco no cierra ninguna otra campaña: sólo mueve la mirada.
   app.post("/api/campaigns/:campaignId/focus", async (req, res, next) => {
     try {
-      res.json(await service.focusCampaign(req.params.campaignId));
+      res.json(await reinoDe(req).focusCampaign(req.params.campaignId));
     } catch (error) {
       next(error);
     }
   });
 
-  app.delete("/api/campaigns/focus", async (_req, res, next) => {
+  app.delete("/api/campaigns/focus", async (req, res, next) => {
     try {
-      res.json(await service.focusCampaign(null));
+      res.json(await reinoDe(req).focusCampaign(null));
     } catch (error) {
       next(error);
     }
@@ -448,7 +456,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   app.post("/api/acts", async (req, res, next) => {
     try {
       res.status(201).json({
-        act: await service.createAct({
+        act: await reinoDe(req).createAct({
           title: String(req.body?.title ?? ""),
           subtitle: req.body?.subtitle ? String(req.body.subtitle) : undefined,
           outcome: req.body?.outcome ? String(req.body.outcome) : undefined,
@@ -465,7 +473,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/acts/:actId/quests/:questId", async (req, res, next) => {
     try {
-      res.json(await service.assignQuestToAct(req.params.questId, req.params.actId));
+      res.json(await reinoDe(req).assignQuestToAct(req.params.questId, req.params.actId));
     } catch (error) {
       next(error);
     }
@@ -473,7 +481,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/quests/:questId/amendments", validate("POST /api/quests/:questId/amendments"), async (req, res, next) => {
     try {
-      res.status(201).json({ amendment: await service.proposeAmendment(req.params.questId, {
+      res.status(201).json({ amendment: await reinoDe(req).proposeAmendment(req.params.questId, {
         reason: String(req.body?.reason ?? ""),
         proposedBy: String(req.body?.proposedBy ?? "codice"),
         changes: Array.isArray(req.body?.changes) ? req.body.changes : [],
@@ -485,7 +493,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/quests/:questId/amendments/:amendmentId/accept", validate("POST /api/quests/:questId/amendments/:amendmentId/accept"), async (req, res, next) => {
     try {
-      res.json(await service.acceptAmendment(req.params.questId, req.params.amendmentId, req.body?.userAccepted === true));
+      res.json(await reinoDe(req).acceptAmendment(req.params.questId, req.params.amendmentId, req.body?.userAccepted === true));
     } catch (error) {
       next(error);
     }
@@ -493,7 +501,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/quests/:questId/steps/:stepId/complete", async (req, res, next) => {
     try {
-      res.json(await service.completeStep(req.params.questId, req.params.stepId, String(req.body?.evidenceNote ?? "")));
+      res.json(await reinoDe(req).completeStep(req.params.questId, req.params.stepId, String(req.body?.evidenceNote ?? "")));
     } catch (error) {
       next(error);
     }
@@ -501,7 +509,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/quests/:questId/steps/:stepId/evidence", validate("POST /api/quests/:questId/steps/:stepId/evidence"), async (req, res, next) => {
     try {
-      res.json(await service.submitEvidence(req.params.questId, req.params.stepId, {
+      res.json(await reinoDe(req).submitEvidence(req.params.questId, req.params.stepId, {
         summary: String(req.body?.summary ?? ""),
         source: req.body?.source ?? "user_declaration",
         verdict: req.body?.verdict ?? "rejected",
@@ -515,7 +523,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/quests/:questId/steps/:stepId/artifacts", validate("POST /api/quests/:questId/steps/:stepId/artifacts"), async (req, res, next) => {
     try {
-      const artifact = await service.attachArtifact(req.params.questId, req.params.stepId, {
+      const artifact = await reinoDe(req).attachArtifact(req.params.questId, req.params.stepId, {
         kind: req.body?.kind === "file" || req.body?.kind === "link" ? req.body.kind : "text",
         path: req.body?.path ? String(req.body.path) : undefined,
         url: req.body?.url ? String(req.body.url) : undefined,
@@ -533,7 +541,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/quests/:questId/steps/:stepId/artifacts/:artifactId/reuse", async (req, res, next) => {
     try {
-      res.json({ artifact: await service.reuseArtifact(req.params.questId, req.params.artifactId, req.params.stepId) });
+      res.json({ artifact: await reinoDe(req).reuseArtifact(req.params.questId, req.params.artifactId, req.params.stepId) });
     } catch (error) {
       next(error);
     }
@@ -541,7 +549,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/quests/:questId/horde-attacks/unexpected-requirement", validate("POST /api/quests/:questId/horde-attacks/unexpected-requirement"), async (req, res, next) => {
     try {
-      res.status(201).json(await service.recordUnexpectedRequirement(req.params.questId, {
+      res.status(201).json(await reinoDe(req).recordUnexpectedRequirement(req.params.questId, {
         stepId: req.body?.stepId ? String(req.body.stepId) : undefined,
         reason: String(req.body?.reason ?? ""),
         damage: Number(req.body?.damage ?? 0),
@@ -554,7 +562,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   app.post("/api/quests/:questId/steps/:stepId/verify", validate("POST /api/quests/:questId/steps/:stepId/verify"), async (req, res, next) => {
     try {
       res.json(
-        await service.verifyStep(req.params.questId, req.params.stepId, {
+        await reinoDe(req).verifyStep(req.params.questId, req.params.stepId, {
           note: req.body?.note ? String(req.body.note) : undefined,
           artifactIds: Array.isArray(req.body?.artifactIds) ? req.body.artifactIds.map(String) : undefined,
         }),
@@ -582,7 +590,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
       return;
     }
     try {
-      res.json(await service.reset());
+      res.json(await reinoDe(req).reset());
     } catch (error) {
       next(error);
     }
@@ -593,9 +601,9 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   //
   // Sistemas del MUNDO. No cuelgan de Batallas Libres y no son inventario.
   // -------------------------------------------------------------------------
-  app.get("/api/barracks", async (_req, res, next) => {
+  app.get("/api/barracks", async (req, res, next) => {
     try {
-      res.json({ barracks: await service.barracks() });
+      res.json({ barracks: await reinoDe(req).barracks() });
     } catch (error) {
       next(error);
     }
@@ -604,15 +612,15 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   // Disponible no es desplegado: esto declara acceso, nunca participación.
   app.post("/api/barracks/:heroId/availability", validate("POST /api/barracks/:heroId/availability"), async (req, res, next) => {
     try {
-      res.json({ barracks: await service.setHeroAvailability(req.params.heroId as never, req.body?.availability) });
+      res.json({ barracks: await reinoDe(req).setHeroAvailability(req.params.heroId as never, req.body?.availability) });
     } catch (error) {
       next(error);
     }
   });
 
-  app.get("/api/battle-memory", async (_req, res, next) => {
+  app.get("/api/battle-memory", async (req, res, next) => {
     try {
-      res.json({ memory: await service.battleMemory() });
+      res.json({ memory: await reinoDe(req).battleMemory() });
     } catch (error) {
       next(error);
     }
@@ -621,7 +629,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   // Sugerencia de planificación. NUNCA repacta un contrato ya aceptado.
   app.post("/api/battle-memory/hint", validate("POST /api/battle-memory/hint"), async (req, res, next) => {
     try {
-      res.json({ hint: await service.planningHint(String(req.body?.intent ?? "")) });
+      res.json({ hint: await reinoDe(req).planningHint(String(req.body?.intent ?? "")) });
     } catch (error) {
       next(error);
     }
@@ -629,7 +637,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.get("/api/quests/:questId/after-action", async (req, res, next) => {
     try {
-      res.json({ report: await service.afterActionReport(req.params.questId) });
+      res.json({ report: await reinoDe(req).afterActionReport(req.params.questId) });
     } catch (error) {
       next(error);
     }
@@ -639,7 +647,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   app.post("/api/events/:eventId/invalidate", validate("POST /api/events/:eventId/invalidate"), async (req, res, next) => {
     try {
       res.json(
-        await service.invalidateEvent({
+        await reinoDe(req).invalidateEvent({
           eventId: req.params.eventId,
           reason: String(req.body?.reason ?? ""),
           invalidatedBy: req.body?.invalidatedBy ? String(req.body.invalidatedBy) : undefined,
@@ -657,7 +665,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
     try {
       const limit = Number(req.query.limit);
       res.json(
-        await service.getNotifications({
+        await reinoDe(req).getNotifications({
           unreadOnly: req.query.unreadOnly === "true" || req.query.unreadOnly === "1",
           limit: Number.isFinite(limit) ? limit : undefined,
           entityType: req.query.entityType ? (String(req.query.entityType) as never) : undefined,
@@ -672,7 +680,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/notifications/:id/read", async (req, res, next) => {
     try {
-      res.json({ notification: await service.markNotificationRead(req.params.id) });
+      res.json({ notification: await reinoDe(req).markNotificationRead(req.params.id) });
     } catch (error) {
       next(error);
     }
@@ -680,7 +688,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/notifications/:id/archive", async (req, res, next) => {
     try {
-      res.json({ notification: await service.archiveNotification(req.params.id) });
+      res.json({ notification: await reinoDe(req).archiveNotification(req.params.id) });
     } catch (error) {
       next(error);
     }
@@ -689,7 +697,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   // Reenviar sólo abre otro intento de entrega: no recrea nada.
   app.post("/api/notifications/:id/resend", async (req, res, next) => {
     try {
-      res.json({ notification: await service.resendNotification(req.params.id) });
+      res.json({ notification: await reinoDe(req).resendNotification(req.params.id) });
     } catch (error) {
       next(error);
     }
@@ -700,15 +708,15 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   // -------------------------------------------------------------------------
   app.post("/api/quests/:questId/focus", async (req, res, next) => {
     try {
-      res.json(await service.focusQuest(req.params.questId));
+      res.json(await reinoDe(req).focusQuest(req.params.questId));
     } catch (error) {
       next(error);
     }
   });
 
-  app.delete("/api/quests/focus", async (_req, res, next) => {
+  app.delete("/api/quests/focus", async (req, res, next) => {
     try {
-      res.json(await service.focusQuest(null));
+      res.json(await reinoDe(req).focusQuest(null));
     } catch (error) {
       next(error);
     }
@@ -716,7 +724,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/acts/:actId/focus", async (req, res, next) => {
     try {
-      res.json(await service.focusAct(req.params.actId));
+      res.json(await reinoDe(req).focusAct(req.params.actId));
     } catch (error) {
       next(error);
     }
@@ -725,7 +733,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   // Sólo un borrador nunca aceptado y sin evidencia validada.
   app.delete("/api/quests/:questId", async (req, res, next) => {
     try {
-      res.json(await service.deleteQuestDraft(req.params.questId));
+      res.json(await reinoDe(req).deleteQuestDraft(req.params.questId));
     } catch (error) {
       next(error);
     }
@@ -734,9 +742,9 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   // -------------------------------------------------------------------------
   // TESORERÍA VIVA. Dinero real en COP; nunca un recurso comprable del juego.
   // -------------------------------------------------------------------------
-  app.get("/api/finance/obligations", async (_req, res, next) => {
+  app.get("/api/finance/obligations", async (req, res, next) => {
     try {
-      res.json(await service.getFinancialObligations());
+      res.json(await reinoDe(req).getFinancialObligations());
     } catch (error) {
       next(error);
     }
@@ -744,7 +752,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/finance/obligations", async (req, res, next) => {
     try {
-      res.status(201).json({ obligation: await service.createRecurringObligation(req.body ?? {}) });
+      res.status(201).json({ obligation: await reinoDe(req).createRecurringObligation(req.body ?? {}) });
     } catch (error) {
       next(error);
     }
@@ -752,7 +760,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
 
   app.post("/api/finance/obligations/:id", async (req, res, next) => {
     try {
-      res.json({ obligation: await service.updateRecurringObligation(req.params.id, req.body ?? {}) });
+      res.json({ obligation: await reinoDe(req).updateRecurringObligation(req.params.id, req.body ?? {}) });
     } catch (error) {
       next(error);
     }
@@ -761,7 +769,7 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   // El monto es explícito y obligatorio; nunca se infiere del impacto.
   app.post("/api/finance/transactions", validate("POST /api/finance/transactions"), async (req, res, next) => {
     try {
-      res.status(201).json(await service.recordFinancialTransaction(req.body ?? {}));
+      res.status(201).json(await reinoDe(req).recordFinancialTransaction(req.body ?? {}));
     } catch (error) {
       next(error);
     }
@@ -808,19 +816,19 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
     }
   });
 
-  app.get(mcpPath, (_req, res) => res.status(405).json({ error: "Este MVP usa MCP stateless por POST." }));
-  app.delete(mcpPath, (_req, res) => res.status(405).json({ error: "Este MVP no mantiene sesiones MCP." }));
+  app.get(mcpPath, (req, res) => res.status(405).json({ error: "Este MVP usa MCP stateless por POST." }));
+  app.delete(mcpPath, (req, res) => res.status(405).json({ error: "Este MVP no mantiene sesiones MCP." }));
 
   // Con ruta secreta activa, /mcp no debe confirmar que aquí vive un Torreón.
   if (mcpPath !== "/mcp") {
-    app.all("/mcp", (_req, res) => res.status(404).json({ error: "No encontrado." }));
+    app.all("/mcp", (req, res) => res.status(404).json({ error: "No encontrado." }));
   }
 
   const here = dirname(fileURLToPath(import.meta.url));
   const webDist = resolve(here, "../../web/dist");
   if (existsSync(webDist)) {
     app.use(express.static(webDist));
-    app.get("*splat", (_req, res) => res.sendFile(resolve(webDist, "index.html")));
+    app.get("*splat", (req, res) => res.sendFile(resolve(webDist, "index.html")));
   }
 
   // EL BORDE TRADUCE, NO DECIDE (artículo 7).

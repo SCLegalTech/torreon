@@ -36,6 +36,23 @@ export const CANONICAL_TITLE: Record<PlayableArchetype, string> = {
   cordera: "Guardiana de la Marca",
 };
 
+/**
+ * CÓMO SE LLAMA LA CLASE EN PANTALLA.
+ *
+ * El id NO cambia —`marques` y `cordera` están en toda la historia persistida—;
+ * lo que cambia es cómo se lee. Caballero y Maga son los dos arquetipos
+ * jugables (artículo 20: renombrar una pantalla nunca reescribe un evento).
+ */
+export const ARCHETYPE_LABEL: Record<PlayableArchetype, string> = {
+  marques: "Caballero",
+  cordera: "Maga",
+};
+
+export const ARCHETYPE_ROLE: Record<PlayableArchetype, string> = {
+  marques: "Caballero / DPS",
+  cordera: "Maga / Apoyo",
+};
+
 export interface CharacterInput {
   archetype: PlayableArchetype;
   /** Cómo se llama el personaje del jugador. */
@@ -87,7 +104,7 @@ export function partyNamesFor(player: PlayerSheet): Record<PartyMemberId, { name
   };
   return {
     roko: { name: nombreDe("roko"), role: "Mascota / Guardia" },
-    marques: { name: nombreDe("marques"), role: "Explorador / DPS" },
-    cordera: { name: nombreDe("cordera"), role: "Sanadora / Apoyo" },
+    marques: { name: nombreDe("marques"), role: ARCHETYPE_ROLE.marques },
+    cordera: { name: nombreDe("cordera"), role: ARCHETYPE_ROLE.cordera },
   };
 }

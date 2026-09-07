@@ -2828,3 +2828,6 @@ button:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3p
 
 .character-field input:focus-visible { border-color: #3fe39a; outline: none; }
 .character-sheet .expedition-button { min-height: var(--tap); }
+
+.nombre-tomado { color: #ff9d8a; }
+.nombre-libre { color: #72ffb0; }
