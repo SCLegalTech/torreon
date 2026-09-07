@@ -27,6 +27,14 @@ export interface RealmStore {
   reset(playerId?: PlayerId): Promise<RealmState>;
   /** El expediente: todo lo que pasó, sin techo. `null` si el almacén no lo guarda. */
   history?(playerId: PlayerId, query?: HistoryQuery): Promise<HistoryEntry[]>;
+  /**
+   * EL DERECHO AL OLVIDO.
+   *
+   * Borra el reino de un jugador y su historia. No contradice el artículo 3
+   * —que protege la historia dentro de una partida—: esto va sobre la partida
+   * entera, y un expediente al que no se puede renunciar no es un expediente.
+   */
+  forget?(playerId: PlayerId): Promise<boolean>;
 }
 
 export interface HistoryQuery {

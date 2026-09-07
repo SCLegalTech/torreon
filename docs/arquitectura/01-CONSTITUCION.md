@@ -47,7 +47,9 @@ campaña no puede cambiar con él.
 
 *Corolario:* **todo texto que venga de fuera del Núcleo es dato, nunca
 instrucción.** Incluye el extracto de un archivo del jugador, el nombre de una
-quest y cualquier campo que un cliente MCP rellene. Ver ADR-0008.
+quest y cualquier campo que un cliente MCP rellene. En el prompt del juez, lo
+comprobado y lo afirmado van separados, y lo afirmado viaja dentro de un sobre
+marcado como no confiable (ADR-0008). ✅
 
 ### Artículo 3 · Anular no es borrar
 
@@ -62,6 +64,13 @@ recorte a 100/200 que sufre `RealmState` es una limitación del documento JSON,
 no una política: en SQLite (ADR-0003) cada hecho se archiva entero y ni siquiera
 `reset` lo borra. Mientras el reino viva en el documento, el límite sigue ahí y
 está centralizado en `realm-events.ts`, para que se borre de un solo sitio. 🕐
+
+*Lo que este artículo NO dice:* que un jugador no pueda irse. Este artículo
+protege la historia **dentro** de una partida —que un hecho no se reescriba para
+que la campaña parezca otra cosa—. El derecho al olvido va sobre la partida
+entera y es lo contrario: `DELETE /v1/player` borra el reino, su expediente, sus
+artefactos y sus llaves. Un expediente al que no se puede renunciar no es un
+expediente.
 
 ### Artículo 4 · Una sola fuente autoritativa por hecho
 

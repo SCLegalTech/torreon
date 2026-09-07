@@ -23,7 +23,7 @@ tareas con espadas.
 ```bash
 npm install
 npm run dev          # interfaz en :5173, MCP y API en :3000
-npm test             # 324 pruebas (las de SQLite se saltan si Node < 22.5)
+npm test             # 332 pruebas (las de SQLite se saltan si Node < 22.5)
 npm run typecheck
 ```
 

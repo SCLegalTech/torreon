@@ -18,7 +18,7 @@ añadiendo juego entre etapas.
 | ~ | **E4** — contrato versionado + SSE | **Unity** | medio · *el contrato ya existe; falta que React lo consuma entero* |
 | ~ | **E5** — autenticación e identidad | **Play Store** | medio · *construida y apagada; encenderla es decisión de persona* |
 | | **E6** — descomponer el orquestador | velocidad sostenida | bajo, continuo |
-| | **E7** — preparación de tienda | publicar | medio |
+| ~ | **E7** — preparación de tienda | publicar | medio · *los derechos del jugador, hechos; el resto es proceso* |
 
 ---
 
@@ -281,17 +281,22 @@ toque ese archivo. Nunca sube.
 
 ---
 
-## E7 — Preparación de tienda
+## E7 — Preparación de tienda *(los derechos del jugador, hechos)*
 
-1. Borrado de cuenta y exportación de datos, de verdad, no en el formulario.
-2. Declaración de datos recogidos que se corresponda con el código.
-3. Los límites de plan de `product.ts` conectados a algo real (o retirados del
-   contrato público hasta que lo estén).
-4. Retención del log de eventos declarada y aplicada.
-5. Firma de release, ofuscación, `versionCode` gestionado.
+1. **Borrado de cuenta y exportación, de verdad** — hecho.
+   `GET /v1/player/export` entrega el reino entero y sus agentes (sin llaves, que
+   no se guardan). `DELETE /v1/player`, con confirmación explícita, borra los
+   artefactos del disco, el reino, el expediente, las sesiones y las
+   concesiones. Dos pruebas lo demuestran, incluida que borrar un reino **no
+   toca el de al lado**.
+2. Declaración de datos recogidos que se corresponda con el código — pendiente.
+3. Los límites de plan de `product.ts` conectados a algo real, o retirados del
+   contrato público hasta que lo estén — pendiente.
+4. Retención del expediente declarada y aplicada — pendiente.
+5. Firma de release, ofuscación, `versionCode` gestionado — pendiente.
 
-*Criterio:* un jugador pide su borrado y no queda ni una fila suya, demostrado
-por una prueba.
+*Criterio:* un jugador pide su borrado y no queda ni una fila suya — hecho y
+probado. Lo que queda es proceso de publicación, no arquitectura.
 
 ---
 

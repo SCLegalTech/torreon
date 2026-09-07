@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { backfillHeroCareer, ensureRoster } from "./barracks.js";
 import { reconcileBattleProjection } from "./battle.js";
@@ -274,6 +274,20 @@ export class JsonRealmStore implements RealmStore {
       const state = createInitialState(this.clock.now(), playerId);
       await this.write(state, playerId);
       return state;
+    });
+    this.queues.set(playerId, operation.then(() => undefined, () => undefined));
+    return operation;
+  }
+
+  /** Borra el reino de un jugador. El del jugador por defecto también. */
+  async forget(playerId: PlayerId = DEFAULT_PLAYER_ID): Promise<boolean> {
+    const operation = this.queueFor(playerId).then(async () => {
+      try {
+        await rm(this.pathFor(playerId), { force: true });
+        return true;
+      } catch {
+        return false;
+      }
     });
     this.queues.set(playerId, operation.then(() => undefined, () => undefined));
     return operation;

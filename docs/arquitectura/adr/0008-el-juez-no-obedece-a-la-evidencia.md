@@ -1,6 +1,6 @@
 # ADR-0008 · El texto de un artefacto es dato, nunca instrucción
 
-- **Estado:** propuesto (etapa 1 — barato y urgente)
+- **Estado:** aceptado — implementado; seis pruebas en `codice-frontera.test.ts`
 - **Fecha:** 2026-09-06
 - **Artículos:** 1, 2
 

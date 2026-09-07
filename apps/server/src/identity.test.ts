@@ -176,6 +176,56 @@ describe("Quién pregunta", () => {
       expect(response.body.error).toMatch(/no es tuya/i);
     });
 
+    it("un jugador se lleva lo suyo y deja de existir aquí", async () => {
+      const diego = await entrar(LLAVE_A);
+      await request(app)
+        .post("/v1/quests/from-intent")
+        .set("authorization", `Bearer ${diego.token}`)
+        .send({ intent: "Pagar el arriendo del mes" })
+        .expect(200);
+
+      // Llevárselo: el reino entero, tal cual.
+      const exportado = await request(app).get("/v1/player/export").set("authorization", `Bearer ${diego.token}`).expect(200);
+      expect(exportado.body.playerId).toBe(diego.playerId);
+      expect(exportado.body.realm.quests.length).toBe(1);
+      expect(exportado.headers["content-disposition"]).toContain("torreon-");
+
+      // Y borrarlo. Sin la confirmación exacta, no pasa nada.
+      await request(app).delete("/v1/player").set("authorization", `Bearer ${diego.token}`).send({}).expect(422);
+
+      const borrado = await request(app)
+        .delete("/v1/player")
+        .set("authorization", `Bearer ${diego.token}`)
+        .send({ confirm: "borrar mi reino" })
+        .expect(200);
+      expect(borrado.body.realmRemoved).toBe(true);
+
+      // No queda ni la llave con la que entró.
+      await request(app).get("/v1/realm/summary").set("authorization", `Bearer ${diego.token}`).expect(403);
+      const identity = await kingdom.identity.read();
+      expect(identity.players.find((player) => player.playerId === diego.playerId)).toBeUndefined();
+      expect(identity.sessions.filter((session) => session.playerId === diego.playerId)).toHaveLength(0);
+    });
+
+    it("borrar un reino no toca el de al lado", async () => {
+      const diego = await entrar(LLAVE_A);
+      const cordera = await entrar(LLAVE_B);
+      await request(app)
+        .post("/v1/quests/from-intent")
+        .set("authorization", `Bearer ${cordera.token}`)
+        .send({ intent: "Regar el huerto" })
+        .expect(200);
+
+      await request(app)
+        .delete("/v1/player")
+        .set("authorization", `Bearer ${diego.token}`)
+        .send({ confirm: "borrar mi reino" })
+        .expect(200);
+
+      const suyo = await request(app).get("/v1/map").set("authorization", `Bearer ${cordera.token}`).expect(200);
+      expect(suyo.body.data.standaloneQuests.length).toBe(1);
+    });
+
     it("el reino guarda huellas, nunca la llave", async () => {
       const diego = await entrar(LLAVE_A);
       const { body } = await request(app)

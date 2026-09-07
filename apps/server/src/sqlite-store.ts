@@ -220,6 +220,26 @@ export class SqliteRealmStore implements RealmStore {
     return result;
   }
 
+  /**
+   * El derecho al olvido, también sobre el expediente.
+   *
+   * Aquí sí se borran los hechos: no es reescribir una campaña para que parezca
+   * otra cosa —eso sigue prohibido—, es que el jugador deja de existir.
+   */
+  async forget(playerId: PlayerId = DEFAULT_PLAYER_ID): Promise<boolean> {
+    requirePlayerId(playerId);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("DELETE FROM realm_events WHERE player_id = ?").run(playerId);
+      this.db.prepare("DELETE FROM realms WHERE player_id = ?").run(playerId);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return true;
+  }
+
   async history(playerId: PlayerId, query: HistoryQuery = {}): Promise<HistoryEntry[]> {
     requirePlayerId(playerId);
     const rows = this.db

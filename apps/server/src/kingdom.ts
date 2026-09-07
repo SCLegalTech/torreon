@@ -28,7 +28,7 @@ export class Kingdom {
   readonly identity: IdentityStore;
 
   constructor(
-    private readonly store: RealmStore,
+    readonly store: RealmStore,
     private readonly codice: CodicePlanner = new HeuristicCodice(),
     private readonly dataDir = "./data",
     private readonly instance = process.env.TORREON_INSTANCE?.trim() || "torreon-local",

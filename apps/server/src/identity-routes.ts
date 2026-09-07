@@ -4,6 +4,7 @@ import { bearerOf, requireCaller } from "./auth.js";
 import { invalid } from "./errors.js";
 import { agentsOf, closeSession, grantAgent, openDeviceSession, revokeAgent, ALL_SCOPES, type Scope } from "./identity.js";
 import type { Kingdom } from "./kingdom.js";
+import { exportPlayer, forgetPlayer } from "./player-data.js";
 
 /**
  * LAS PUERTAS DE LA IDENTIDAD (artículo 11, ADR-0007).
@@ -106,6 +107,33 @@ export function createIdentityRouter(kingdom: Kingdom): Router {
         revokeAgent(identity, req.caller!.playerId, String(req.params.grantId), body.reason ?? "", clock.now()),
       );
       res.json({ agent: { id: grant.id, label: grant.label, revokedAt: grant.revokedAt, revokedReason: grant.revokedReason } });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
+   * LLEVARSE LO SUYO. Todo el reino, tal cual, más los agentes sin sus llaves.
+   */
+  router.get("/player/export", requireCaller, async (req, res, next) => {
+    try {
+      const data = await exportPlayer(kingdom.store, kingdom.identity, req.caller!.playerId, clock.iso());
+      res.setHeader("Content-Disposition", `attachment; filename="torreon-${req.caller!.playerId}.json"`);
+      res.json(data);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
+   * DEJAR DE EXISTIR AQUÍ. Play Store lo exige y es lo correcto: un expediente
+   * al que no se puede renunciar no es un expediente.
+   */
+  router.delete("/player", requireCaller, async (req, res, next) => {
+    try {
+      const confirmacion = parse(z.object({ confirm: z.literal("borrar mi reino") }), req.body);
+      void confirmacion;
+      res.json(await forgetPlayer(kingdom.store, kingdom.identity, req.caller!.playerId));
     } catch (error) {
       next(error);
     }

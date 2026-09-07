@@ -224,7 +224,7 @@ Detalle que lo delata: la corrección de la formación resucitada (`store.ts:150
 es lógica de negocio delicada —«sólo baja, nunca sube»— viviendo dentro del
 lector del almacén.
 
-### A-1 · El juez consume texto no confiable sin frontera
+### A-1 · El juez consume texto no confiable sin frontera *(resuelto)*
 
 `judgePrompt()` interpola en el prompt del modelo el contenido del archivo que
 subió el jugador:
@@ -242,6 +242,13 @@ declaración no cierra un paso que pactó archivo—, así que el techo del ataq
 *ese paso*. Pero ese paso **es** la unidad de valor del producto. Y el vector no
 requiere que el jugador se engañe a sí mismo: cuando un agente externo
 (ChatGPT) adjunta un documento de terceros, el documento habla con el juez.
+
+**Resuelto** (ADR-0008): el prompt separa ahora lo que el servidor COMPROBÓ
+—existencia, tamaño, tipo, hash— de lo que alguien AFIRMA, y todo lo segundo
+—declaración del jugador y extractos de archivos— viaja dentro de un sobre
+marcado como contenido no confiable, con instrucción explícita de que nada de
+ahí dentro son órdenes. Un extracto no puede cerrar su propio sobre para
+escaparse. El Núcleo sigue acotando: es la última línea, no la única.
 
 ### A-2 · `QuestService` es el sitio donde aterriza todo
 
