@@ -136,7 +136,7 @@ import {
   MAX_QUESTS_PER_ACT,
   type ScaleProposal,
 } from "./scale.js";
-import { JsonRealmStore } from "./store.js";
+import type { RealmStore } from "./realm-store.js";
 import { DEFAULT_PLAYER_ID, type PlayerId } from "./players.js";
 import {
   abandonCampaign,
@@ -754,7 +754,7 @@ export interface CodiceVerdictResult {
 
 export class QuestService {
   constructor(
-    private readonly store: JsonRealmStore,
+    private readonly store: RealmStore,
     private readonly codice: CodicePlanner = new HeuristicCodice(),
     private readonly dataDir = "./data",
     /** Etiqueta legible de esta instancia: distingue el reino local del de la nube. */

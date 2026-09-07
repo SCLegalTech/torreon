@@ -58,8 +58,10 @@ y autor, y la historia conserva ambos.
 editar no prueba nada.
 
 *Corolario operativo:* el log de eventos es **append-only y sin techo**. El
-recorte actual (`slice(0, 200)`) es una violación forzada por la persistencia
-monolítica; la etapa 2 de la hoja de ruta la elimina. 🕐
+recorte a 100/200 que sufre `RealmState` es una limitación del documento JSON,
+no una política: en SQLite (ADR-0003) cada hecho se archiva entero y ni siquiera
+`reset` lo borra. Mientras el reino viva en el documento, el límite sigue ahí y
+está centralizado en `realm-events.ts`, para que se borre de un solo sitio. 🕐
 
 ### Artículo 4 · Una sola fuente autoritativa por hecho
 

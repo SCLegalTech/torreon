@@ -31,6 +31,7 @@ const CORE_MODULES = [
   "realm-events.ts",
   "treasury-flow.ts",
   "campaign-flow.ts",
+  "realm-store.ts",
   "battle.ts",
   "party.ts",
   "horde.ts",

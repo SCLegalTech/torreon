@@ -11,6 +11,7 @@ import { freshParty, refreshPartyDisplay } from "./party.js";
 import { DEV_ENTITLEMENTS, freshUsage, rolloverUsage } from "./product.js";
 import { isoAt, systemClock, type Clock } from "./clock.js";
 import { DEFAULT_PLAYER_ID, requirePlayerId, type PlayerId } from "./players.js";
+import type { RealmStore } from "./realm-store.js";
 
 
 export function createInitialState(nowMs: number, playerId: PlayerId = DEFAULT_PLAYER_ID): RealmState {
@@ -62,7 +63,139 @@ export function createInitialState(nowMs: number, playerId: PlayerId = DEFAULT_P
   };
 }
 
-export class JsonRealmStore {
+/**
+ * MIGRACIÓN DE LECTURA — compartida por todos los almacenes.
+ *
+ * Vivía dentro del lector del JSON, así que cada almacén nuevo la habría
+ * duplicado o la habría perdido. Sigue ejecutándose en cada lectura y sigue sin
+ * versionar: eso es deuda conocida (hallazgo B-5) que cierra el esquema
+ * versionado de SQLite. Lo que ya NO puede pasar es que un adaptador nuevo se
+ * la salte.
+ *
+ * Regla que no se toca (artículo 20): una migración NUNCA resucita lo que el
+ * jugador ya mató. Sólo baja, nunca sube.
+ */
+export function migrateRealm(state: RealmState, nowMs: number): RealmState {
+  // Reinos creados antes de que existiera la identidad reciben una al leerse.
+  state.realmId ??= randomUUID();
+  state.evidence ??= [];
+  // Reinos anteriores a la jerarquía no tenían padres: la microquest es válida.
+  state.sagas ??= [];
+  state.campaigns ??= [];
+  state.acts ??= [];
+  // Los actos nacían «pending»; ahora la disponibilidad se llama por su nombre.
+  for (const act of state.acts) {
+    if ((act.status as string) === "pending") act.status = "available";
+  }
+  // Reinos anteriores al pacto de campaña ya estaban vivos: se respetan.
+  for (const campaign of state.campaigns) {
+    campaign.status ??= "active";
+  }
+  // Actos anteriores a la ejecución en paralelo no declaran dependencias.
+  for (const act of state.acts) {
+    act.dependsOnActIds ??= [];
+  }
+  // Un hecho sin entidad no se puede abrir: los históricos apuntan a su quest.
+  for (const event of state.events) {
+    event.entityType ??= "quest";
+    event.entityId ??= event.questId ?? "";
+  }
+  state.artifacts ??= [];
+  state.lifeEvents ??= [];
+  state.gameEvents ??= [];
+  // CENTRO DE NOTIFICACIONES y TESORERÍA: reinos anteriores nacen vacíos.
+  state.notifications ??= [];
+  state.recurringObligations ??= [];
+  state.financialTransactions ??= [];
+  // Capa de producto: se completan los campos que falten sin pisar los puestos.
+  state.entitlements = { ...DEV_ENTITLEMENTS, ...(state.entitlements ?? {}) };
+  // La telemetría nueva empieza en cero sin pisar lo ya contado hoy.
+  state.usage = { ...freshUsage(nowMs), ...(state.usage ?? {}) };
+  rolloverUsage(state.usage, nowMs);
+  // Reinos anteriores a la hoja de personaje empiezan en cero, no en inventado.
+  state.character ??= { xp: 0, aura: 0, mastery: {}, rewardedQuestIds: [] };
+  state.inventory ??= { items: [] };
+  state.inventory.items ??= [];
+  state.companionAssists ??= [];
+  // BARRACAS y MEMORIA DE BATALLA: un reino anterior nace sin ellas y las
+  // estrena vacías. NO se fabrican estadísticas retroactivas de la nada.
+  state.companionExecutions ??= [];
+  state.heroes ??= {};
+  state.progressionLedger ??= [];
+  state.afterActionReports ??= [];
+  state.battleLessons ??= [];
+  state.playbooks ??= [];
+  state.character.mastery ??= {};
+  state.character.rewardedQuestIds ??= [];
+  for (const quest of state.quests) {
+    quest.version ??= 1;
+    quest.amendments ??= [];
+    // Una Quest Libre no tiene texto de campaña: se normaliza a cadena vacía.
+    quest.campaignTitle ??= "";
+    if (quest.battle) {
+      const battle = quest.battle;
+      battle.attempt ??= 1;
+      battle.suspendedMs ??= 0;
+      // Sin semilla no hay secuencia reproducible: se le da una estable.
+      battle.combatSeed ||= `${quest.id}:${battle.startedAt}`;
+      battle.encounterSeed ||= `${quest.id}:encounter`;
+      battle.settledPressureMs ??= 0;
+      battle.appliedCriticalWindows ??= [];
+      battle.attempts ??= [
+        { attempt: battle.attempt, startedAt: battle.startedAt, durationMinutes: battle.durationMinutes, deadlineAt: battle.deadlineAt },
+      ];
+      // Una Battle anterior al grupo y a la formación 4v4 los estrena ahora.
+      battle.party ??= freshParty();
+      battle.agent ??= emptyAgentSlot();
+      // UNA MIGRACIÓN NO PUEDE RESUCITAR AL ENEMIGO.
+      // Antes de la formación 4v4 la Horda era una barra: si estaba en 10 HP
+      // porque el jugador la había bajado a golpes reales, la formación nueva
+      // tiene que nacer con esos mismos 10 repartidos, no con 100.
+      const validatedImpact = quest.steps.reduce((sum, step) => sum + (step.impactAwarded ?? 0), 0);
+      const historicHealth = Math.max(0, 100 - validatedImpact);
+      if (!battle.enemies || battle.enemies.length === 0) {
+        battle.enemies = backfillEncounter(battle.encounterSeed, historicHealth);
+      } else if (battle.enemies.reduce((sum, enemy) => sum + enemy.health, 0) > historicHealth) {
+        // Repara una formación que YA nació resucitada por una migración
+        // anterior. Sólo baja, nunca sube: si el combo de un compañero dejó a
+        // la Horda por debajo del contrato, ese daño extra se respeta.
+        battle.enemies = backfillEncounter(battle.encounterSeed, historicHealth);
+      }
+      if ((battle.status as string) === "lost") battle.status = "awaiting_replan";
+      // NOMBRE VISIBLE ≠ ID INTERNO: una formación guardada antes de la
+      // corrección canónica lleva «Roko» dentro. Se corrige el nombre y NADA
+      // más: id, HP, escudo y cicatrices siguen exactamente igual.
+      refreshPartyDisplay(battle.party);
+      // UNA SOLA FUENTE AUTORITATIVA. Nunca `won` en una vista y `active` en
+      // otra: si el contrato está validado, la Battle está ganada aquí también.
+      reconcileBattleProjection(quest, nowMs);
+    }
+    for (const step of quest.steps) {
+      step.impactAwarded ??= step.status === "completed" ? step.weight : 0;
+      step.evidenceIds ??= [];
+      step.artifactIds ??= [];
+    }
+  }
+  for (const artifact of state.artifacts) {
+    artifact.stepIds ??= [artifact.stepId];
+  }
+  // El roster base se reconoce siempre; sus contadores siguen en cero hasta
+  // que alguien pelee de verdad. B-003: conocido no es haber participado.
+  ensureRoster(state, isoAt(nowMs));
+  // Un reino con historia previa recupera su carrera UNA vez, desde datos
+  // autoritativos y deduplicando reintentos. Nunca inventa lo que no consta.
+  backfillHeroCareer(state, nowMs);
+  // BACKFILL SEGURO: sólo estado accionable ahora, idempotente por `key`.
+  // Los registros nuevos persisten en la siguiente mutación; mientras tanto
+  // el snapshot ya los ve, así que el jugador nunca «pierde» un pacto.
+  backfillNotifications(state, nowMs);
+  // Y lo contrario del backfill: lo que ya no pide nada se jubila. Un frente
+  // ganado o abandonado no puede seguir llamando a la puerta.
+  settleClosedNotifications(state, nowMs);
+  return state;
+}
+
+export class JsonRealmStore implements RealmStore {
   /**
    * UNA COLA POR JUGADOR.
    *
@@ -117,123 +250,7 @@ export class JsonRealmStore {
     // El reino que existía antes del sujeto se adopta al leerse. NO se mueve de
     // archivo y no pierde nada: sólo pasa a tener dueño (artículo 10).
     state.playerId ??= playerId;
-    // Reinos creados antes de que existiera la identidad reciben una al leerse.
-    state.realmId ??= randomUUID();
-    state.evidence ??= [];
-    // Reinos anteriores a la jerarquía no tenían padres: la microquest es válida.
-    state.sagas ??= [];
-    state.campaigns ??= [];
-    state.acts ??= [];
-    // Los actos nacían «pending»; ahora la disponibilidad se llama por su nombre.
-    for (const act of state.acts) {
-      if ((act.status as string) === "pending") act.status = "available";
-    }
-    // Reinos anteriores al pacto de campaña ya estaban vivos: se respetan.
-    for (const campaign of state.campaigns) {
-      campaign.status ??= "active";
-    }
-    // Actos anteriores a la ejecución en paralelo no declaran dependencias.
-    for (const act of state.acts) {
-      act.dependsOnActIds ??= [];
-    }
-    // Un hecho sin entidad no se puede abrir: los históricos apuntan a su quest.
-    for (const event of state.events) {
-      event.entityType ??= "quest";
-      event.entityId ??= event.questId ?? "";
-    }
-    state.artifacts ??= [];
-    state.lifeEvents ??= [];
-    state.gameEvents ??= [];
-    // CENTRO DE NOTIFICACIONES y TESORERÍA: reinos anteriores nacen vacíos.
-    state.notifications ??= [];
-    state.recurringObligations ??= [];
-    state.financialTransactions ??= [];
-    // Capa de producto: se completan los campos que falten sin pisar los puestos.
-    state.entitlements = { ...DEV_ENTITLEMENTS, ...(state.entitlements ?? {}) };
-    // La telemetría nueva empieza en cero sin pisar lo ya contado hoy.
-    state.usage = { ...freshUsage(nowMs), ...(state.usage ?? {}) };
-    rolloverUsage(state.usage, nowMs);
-    // Reinos anteriores a la hoja de personaje empiezan en cero, no en inventado.
-    state.character ??= { xp: 0, aura: 0, mastery: {}, rewardedQuestIds: [] };
-    state.inventory ??= { items: [] };
-    state.inventory.items ??= [];
-    state.companionAssists ??= [];
-    // BARRACAS y MEMORIA DE BATALLA: un reino anterior nace sin ellas y las
-    // estrena vacías. NO se fabrican estadísticas retroactivas de la nada.
-    state.companionExecutions ??= [];
-    state.heroes ??= {};
-    state.progressionLedger ??= [];
-    state.afterActionReports ??= [];
-    state.battleLessons ??= [];
-    state.playbooks ??= [];
-    state.character.mastery ??= {};
-    state.character.rewardedQuestIds ??= [];
-    for (const quest of state.quests) {
-      quest.version ??= 1;
-      quest.amendments ??= [];
-      // Una Quest Libre no tiene texto de campaña: se normaliza a cadena vacía.
-      quest.campaignTitle ??= "";
-      if (quest.battle) {
-        const battle = quest.battle;
-        battle.attempt ??= 1;
-        battle.suspendedMs ??= 0;
-        // Sin semilla no hay secuencia reproducible: se le da una estable.
-        battle.combatSeed ||= `${quest.id}:${battle.startedAt}`;
-        battle.encounterSeed ||= `${quest.id}:encounter`;
-        battle.settledPressureMs ??= 0;
-        battle.appliedCriticalWindows ??= [];
-        battle.attempts ??= [
-          { attempt: battle.attempt, startedAt: battle.startedAt, durationMinutes: battle.durationMinutes, deadlineAt: battle.deadlineAt },
-        ];
-        // Una Battle anterior al grupo y a la formación 4v4 los estrena ahora.
-        battle.party ??= freshParty();
-        battle.agent ??= emptyAgentSlot();
-        // UNA MIGRACIÓN NO PUEDE RESUCITAR AL ENEMIGO.
-        // Antes de la formación 4v4 la Horda era una barra: si estaba en 10 HP
-        // porque el jugador la había bajado a golpes reales, la formación nueva
-        // tiene que nacer con esos mismos 10 repartidos, no con 100.
-        const validatedImpact = quest.steps.reduce((sum, step) => sum + (step.impactAwarded ?? 0), 0);
-        const historicHealth = Math.max(0, 100 - validatedImpact);
-        if (!battle.enemies || battle.enemies.length === 0) {
-          battle.enemies = backfillEncounter(battle.encounterSeed, historicHealth);
-        } else if (battle.enemies.reduce((sum, enemy) => sum + enemy.health, 0) > historicHealth) {
-          // Repara una formación que YA nació resucitada por una migración
-          // anterior. Sólo baja, nunca sube: si el combo de un compañero dejó a
-          // la Horda por debajo del contrato, ese daño extra se respeta.
-          battle.enemies = backfillEncounter(battle.encounterSeed, historicHealth);
-        }
-        if ((battle.status as string) === "lost") battle.status = "awaiting_replan";
-        // NOMBRE VISIBLE ≠ ID INTERNO: una formación guardada antes de la
-        // corrección canónica lleva «Roko» dentro. Se corrige el nombre y NADA
-        // más: id, HP, escudo y cicatrices siguen exactamente igual.
-        refreshPartyDisplay(battle.party);
-        // UNA SOLA FUENTE AUTORITATIVA. Nunca `won` en una vista y `active` en
-        // otra: si el contrato está validado, la Battle está ganada aquí también.
-        reconcileBattleProjection(quest, nowMs);
-      }
-      for (const step of quest.steps) {
-        step.impactAwarded ??= step.status === "completed" ? step.weight : 0;
-        step.evidenceIds ??= [];
-        step.artifactIds ??= [];
-      }
-    }
-    for (const artifact of state.artifacts) {
-      artifact.stepIds ??= [artifact.stepId];
-    }
-    // El roster base se reconoce siempre; sus contadores siguen en cero hasta
-    // que alguien pelee de verdad. B-003: conocido no es haber participado.
-    ensureRoster(state, isoAt(nowMs));
-    // Un reino con historia previa recupera su carrera UNA vez, desde datos
-    // autoritativos y deduplicando reintentos. Nunca inventa lo que no consta.
-    backfillHeroCareer(state, nowMs);
-    // BACKFILL SEGURO: sólo estado accionable ahora, idempotente por `key`.
-    // Los registros nuevos persisten en la siguiente mutación; mientras tanto
-    // el snapshot ya los ve, así que el jugador nunca «pierde» un pacto.
-    backfillNotifications(state, nowMs);
-    // Y lo contrario del backfill: lo que ya no pide nada se jubila. Un frente
-    // ganado o abandonado no puede seguir llamando a la puerta.
-    settleClosedNotifications(state, nowMs);
-    return state;
+    return migrateRealm(state, nowMs);
   }
 
   async mutate<T>(

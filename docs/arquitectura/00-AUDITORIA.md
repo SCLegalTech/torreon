@@ -137,7 +137,7 @@ mitigación inmediata de la hoja de ruta. **Falta poner los secretos en Fly y
 recompilar la APK**, que es una acción de persona, no de código. Hasta que eso
 ocurra, el reino de la nube sigue abierto.
 
-### B-3 · El archivo JSON es simultáneamente la base de datos, el log de eventos y el DTO
+### B-3 · El archivo JSON es simultáneamente la base de datos, el log de eventos y el DTO *(resuelto en el código; el traslado, pendiente)*
 
 Un solo documento se lee, se parsea, se migra, se muta y se reescribe **entero**
 en cada operación (`store.ts:76-217`). Tres consecuencias distintas:
@@ -162,10 +162,16 @@ state.gameEvents  = state.gameEvents.slice(0, 200);   // ≥6 sitios distintos
 state.notifications = ...slice(0, 200);               // notifications.ts:112
 ```
 
-Un producto cuya tesis es *«sólo la evidencia comprobada causa daño»* **está
-destruyendo su propia evidencia a partir del evento 201**. Y el recorte está
-copiado en cada sitio que escribe, no en el almacén: el próximo camino de
-escritura que lo olvide rompe el límite en silencio.
+Un producto cuya tesis es *«sólo la evidencia comprobada causa daño»* **estaba
+destruyendo su propia evidencia a partir del evento 201**. Y el recorte estaba
+copiado en cada sitio que escribe, no en el almacén.
+
+**Resuelto en el código (E3, ADR-0003):** `realm-store.ts` define el puerto y
+`sqlite-store.ts` lo cumple con transacciones, concurrencia optimista por
+revisión y una tabla de hechos append-only **sin techo**. El recorte quedó
+además centralizado en `realm-events.ts`, y `reset` ya no borra el expediente.
+**Falta trasladar el reino de producción**, que es una decisión de persona con
+copia del volumen por delante.
 
 ### B-4 · El contrato con el cliente es «te mando todo el estado, cada 1,5 segundos»
 

@@ -23,7 +23,7 @@ tareas con espadas.
 ```bash
 npm install
 npm run dev          # interfaz en :5173, MCP y API en :3000
-npm test             # 278 pruebas: dominio, jugadores, acceso y arquitectura
+npm test             # 292 pruebas (las de SQLite se saltan si Node < 22.5)
 npm run typecheck
 ```
 
@@ -40,7 +40,8 @@ consultan ChatGPT y Claude por MCP.
 |---|---|
 | `apps/server/src/domain.ts` | El vocabulario. Tipos puros, cero imports. Empieza por aquí. |
 | `apps/server/src/read-models.ts` | Proyecciones de lectura. Lo que verá Unity. |
-| `apps/server/src/quest-service.ts` | El orquestador. 2 922 líneas; **sólo puede encoger**. |
+| `apps/server/src/quest-service.ts` | El orquestador. **Sólo puede encoger**: hay un trinquete. |
+| `apps/server/src/realm-store.ts` | El puerto de la persistencia. `store.ts` (JSON) y `sqlite-store.ts` lo cumplen. |
 | `apps/server/src/codice.ts` | El contrato del Dungeon Master, con dos runtimes. |
 | `apps/server/src/app.ts` / `mcp.ts` | Transporte. Traducen; no deciden. |
 | `apps/server/src/architecture.test.ts` | Las pruebas que defienden la constitución. |

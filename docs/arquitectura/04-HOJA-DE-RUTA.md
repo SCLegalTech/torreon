@@ -14,7 +14,7 @@ añadiendo juego entre etapas.
 | ✅ | **E0** — guardarraíles | que lo demás no se deshaga | — |
 | OK | **E1** — puertos y bordes | pruebas deterministas, errores útiles | — |
 | OK | **E2** — el jugador en el modelo | todo lo multiusuario | — |
-| | **E3** — persistencia real | concurrencia, auditoría, escala | **alto** |
+| ~ | **E3** — persistencia real | concurrencia, auditoría, escala | **alto** · *construida y probada; trasladar el reino es decisión de persona* |
 | | **E4** — contrato versionado + SSE | **Unity** | medio |
 | | **E5** — autenticación e identidad | **Play Store** | medio |
 | | **E6** — descomponer el orquestador | velocidad sostenida | bajo, continuo |
@@ -133,24 +133,54 @@ al jugador por defecto; la identidad real es E5.
 
 ---
 
-## E3 — Persistencia real *(la etapa de mayor riesgo)*
+## E3 — Persistencia real *(construida y probada; falta la decisión de trasladar)*
 
-1. SQLite con WAL: tablas de estado + **log de eventos append-only**.
-2. `RealmRepository` y `EventLog` como puertos; `JsonRealmStore` pasa a ser un
-   adaptador más (útil para pruebas).
-3. Un caso de uso = una transacción. Se acaba la lectura-modificación-escritura
-   partida entre llamadas.
-4. Los `slice(0, 200)` **desaparecen**: el log deja de truncarse (art. 3).
-5. Migraciones a `migrations/NNNN-*.ts`, versionadas e idempotentes; el lector
-   del almacén deja de migrar en cada lectura.
+### Hecho
 
-*Riesgo:* es el corazón. Mitigación: el Núcleo no se toca (art. 6 lo garantiza y
-`architecture.test.ts` lo vigila), las 183 pruebas existentes corren contra
-ambos adaptadores, y se hace copia del volumen Fly antes de migrar.
+1. **El puerto existe como tipo**, no sólo como disciplina: `realm-store.ts`
+   define `RealmStore` y `HistoryEntry`. `QuestService` depende del puerto, no
+   del adaptador; `JsonRealmStore` es ahora *un* adaptador.
+2. **`sqlite-store.ts`**: SQLite en WAL con `synchronous = FULL`, esquema
+   versionado en `schema_migrations`, tabla `realms` y tabla `realm_events`
+   **append-only y sin techo**.
+3. **Una operación = una transacción**, con **concurrencia optimista**: se lee
+   con revisión, se decide, y la escritura sólo entra si nadie se adelantó; si
+   alguien lo hizo, la operación se rehace sobre la verdad nueva. Se acabó la
+   escritura perdida en silencio.
+4. **El expediente deja de borrarse.** El documento sigue recortando a 100/200
+   —es su límite—, pero SQLite archiva cada hecho por `event_id`, idempotente.
+   Y `reset` **no borra el expediente**: anular no es borrar (art. 3).
+5. **`migrateRealm` se extrajo** del lector del JSON: los dos adaptadores
+   comparten exactamente la misma migración de lectura.
+6. **Traslado**: `npm run realm:sqlite` copia cada reino con su historia. No
+   borra el documento, así que volver atrás es cambiar una variable.
 
-*Criterio:* las mismas 183 pruebas pasan contra SQLite; dos escrituras
-concurrentes sobre el mismo reino no se pierden; un reino con 10 000 eventos
-responde igual de rápido que uno con 73.
+*Comprobado:* `store-conformance.test.ts` corre la misma batería contra los dos
+adaptadores. **289 pruebas verdes bajo Node 22** (con Node 20, las de SQLite se
+saltan). El traslado se ejecutó sobre una copia del reino real: 12 quests y 85
+hechos archivados.
+
+### Pendiente, y es deliberado
+
+- **Node 22.5+** (`node:sqlite`). El Docker de Fly ya lo cumple; la máquina de
+  desarrollo tiene Node 20, así que `json` sigue siendo el valor por defecto.
+- **Trasladar el reino de producción es una decisión de persona**, no un efecto
+  secundario de un despliegue: exige copia del volumen por delante.
+- **El estado sigue guardándose como documento** dentro de la fila del jugador.
+  Normalizar el dominio entero es otra obra y ningún problema actual la pide: lo
+  que engordaba el documento era la historia, y la historia ya salió de ahí.
+
+### Cómo se traslada, cuando se decida
+
+```bash
+fly volumes snapshots create <volumen> -a torreon
+fly ssh console -a torreon -C "npm run realm:sqlite"
+fly secrets set TORREON_STORE=sqlite -a torreon
+```
+
+*Criterio:* las mismas pruebas pasan contra SQLite, hecho; dos escrituras
+concurrentes sobre el mismo reino no se pierden, hecho; el expediente sobrevive
+a un reinicio del reino, hecho.
 
 ---
 
