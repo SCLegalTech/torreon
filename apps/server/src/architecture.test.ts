@@ -32,6 +32,7 @@ const CORE_MODULES = [
   "treasury-flow.ts",
   "campaign-flow.ts",
   "realm-store.ts",
+  "identity.ts",
   "battle.ts",
   "party.ts",
   "horde.ts",

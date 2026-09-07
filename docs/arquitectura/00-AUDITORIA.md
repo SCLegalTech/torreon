@@ -110,7 +110,7 @@ por jugador y `players.test.ts` demuestra dos reinos conviviendo sin verse. El
 reino que ya existía fue adoptado sin moverse de archivo. Queda B-2: saber
 **quién** pregunta sigue siendo la etapa 5.
 
-### B-2 · La API de la aplicación no tiene autenticación de ningún tipo · *código listo, falta desplegar*
+### B-2 · La API de la aplicación no tiene autenticación de ningún tipo *(resuelto en el código; encenderlo, pendiente)*
 
 `https://torreon.fly.dev` está en producción. Sus 59 rutas `/api/*` no
 comprueban nada. Entre ellas:
@@ -131,11 +131,16 @@ El propio equipo ya lo había diagnosticado
 (`docs/RETROALIMENTACION-PARA-CODICE-REALM-UNICO.md`, «alcance pendiente» n.º 1)
 y seguía abierto. **Esto era hoy, en producción, no una hipótesis de escala.**
 
-**Estado:** el tapón ya está en el código —`TORREON_API_TOKEN`,
-`TORREON_RESET_TOKEN`, y nueve pruebas en `api-access.test.ts`—, descrito en la
-mitigación inmediata de la hoja de ruta. **Falta poner los secretos en Fly y
-recompilar la APK**, que es una acción de persona, no de código. Hasta que eso
-ocurra, el reino de la nube sigue abierto.
+**Estado:** hay dos capas, y las dos están en el código:
+
+- **El tapón** (`TORREON_API_TOKEN`, `TORREON_RESET_TOKEN`): cierra la puerta,
+  pero no dice quién llama. Nueve pruebas en `api-access.test.ts`.
+- **La identidad de verdad** (E5, ADR-0007): sesión de jugador por dispositivo y
+  concesiones de agente revocables, con `TORREON_IDENTITY=on`. Trece pruebas en
+  `identity.test.ts`.
+
+**Falta encenderlo**, que es una acción de persona: poner los secretos en Fly y
+recompilar la APK. Hasta entonces, el reino de la nube sigue abierto.
 
 ### B-3 · El archivo JSON es simultáneamente la base de datos, el log de eventos y el DTO *(resuelto en el código; el traslado, pendiente)*
 

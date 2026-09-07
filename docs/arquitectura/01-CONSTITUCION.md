@@ -137,8 +137,10 @@ módulo del Núcleo y **bajar el presupuesto**, nunca subirlo.
 
 ## Título III — El jugador
 
-*(El artículo 10 ya se cumple desde E2. Los artículos 11 y 12 siguen 🕐: son la
-etapa 5, y son el bloqueo duro para Play Store.)*
+*(El artículo 10 se cumple desde E2 y el 11 desde E5, aunque la identidad viene
+apagada por defecto: encenderla en un reino que ya juega es una decisión de
+persona. El 12 se cumple para las vistas de `/v1`; `/api` sigue entregando el
+estado completo mientras React migra.)*
 
 ### Artículo 10 · Todo dato pertenece a un jugador ✅
 
@@ -149,7 +151,7 @@ UN jugador y no puede alcanzar el reino de otro.
 *Por qué:* multiusuario no es una capa que se pone encima. Es la raíz del modelo
 de datos, y cambiarla después cuesta una migración de todo lo persistido.
 
-### Artículo 11 · Autenticar al jugador no es autorizar al agente
+### Artículo 11 · Autenticar al jugador no es autorizar al agente ✅
 
 Son dos identidades distintas, con dos alcances distintos y dos revocaciones
 independientes:

@@ -1,7 +1,10 @@
 import { dirname, resolve } from "node:path";
 import { createHttpApp } from "./app.js";
 import { createCodice } from "./codice.js";
-import { QuestService } from "./quest-service.js";
+import { Kingdom } from "./kingdom.js";
+import { IdentityStore } from "./identity-store.js";
+import { systemClock } from "./clock.js";
+import { identityEnabled } from "./auth.js";
 import { chosenStoreKind, createRealmStore } from "./realm-store-factory.js";
 
 // Las credenciales del Códice viven en .env, no en el código ni en el repo.
@@ -26,10 +29,19 @@ const statePath = resolve(process.env.TORREON_STATE_PATH ?? "./data/torreon-stat
 const storeKind = chosenStoreKind();
 const store = createRealmStore(statePath, storeKind);
 await store.init();
-const service = new QuestService(store, createCodice(), dirname(statePath), process.env.TORREON_INSTANCE?.trim() || `torreon-${host === '0.0.0.0' ? 'nube' : 'local'}`);
-const app = createHttpApp(service);
+const instance = process.env.TORREON_INSTANCE?.trim() || `torreon-${host === '0.0.0.0' ? 'nube' : 'local'}`;
+
+// EL REINO ES DE ALGUIEN, Y ALGUIEN PREGUNTA (artículos 10 y 11).
+//
+// El Kingdom reparte un servicio por jugador sobre el mismo almacén, el mismo
+// reloj y el MISMO bus —si cada uno tuviera el suyo, una suscripción abierta se
+// perdería los avisos—. Con `TORREON_IDENTITY=on` cada petición toca el reino
+// de quien la firma; apagada, todo el mundo es el jugador de siempre.
+const kingdom = new Kingdom(store, createCodice(), dirname(statePath), instance, systemClock, IdentityStore.beside(statePath, systemClock));
+const app = createHttpApp(kingdom.realmOf(), kingdom);
 
 app.listen(port, host, () => {
-  process.stdout.write(`Torreón listo en http://${host}:${port}\nMCP: http://${host}:${port}/mcp\nContrato: http://${host}:${port}/v1\nReino: ${storeKind}\n`);
+  process.stdout.write(`Torreón listo en http://${host}:${port}\nMCP: http://${host}:${port}/mcp\nContrato: http://${host}:${port}/v1\nReino: ${storeKind}
+Identidad: ${identityEnabled() ? "on" : "off"}\n`);
 });
 

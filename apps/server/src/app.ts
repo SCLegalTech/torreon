@@ -8,10 +8,25 @@ import { demoQuest, QuestService } from "./quest-service.js";
 import { describeFailure, invalid } from "./errors.js";
 import { HTTP_BODIES, type HttpRoute } from "./contracts.js";
 import { createV1Router } from "./v1.js";
+import { callerMiddleware, identityEnabled, requireCaller } from "./auth.js";
+import { createIdentityRouter } from "./identity-routes.js";
+import type { Kingdom } from "./kingdom.js";
+import { DEFAULT_PLAYER_ID } from "./players.js";
 
-export function createHttpApp(service: QuestService) {
+/**
+ * El transporte HTTP.
+ *
+ * Con un `Kingdom` delante, cada petición toca el reino de QUIEN llama
+ * (artículos 10 y 11). Sin él —el modo de siempre, y el de casi todas las
+ * pruebas— hay un solo reino y todo el mundo es su dueño.
+ */
+export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   const app = express();
   app.disable("x-powered-by");
+
+  /** Con la identidad apagada nadie tiene que identificarse. Es lo de siempre. */
+  const requireCallerUnlessOpen: express.RequestHandler = (req, res, next) =>
+    identityEnabled() ? requireCaller(req, res, next) : next();
   // Con `TORREON_ALLOWED_ORIGINS` la respuesta se acota a los orígenes
   // declarados. Sin ella sigue abierto: la APK de Capacitor no sirve desde este
   // dominio y cerrarlo a ciegas la dejaría fuera de su propio reino. La
@@ -56,7 +71,17 @@ export function createHttpApp(service: QuestService) {
   app.use("/v1", laLlave);
 
   // EL CONTRATO NUEVO. `/api` es la superficie legada del cliente React.
-  app.use("/v1", createV1Router(service, service.realmClock));
+  const reinoDe = (req: Request): QuestService =>
+    kingdom ? kingdom.realmOf(req.caller?.playerId ?? DEFAULT_PLAYER_ID) : service;
+
+  if (kingdom) {
+    // Antes que nada: quién pregunta. También en `/mcp`, donde entran agentes.
+    app.use(callerMiddleware(kingdom.identity, kingdom.realmClock));
+    app.use("/v1", createIdentityRouter(kingdom));
+    app.use("/v1", requireCallerUnlessOpen);
+  }
+
+  app.use("/v1", createV1Router(reinoDe, service.realmClock, kingdom));
 
   // ---------------------------------------------------------------------------
   // VALIDACIÓN EN EL BORDE (artículo 7).
@@ -723,12 +748,23 @@ export function createHttpApp(service: QuestService) {
   app.post(mcpPath, async (req: Request, res: Response) => {
     // Con TORREON_MCP_TOKEN el mismo endpoint puede exponerse por túnel a los
     // clientes que no alcanzan loopback (por ejemplo Claude Desktop o ChatGPT).
-    const expected = process.env.TORREON_MCP_TOKEN;
-    if (expected && req.header("authorization") !== `Bearer ${expected}`) {
-      res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "Torreón requiere un token de acceso." }, id: null });
-      return;
+    // CON IDENTIDAD, UN AGENTE ENTRA POR SU PROPIA CONCESIÓN (artículo 11).
+    //
+    // El token compartido deja de valer: la credencial dice de QUIÉN es el
+    // reino que este agente va a tocar, y el jugador puede cortarla sola.
+    if (identityEnabled()) {
+      if (!req.caller) {
+        res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "Este agente no tiene una concesión válida." }, id: null });
+        return;
+      }
+    } else {
+      const expected = process.env.TORREON_MCP_TOKEN;
+      if (expected && req.header("authorization") !== `Bearer ${expected}`) {
+        res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "Torreón requiere un token de acceso." }, id: null });
+        return;
+      }
     }
-    const server = createMcpServer(service);
+    const server = createMcpServer(reinoDe(req));
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
       void transport.close();

@@ -16,7 +16,7 @@ añadiendo juego entre etapas.
 | OK | **E2** — el jugador en el modelo | todo lo multiusuario | — |
 | ~ | **E3** — persistencia real | concurrencia, auditoría, escala | **alto** · *construida y probada; trasladar el reino es decisión de persona* |
 | ~ | **E4** — contrato versionado + SSE | **Unity** | medio · *el contrato ya existe; falta que React lo consuma entero* |
-| | **E5** — autenticación e identidad | **Play Store** | medio |
+| ~ | **E5** — autenticación e identidad | **Play Store** | medio · *construida y apagada; encenderla es decisión de persona* |
 | | **E6** — descomponer el orquestador | velocidad sostenida | bajo, continuo |
 | | **E7** — preparación de tienda | publicar | medio |
 
@@ -226,17 +226,44 @@ hecho; `types.ts` a mano, pendiente.
 
 ---
 
-## E5 — Autenticación e identidad *(la etapa que desbloquea Play Store)*
+## E5 — Autenticación e identidad *(construida; encenderla es una decisión)*
 
-1. Sesión de jugador con refresco desde la APK.
-2. `AgentGrant`: acceso por MCP en nombre de un jugador, con alcance y
-   revocación independientes (art. 11). Sustituye a `TORREON_MCP_TOKEN`.
-3. Autorización por propietario en cada caso de uso.
-4. Pantalla de agentes conectados: qué tienen, qué hicieron, cómo se les corta.
+### Hecho
 
-*Criterio:* dos jugadores reales en el mismo despliegue, cada uno con su reino y
-sus agentes; revocar un agente no cierra la sesión del jugador; una petición sin
-sesión no obtiene nada.
+1. **Sesión de jugador** desde el teléfono: `POST /v1/session/device`. La
+   primera vez estrena jugador y reino; las siguientes devuelve al MISMO, así
+   que reinstalar la app no fabrica un reino nuevo ni pierde la campaña. Es una
+   cuenta anónima de dispositivo a propósito —se juega antes de dar ningún
+   dato— y vincularla a una cuenta real después es aditivo.
+2. **`AgentGrant`**: un agente actúa EN NOMBRE DE un jugador, con alcance
+   declarado y revocación propia. `GET/POST/DELETE /v1/agents`.
+3. **Autorización por propietario**: `Kingdom` reparte un `QuestService` por
+   jugador y la credencial decide cuál. Un jugador no alcanza el reino de otro
+   porque el servicio se elige por él, no por lo que pida.
+4. **Ningún secreto se guarda en claro**, sólo su huella; la comparación es en
+   tiempo constante. Hay una prueba que vuelca el archivo de identidad y
+   comprueba que no aparece ninguna llave.
+5. **MCP entra por concesión** cuando la identidad está encendida:
+   `TORREON_MCP_TOKEN` deja de valer, y la atribución de lo que hace un agente
+   pasa a ser cierta en vez de una cadena que el llamante rellena.
+
+*Comprobado:* 13 pruebas en `identity.test.ts`. Dos teléfonos son dos jugadores
+que no se ven el reino; cortar a un agente **no** cierra la sesión del jugador;
+un jugador no puede cortar la concesión de otro.
+
+### Pendiente, y es deliberado
+
+- **`TORREON_IDENTITY=on` está apagada por defecto.** Encenderla en un reino que
+  ya está jugando obliga a que la APK abra sesión primero: es una decisión de
+  persona y un despliegue coordinado, no un efecto secundario.
+- **La pantalla de agentes** (qué tienen, qué hicieron, cómo se cortan) es
+  trabajo de calca en el cliente. La API ya está.
+- **Vincular la cuenta de dispositivo a una identidad real** (Google Play
+  Games, correo) cuando el producto lo pida. El modelo lo admite sin migración.
+
+*Criterio:* dos jugadores reales en el mismo despliegue, hecho; revocar un
+agente no cierra la sesión del jugador, hecho; una petición sin sesión no
+obtiene nada, hecho.
 
 ---
 

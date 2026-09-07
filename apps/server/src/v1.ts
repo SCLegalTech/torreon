@@ -4,6 +4,7 @@ import { HTTP_BODIES, type HttpRoute } from "./contracts.js";
 import { invalid } from "./errors.js";
 import { eventsSince } from "./realm-bus.js";
 import type { QuestService } from "./quest-service.js";
+import type { Kingdom } from "./kingdom.js";
 import { RealmViews, SCHEMA_VERSION, type Envelope } from "./v1-service.js";
 
 /**
@@ -21,9 +22,13 @@ import { RealmViews, SCHEMA_VERSION, type Envelope } from "./v1-service.js";
  * `/api` sigue existiendo para el cliente React mientras migra. Es la superficie
  * legada; lo nuevo entra por aquí.
  */
-export function createV1Router(service: QuestService, clock: Clock = systemClock): Router {
+export function createV1Router(
+  resolveRealm: (req: Request) => QuestService,
+  clock: Clock = systemClock,
+  kingdom?: Kingdom,
+): Router {
   const router = express.Router();
-  const views = new RealmViews(service, clock);
+  const viewsFor = (req: Request) => new RealmViews(resolveRealm(req), clock);
 
   const envelope = <T>(data: T, cursor: string): Envelope<T> => ({
     schemaVersion: SCHEMA_VERSION,
@@ -60,7 +65,7 @@ export function createV1Router(service: QuestService, clock: Clock = systemClock
       const run: express.RequestHandler = async (req, res, next) => {
         try {
           const data = await handler(req);
-          res.json(envelope(data, await views.cursor()));
+          res.json(envelope(data, await viewsFor(req).cursor()));
         } catch (error) {
           next(error);
         }
@@ -71,17 +76,17 @@ export function createV1Router(service: QuestService, clock: Clock = systemClock
   // ---------------------------------------------------------------------------
   // VISTAS. Cada pantalla pide lo suyo (artículos 12 y 16).
   // ---------------------------------------------------------------------------
-  router.get("/realm/summary", read(() => views.summary()));
-  router.get("/map", read(() => views.map()));
-  router.get("/battle/:questId", read((req) => views.battle(String(req.params.questId))));
-  router.get("/quests/:questId", read((req) => views.quest(String(req.params.questId))));
-  router.get("/barracks", read(() => views.barracks()));
-  router.get("/treasury", read(() => views.treasury()));
+  router.get("/realm/summary", read((req) => viewsFor(req).summary()));
+  router.get("/map", read((req) => viewsFor(req).map()));
+  router.get("/battle/:questId", read((req) => viewsFor(req).battle(String(req.params.questId))));
+  router.get("/quests/:questId", read((req) => viewsFor(req).quest(String(req.params.questId))));
+  router.get("/barracks", read((req) => viewsFor(req).barracks()));
+  router.get("/treasury", read((req) => viewsFor(req).treasury()));
   router.get(
     "/notifications",
     read((req) => {
       const limit = Number(req.query.limit);
-      return views.notifications({
+      return viewsFor(req).notifications({
         unreadOnly: req.query.unreadOnly === "true" || req.query.unreadOnly === "1",
         limit: Number.isFinite(limit) ? limit : undefined,
         entityType: req.query.entityType ? (String(req.query.entityType) as never) : undefined,
@@ -114,7 +119,7 @@ export function createV1Router(service: QuestService, clock: Clock = systemClock
 
     // Lo ocurrido desde el cursor, antes de escuchar lo nuevo: así no hay hueco.
     try {
-      const state = await service.tick();
+      const state = await resolveRealm(req).tick();
       for (const event of eventsSince(state.events ?? [], lastCursor)) send(event, "realm");
       lastCursor = state.events?.[0]?.id ?? lastCursor;
     } catch {
@@ -122,7 +127,8 @@ export function createV1Router(service: QuestService, clock: Clock = systemClock
       // siguiente aviso traerá la verdad.
     }
 
-    const unsubscribe = service.bus.subscribe(service.playerIdOfRealm, (tick) => {
+    const reino = resolveRealm(req);
+    const unsubscribe = (kingdom?.bus ?? reino.bus).subscribe(reino.playerIdOfRealm, (tick) => {
       for (const event of eventsSince(tick.events, lastCursor)) send(event, "realm");
       if (tick.cursor) lastCursor = tick.cursor;
     });
@@ -143,30 +149,30 @@ export function createV1Router(service: QuestService, clock: Clock = systemClock
   router.post(
     "/quests/from-intent",
     ...command("POST /api/quests/from-intent", (req) =>
-      service.createDraftFromIntent(req.body.intent, req.body.minutesAvailable, req.body.actId, req.body.campaignId),
+      resolveRealm(req).createDraftFromIntent(req.body.intent, req.body.minutesAvailable, req.body.actId, req.body.campaignId),
     ),
   );
   router.post(
     "/quests/:questId/accept",
-    ...command("POST /api/quests/:questId/accept", (req) => service.accept(String(req.params.questId), req.body.userAccepted === true)),
+    ...command("POST /api/quests/:questId/accept", (req) => resolveRealm(req).accept(String(req.params.questId), req.body.userAccepted === true)),
   );
   router.post(
     "/quests/:questId/start",
-    ...command("POST /api/quests/:questId/start", (req) => service.start(String(req.params.questId), req.body.durationMinutes)),
+    ...command("POST /api/quests/:questId/start", (req) => resolveRealm(req).start(String(req.params.questId), req.body.durationMinutes)),
   );
   router.post(
     "/quests/:questId/discard",
-    ...command("POST /api/quests/:questId/discard", (req) => service.discardQuest(String(req.params.questId), String(req.body.reason ?? ""))),
+    ...command("POST /api/quests/:questId/discard", (req) => resolveRealm(req).discardQuest(String(req.params.questId), String(req.body.reason ?? ""))),
   );
   router.post(
     "/quests/:questId/battle/retry",
-    ...command("POST /api/quests/:questId/battle/retry", (req) => service.retryBattle(String(req.params.questId), req.body.durationMinutes)),
+    ...command("POST /api/quests/:questId/battle/retry", (req) => resolveRealm(req).retryBattle(String(req.params.questId), req.body.durationMinutes)),
   );
-  router.post("/quests/:questId/battle/recover", ...command(null, (req) => service.recoverParty(String(req.params.questId))));
+  router.post("/quests/:questId/battle/recover", ...command(null, (req) => resolveRealm(req).recoverParty(String(req.params.questId))));
   router.post(
     "/quests/:questId/battle/recontract",
     ...command("POST /api/quests/:questId/battle/recontract", (req) =>
-      service.proposeBattleRecontract(String(req.params.questId), {
+      resolveRealm(req).proposeBattleRecontract(String(req.params.questId), {
         reason: req.body.reason,
         newDurationMinutes: req.body.newDurationMinutes,
       }),
@@ -175,13 +181,13 @@ export function createV1Router(service: QuestService, clock: Clock = systemClock
   router.post(
     "/quests/:questId/battle/recontract/accept",
     ...command("POST /api/quests/:questId/battle/recontract/accept", (req) =>
-      service.acceptBattleRecontract(String(req.params.questId), req.body.recontractId, req.body.userAccepted === true),
+      resolveRealm(req).acceptBattleRecontract(String(req.params.questId), req.body.recontractId, req.body.userAccepted === true),
     ),
   );
   router.post(
     "/quests/:questId/steps/:stepId/artifacts",
     ...command("POST /api/quests/:questId/steps/:stepId/artifacts", (req) =>
-      service.attachArtifact(String(req.params.questId), String(req.params.stepId), {
+      resolveRealm(req).attachArtifact(String(req.params.questId), String(req.params.stepId), {
         kind: req.body.kind ?? "text",
         path: req.body.path,
         url: req.body.url,
@@ -196,7 +202,7 @@ export function createV1Router(service: QuestService, clock: Clock = systemClock
   router.post(
     "/quests/:questId/steps/:stepId/verify",
     ...command("POST /api/quests/:questId/steps/:stepId/verify", (req) =>
-      service.verifyStep(String(req.params.questId), String(req.params.stepId), {
+      resolveRealm(req).verifyStep(String(req.params.questId), String(req.params.stepId), {
         note: req.body.note,
         artifactIds: req.body.artifactIds,
       }),
@@ -205,7 +211,7 @@ export function createV1Router(service: QuestService, clock: Clock = systemClock
   router.post(
     "/quests/:questId/steps/:stepId/evidence",
     ...command("POST /api/quests/:questId/steps/:stepId/evidence", (req) =>
-      service.submitEvidence(String(req.params.questId), String(req.params.stepId), {
+      resolveRealm(req).submitEvidence(String(req.params.questId), String(req.params.stepId), {
         summary: req.body.summary,
         source: req.body.source ?? "user_declaration",
         verdict: req.body.verdict,
@@ -216,19 +222,19 @@ export function createV1Router(service: QuestService, clock: Clock = systemClock
   );
   router.post(
     "/inventory/use",
-    ...command("POST /api/inventory/use", (req) => service.useInventoryItem(req.body.itemId, req.body.target, req.body.questId)),
+    ...command("POST /api/inventory/use", (req) => resolveRealm(req).useInventoryItem(req.body.itemId, req.body.target, req.body.questId)),
   );
-  router.post("/quests/:questId/focus", ...command(null, (req) => service.focusQuest(String(req.params.questId)).then(() => ({ focused: req.params.questId }))));
-  router.delete("/quests/focus", ...command(null, () => service.focusQuest(null).then(() => ({ focused: null }))));
-  router.post("/notifications/:id/read", ...command(null, (req) => service.markNotificationRead(String(req.params.id))));
-  router.post("/notifications/:id/archive", ...command(null, (req) => service.archiveNotification(String(req.params.id))));
+  router.post("/quests/:questId/focus", ...command(null, (req) => resolveRealm(req).focusQuest(String(req.params.questId)).then(() => ({ focused: req.params.questId }))));
+  router.delete("/quests/focus", ...command(null, (req) => resolveRealm(req).focusQuest(null).then(() => ({ focused: null }))));
+  router.post("/notifications/:id/read", ...command(null, (req) => resolveRealm(req).markNotificationRead(String(req.params.id))));
+  router.post("/notifications/:id/archive", ...command(null, (req) => resolveRealm(req).archiveNotification(String(req.params.id))));
   router.post(
     "/campaigns/:campaignId/accept",
-    ...command("POST /api/campaigns/:campaignId/accept", (req) => service.acceptCampaign(String(req.params.campaignId), req.body.userAccepted === true)),
+    ...command("POST /api/campaigns/:campaignId/accept", (req) => resolveRealm(req).acceptCampaign(String(req.params.campaignId), req.body.userAccepted === true)),
   );
   router.post(
     "/finance/transactions",
-    ...command("POST /api/finance/transactions", (req) => service.recordFinancialTransaction(req.body)),
+    ...command("POST /api/finance/transactions", (req) => resolveRealm(req).recordFinancialTransaction(req.body)),
   );
 
   return router;

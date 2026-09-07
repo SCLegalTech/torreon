@@ -23,7 +23,7 @@ tareas con espadas.
 ```bash
 npm install
 npm run dev          # interfaz en :5173, MCP y API en :3000
-npm test             # 308 pruebas (las de SQLite se saltan si Node < 22.5)
+npm test             # 324 pruebas (las de SQLite se saltan si Node < 22.5)
 npm run typecheck
 ```
 
@@ -103,9 +103,10 @@ ordenadas en [docs/arquitectura/04-HOJA-DE-RUTA.md](docs/arquitectura/04-HOJA-DE
 
 Dos cosas que conviene saber antes de prometer nada:
 
-- La API ya tiene llave (`TORREON_API_TOKEN`) **en el código**, pero el reino de
-  la nube sigue abierto hasta que alguien ponga el secreto en Fly y recompile la
-  APK. Ver la mitigación inmediata de la hoja de ruta.
+- La API tiene llave (`TORREON_API_TOKEN`) y el reino tiene identidad de verdad
+  (`TORREON_IDENTITY=on`), pero **las dos vienen apagadas**: el reino de la nube
+  sigue abierto hasta que alguien las encienda y recompile la APK. Encenderlas
+  es un despliegue coordinado, no un efecto secundario.
 - **El Núcleo no consulta el reloj.** Recibe `nowMs`, o un `Clock` si es el
   servicio o el almacén. `new Date()` dentro del Núcleo es un fallo de build.
   En una prueba, planta el reloj con `fixedClock(...)`.
