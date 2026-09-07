@@ -23,7 +23,7 @@ tareas con espadas.
 ```bash
 npm install
 npm run dev          # interfaz en :5173, MCP y API en :3000
-npm test             # 183 pruebas de dominio + 47 de arquitectura
+npm test             # 239 pruebas: dominio, acceso y arquitectura
 npm run typecheck
 ```
 
@@ -98,7 +98,8 @@ ordenadas en [docs/arquitectura/04-HOJA-DE-RUTA.md](docs/arquitectura/04-HOJA-DE
 
 Dos cosas que conviene saber antes de prometer nada:
 
-- `POST /api/reset` está **abierto en producción**. Ver la mitigación inmediata
-  de la hoja de ruta.
+- La API ya tiene llave (`TORREON_API_TOKEN`) **en el código**, pero el reino de
+  la nube sigue abierto hasta que alguien ponga el secreto en Fly y recompile la
+  APK. Ver la mitigación inmediata de la hoja de ruta.
 - `quick-battles-finance.test.ts > F-001` falla 25 días de cada 30 porque el
   reloj está cableado. No es una regresión tuya: es el hallazgo A-4.

@@ -20,11 +20,23 @@ import "./styles.css";
 type Screen = "loading" | "realm" | "thinking" | "campaign" | "act" | "quest" | "battle" | "stats" | "notifications" | "treasury" | "barracks" | "battles";
 
 const API_BASE = Capacitor.isNativePlatform() ? "https://torreon.fly.dev" : "";
+/**
+ * La llave del reino, horneada en la APK con `VITE_TORREON_API_TOKEN`.
+ *
+ * Es un tapón mientras llega la identidad de jugador: un secreto dentro de un
+ * APK se puede extraer, así que esto cierra la puerta al mundo, NO identifica a
+ * nadie. Ver docs/arquitectura/adr/0007-identidad-jugador-y-agente.md.
+ */
+const API_TOKEN = (import.meta.env.VITE_TORREON_API_TOKEN ?? "").trim();
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
+      ...(init?.headers ?? {}),
+    },
   });
   const body = await response.json();
   if (!response.ok) throw new Error(body.error ?? "La operación no pudo completarse.");

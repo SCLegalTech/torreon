@@ -10,7 +10,7 @@ añadiendo juego entre etapas.
 
 | | Etapa | Desbloquea | Riesgo |
 |---|---|---|---|
-| ⚠️ | **Mitigación inmediata** — cerrar la API abierta | nada; **detiene un daño en curso** | bajo |
+| 🔑 | **Mitigación inmediata** — cerrar la API abierta | nada; **detiene un daño en curso** | bajo · *código listo, falta desplegar* |
 | ✅ | **E0** — guardarraíles | que lo demás no se deshaga | — |
 | | **E1** — puertos y bordes | pruebas deterministas, errores útiles | bajo |
 | | **E2** — el jugador en el modelo | todo lo multiusuario | medio |
@@ -22,23 +22,42 @@ añadiendo juego entre etapas.
 
 ---
 
-## ⚠️ Mitigación inmediata — cerrar la puerta abierta
+## 🔑 Mitigación inmediata — cerrar la puerta abierta
 
 **Esto no es una etapa de arquitectura; es una fuga en producción.**
-`https://torreon.fly.dev` expone hoy 59 rutas sin autenticación, incluida
+`https://torreon.fly.dev` exponía 59 rutas sin autenticación, incluida
 `POST /api/reset`, que destruye el reino completo (00-AUDITORIA § B-2).
 
-Mínimo viable, horas, no días:
+### Código: hecho
 
-1. Un `TORREON_API_TOKEN` exigido en todas las rutas `/api/*`, con la APK
-   llevándolo en cabecera.
-2. `Access-Control-Allow-Origin` restringido al origen propio en vez de `*`.
-3. `POST /api/reset` fuera del despliegue de nube, o detrás de un segundo
-   secreto distinto.
+| Variable | Qué hace |
+|---|---|
+| `TORREON_API_TOKEN` | Ninguna ruta `/api` responde sin `Authorization: Bearer <token>`. Sin la variable, el reino local sigue abierto como siempre. |
+| `VITE_TORREON_API_TOKEN` | La misma llave, horneada en la interfaz al compilar la APK. |
+| `TORREON_RESET_TOKEN` | `/api/reset` exige **su propia llave** en `X-Torreon-Reset`. Si el reino está cerrado y esta no se declara, la ruta responde 403 y punto. |
+| `TORREON_ALLOWED_ORIGINS` | Orígenes permitidos, separados por coma. Vacío = abierto. |
+
+Nueve pruebas lo defienden en `apps/server/src/api-access.test.ts`.
+
+Sobre el origen: **no se cierra por defecto, a propósito.** La APK de Capacitor
+no sirve desde `torreon.fly.dev`, así que restringirlo a ciegas dejaría al
+teléfono fuera de su propio reino. Con la llave exigida, un origen abierto ya no
+es un agujero: no hay credencial ambiente —ni cookies—, así que una página ajena
+no puede leer nada. Cerrar el origen queda como refuerzo, para configurarlo
+cuando se compruebe en el teléfono cuál es el suyo.
+
+### Despliegue: pendiente, y lo tiene que hacer una persona
+
+```bash
+fly secrets set TORREON_API_TOKEN=<cadena larga> TORREON_RESET_TOKEN=<otra distinta> -a torreon
+```
+
+Y después recompilar la APK con `VITE_TORREON_API_TOKEN` **con el mismo valor**,
+o el teléfono se queda fuera. Ese es el orden: secreto, APK, comprobación.
 
 **Esto no es el artículo 11 y no debe confundirse con él**: un token compartido
-no identifica a nadie y no sobrevive a la publicación. Es un tapón mientras
-llega E5.
+no identifica a nadie, se puede extraer de un APK y no sobrevive a la
+publicación. Es un tapón mientras llega E5.
 
 *Criterio:* `curl -X POST https://torreon.fly.dev/api/reset` devuelve `401`.
 

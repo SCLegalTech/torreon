@@ -9,15 +9,46 @@ import { demoQuest, QuestService } from "./quest-service.js";
 export function createHttpApp(service: QuestService) {
   const app = express();
   app.disable("x-powered-by");
-  app.use((_req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+  // Con `TORREON_ALLOWED_ORIGINS` la respuesta se acota a los orígenes
+  // declarados. Sin ella sigue abierto: la APK de Capacitor no sirve desde este
+  // dominio y cerrarlo a ciegas la dejaría fuera de su propio reino. La
+  // protección real de la API es la llave, no el origen.
+  const allowedOrigins = (process.env.TORREON_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  app.use((req, res, next) => {
+    const origin = req.header("origin");
+    if (allowedOrigins.length === 0) res.setHeader("Access-Control-Allow-Origin", "*");
+    else if (origin && allowedOrigins.includes(origin)) res.setHeader("Access-Control-Allow-Origin", origin);
+    if (allowedOrigins.length > 0) res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, Mcp-Session-Id, MCP-Protocol-Version");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     next();
   });
   app.options("*splat", (_req, res) => res.sendStatus(204));
   // Las capturas y documentos del jugador llegan en base64 dentro del cuerpo.
   app.use(express.json({ limit: "32mb" }));
+
+  // ---------------------------------------------------------------------------
+  // LA LLAVE DEL REINO.
+  //
+  // Un tapón, no una identidad. Con `TORREON_API_TOKEN` definido, ninguna ruta
+  // de `/api` responde sin `Authorization: Bearer <token>`; sin él, el servidor
+  // local sigue abierto en loopback como siempre.
+  //
+  // ESTO NO ES EL ARTÍCULO 11 y no debe confundirse con él: un secreto
+  // compartido no dice QUIÉN llama, no se revoca por jugador y no sobrevive a
+  // la publicación. Sirve para que un reino en la nube deje de estar abierto al
+  // mundo mientras llega la identidad de verdad (ADR-0007).
+  // ---------------------------------------------------------------------------
+  app.use("/api", (req, res, next) => {
+    const expected = process.env.TORREON_API_TOKEN?.trim();
+    if (!expected) return next();
+    if (req.header("authorization") === `Bearer ${expected}`) return next();
+    res.status(401).json({ error: "Este reino está cerrado con llave." });
+  });
 
   app.get("/health", async (_req, res) => {
     const snapshot = await service.snapshot();
@@ -449,7 +480,23 @@ export function createHttpApp(service: QuestService) {
     }
   });
 
-  app.post("/api/reset", async (_req, res, next) => {
+  // BORRAR EL REINO NO CABE EN LA MISMA LLAVE QUE ABRIRLO.
+  //
+  // `/api/reset` destruye la campaña entera. Con `TORREON_RESET_TOKEN` exige esa
+  // llave aparte; si el reino está cerrado con llave pero nadie declaró una
+  // llave de reinicio, la puerta directamente NO existe. Un reino de nube no
+  // debe poder vaciarse con la misma credencial con la que se juega.
+  app.post("/api/reset", async (req, res, next) => {
+    const resetToken = process.env.TORREON_RESET_TOKEN?.trim();
+    if (resetToken) {
+      if (req.header("x-torreon-reset") !== resetToken) {
+        res.status(403).json({ error: "Reiniciar el reino exige su propia llave." });
+        return;
+      }
+    } else if (process.env.TORREON_API_TOKEN?.trim()) {
+      res.status(403).json({ error: "Este reino no se puede reiniciar por la API." });
+      return;
+    }
     try {
       res.json(await service.reset());
     } catch (error) {

@@ -105,7 +105,7 @@ Consecuencia exacta: **no hay dónde poner el segundo jugador**. No es que falte
 autenticación —falta el sujeto. Toda la jerarquía (Saga → Campaña → Acto →
 Quest → Battle) cuelga hoy de la raíz equivocada.
 
-### B-2 · La API de la aplicación no tiene autenticación de ningún tipo
+### B-2 · La API de la aplicación no tiene autenticación de ningún tipo · *código listo, falta desplegar*
 
 `https://torreon.fly.dev` está en producción. Sus 59 rutas `/api/*` no
 comprueban nada. Entre ellas:
@@ -124,7 +124,13 @@ El único control que existe es `TORREON_MCP_TOKEN`, que protege `/mcp` con un
 
 El propio equipo ya lo había diagnosticado
 (`docs/RETROALIMENTACION-PARA-CODICE-REALM-UNICO.md`, «alcance pendiente» n.º 1)
-y sigue abierto. **Esto es hoy, en producción, no una hipótesis de escala.**
+y seguía abierto. **Esto era hoy, en producción, no una hipótesis de escala.**
+
+**Estado:** el tapón ya está en el código —`TORREON_API_TOKEN`,
+`TORREON_RESET_TOKEN`, y nueve pruebas en `api-access.test.ts`—, descrito en la
+mitigación inmediata de la hoja de ruta. **Falta poner los secretos en Fly y
+recompilar la APK**, que es una acción de persona, no de código. Hasta que eso
+ocurra, el reino de la nube sigue abierto.
 
 ### B-3 · El archivo JSON es simultáneamente la base de datos, el log de eventos y el DTO
 
