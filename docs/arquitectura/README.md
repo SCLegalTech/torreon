@@ -41,10 +41,21 @@ la constitución con un ADR (art. 18).
 | ADR | Decisión | Estado |
 |---|---|---|
 | [0001](adr/0001-nucleo-autoridad-renderers-intercambiables.md) | El Núcleo es la única autoridad; los renderers son intercambiables | aceptado |
-| [0002](adr/0002-jugador-como-raiz-de-agregado.md) | El jugador es la raíz de agregado, no el reino | propuesto |
-| [0003](adr/0003-persistencia-sqlite-y-log-append-only.md) | SQLite + log append-only sustituyen al documento JSON | propuesto |
-| [0004](adr/0004-contrato-http-versionado-y-sse.md) | Contrato `/v1` con proyecciones por pantalla y SSE | propuesto |
-| [0005](adr/0005-contrato-generado-fuente-unica.md) | El vocabulario del contrato se genera, no se copia | propuesto |
-| [0006](adr/0006-puertos-de-infraestructura.md) | Toda infraestructura entra por un puerto, empezando por el reloj | propuesto |
-| [0007](adr/0007-identidad-jugador-y-agente.md) | Dos identidades: sesión de jugador y concesión de agente | propuesto |
-| [0008](adr/0008-el-juez-no-obedece-a-la-evidencia.md) | El texto de un artefacto es dato, nunca instrucción | propuesto |
+| [0002](adr/0002-jugador-como-raiz-de-agregado.md) | El jugador es la raíz de agregado, no el reino | **implementado** (E2) |
+| [0003](adr/0003-persistencia-sqlite-y-log-append-only.md) | SQLite + log append-only sustituyen al documento JSON | **implementado** (E3) · trasladar el reino, pendiente |
+| [0004](adr/0004-contrato-http-versionado-y-sse.md) | Contrato `/v1` con proyecciones por pantalla y SSE | **implementado** (E4) |
+| [0005](adr/0005-contrato-generado-fuente-unica.md) | El vocabulario del contrato se genera, no se copia | **implementado** (E4) · los DTO, con Unity |
+| [0006](adr/0006-puertos-de-infraestructura.md) | Toda infraestructura entra por un puerto, empezando por el reloj | **implementado** (E1) · los archivos, pendientes |
+| [0007](adr/0007-identidad-jugador-y-agente.md) | Dos identidades: sesión de jugador y concesión de agente | **implementado** (E5) · apagado por defecto |
+| [0008](adr/0008-el-juez-no-obedece-a-la-evidencia.md) | El texto de un artefacto es dato, nunca instrucción | **implementado** |
+
+## Lo que falta encender
+
+Tres cosas están construidas y probadas pero **apagadas a propósito**, porque
+encenderlas en un reino que ya se está jugando es una decisión de persona:
+
+| Variable | Qué enciende | Qué exige antes |
+|---|---|---|
+| `TORREON_API_TOKEN` | La llave de la API | recompilar la APK con la misma llave |
+| `TORREON_IDENTITY=on` | La identidad de verdad | que la APK abra sesión al arrancar |
+| `TORREON_STORE=sqlite` | La persistencia real | `npm run realm:sqlite` y copia del volumen |
