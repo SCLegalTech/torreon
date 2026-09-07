@@ -146,3 +146,126 @@ export function treasuryView(state: RealmState, nowMs: number): { obligations: O
 export function cursorOf(state: RealmState): string {
   return state.events[0]?.id ?? "";
 }
+
+// ---------------------------------------------------------------------------
+// LO QUE EL DUNGEON MASTER NECESITA VER.
+//
+// `get_realm_state` devolvía el snapshot ENTERO: 426 KB para un cliente que lee
+// por una ventana de contexto. El modelo recibía el reino truncado —o no lo
+// recibía— y un texto que decía «Estado actual del reino recuperado», así que
+// después de iniciar una Battle no podía confirmar que existiera. Correctamente
+// no afirmaba nada, y el jugador veía que «no pasó nada».
+//
+// Esto es lo mismo que ve la app, en la forma en que un modelo puede usarlo.
+// ---------------------------------------------------------------------------
+
+export interface DungeonMasterFront {
+  questId: string;
+  title: string;
+  battleStatus: string;
+  /** `true` sólo si el reloj corre AHORA en este frente. */
+  engaged: boolean;
+  percent: number;
+}
+
+export interface DungeonMasterView {
+  instance: string;
+  realmId: string;
+  serverTime: string;
+  /**
+   * EL FRENTE COMPROMETIDO, SIN AMBIGÜEDAD. `null` si no hay ninguno con reloj.
+   * Es la respuesta a «¿quedó activa la Battle?», y no hay que deducirla.
+   */
+  activeBattle: {
+    questId: string;
+    title: string;
+    status: string;
+    startedAt: string;
+    endsAt: string;
+    remainingMinutes: number;
+    percent: number;
+    currentStep: string | null;
+  } | null;
+  openFronts: DungeonMasterFront[];
+  campaigns: Array<{ id: string; title: string; status: string; completedQuests: number; totalQuests: number }>;
+  drafts: Array<{ id: string; title: string }>;
+  unreadNotifications: number;
+  character: { hp: number; xp: number; aura: number };
+  consistency: RealmConsistency;
+}
+
+export function dungeonMasterView(
+  state: RealmState,
+  nowMs: number,
+  context: { instance: string; serverTime: string; engagedQuest: { id: string } | null; battle: BattleState | null },
+): DungeonMasterView {
+  const hierarchy = hierarchyFor(state, null, context.engagedQuest?.id ?? null);
+  const engaged = context.engagedQuest ? state.quests.find((quest) => quest.id === context.engagedQuest!.id) ?? null : null;
+  const record = engaged?.battle ?? null;
+  const step = currentStepFor(engaged);
+  const progress = progressFor(engaged);
+  const restanteMs = record ? Math.max(0, Date.parse(record.deadlineAt) - nowMs) : 0;
+
+  return {
+    instance: context.instance,
+    realmId: state.realmId,
+    serverTime: context.serverTime,
+    activeBattle:
+      engaged && record
+        ? {
+            questId: engaged.id,
+            title: engaged.title,
+            status: record.status,
+            startedAt: record.startedAt,
+            endsAt: record.deadlineAt,
+            remainingMinutes: Math.round(restanteMs / 60_000),
+            percent: progress?.percent ?? 0,
+            currentStep: step ? `${step.position}. ${step.title}` : null,
+          }
+        : null,
+    openFronts: openFrontsFor(state).map((front) => ({
+      questId: front.questId,
+      title: front.title,
+      battleStatus: front.battleStatus,
+      engaged: front.engaged,
+      percent: front.percent,
+    })),
+    campaigns: hierarchy.campaigns
+      .filter((campaign) => campaign.status !== "abandoned" && campaign.status !== "completed")
+      .map((campaign) => ({
+        id: campaign.id,
+        title: campaign.title,
+        status: campaign.status,
+        completedQuests: campaign.completedQuests,
+        totalQuests: campaign.totalQuests,
+      })),
+    drafts: state.quests.filter((quest) => quest.status === "draft").map((quest) => ({ id: quest.id, title: quest.title })),
+    unreadNotifications: unreadCount(state),
+    character: { hp: context.battle?.playerHealth ?? 100, xp: state.character.xp, aura: state.character.aura },
+    consistency: consistencyFor(state, context.instance, null),
+  };
+}
+
+/** El mismo estado, dicho en una frase que cualquier cliente puede leer. */
+export function dungeonMasterSummary(view: DungeonMasterView): string {
+  const lineas: string[] = [];
+  if (view.activeBattle) {
+    lineas.push(
+      `FRENTE COMPROMETIDO: «${view.activeBattle.title}» (${view.activeBattle.questId}) — ${view.activeBattle.status}, ` +
+        `${view.activeBattle.remainingMinutes} min restantes, ${view.activeBattle.percent}/100 validado.` +
+        (view.activeBattle.currentStep ? ` Paso accionable: ${view.activeBattle.currentStep}.` : ""),
+    );
+  } else {
+    lineas.push("NO hay ninguna Battle con reloj corriendo: el frente está libre.");
+  }
+  const enPausa = view.openFronts.filter((front) => !front.engaged);
+  if (enPausa.length > 0) {
+    lineas.push(`Frentes en pausa (no bloquean iniciar otro): ${enPausa.map((f) => `«${f.title}» [${f.battleStatus}]`).join(", ")}.`);
+  }
+  if (view.campaigns.length > 0) {
+    lineas.push(`Campañas vivas: ${view.campaigns.map((c) => `«${c.title}» ${c.completedQuests}/${c.totalQuests}`).join(", ")}.`);
+  }
+  if (view.drafts.length > 0) lineas.push(`Borradores sin sellar: ${view.drafts.length}.`);
+  lineas.push(`Avisos sin leer: ${view.unreadNotifications}. Instancia: ${view.instance}.`);
+  return lineas.join(" ");
+}

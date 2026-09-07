@@ -2,11 +2,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { NotificationEntityType, NotificationType, QuestAmendmentChange, QuestPlanInput } from "./domain.js";
 import { QuestService } from "./quest-service.js";
+import { dungeonMasterSummary } from "./v1-views.js";
 import { amendmentChangeSchema, dueRuleSchema, notificationEntityType, notificationType, planShape, stepShape } from "./contracts.js";
 
 function toolResult<T extends object>(message: string, data: T) {
   return {
-    structuredContent: data,
+    // El SDK pide un objeto indexable; una interfaz nuestra no lo es, y eso no
+    // cambia nada de lo que viaja.
+    structuredContent: data as unknown as Record<string, unknown>,
     content: [{ type: "text" as const, text: message }],
   };
 }
@@ -25,13 +28,13 @@ export function createMcpServer(service: QuestService): McpServer {
     {
       title: "Consultar el reino",
       description:
-        "Consulta la quest activa, el paso accionable, el progreso validado, la batalla y la consistencia del reino antes de aconsejar, evaluar o informar progreso. Si el reino viene vacío pero el jugador afirma estar en campaña, lee consistency.instance: casi siempre significa que su partida vive en otra instancia de Torreón (local frente a nube), no que el estado se haya perdido. Pregúntale antes de concluir que hubo un fallo.",
+        "Consulta el reino: `activeBattle` es el frente con reloj corriendo AHORA —o null si no hay ninguno— con su id, su plazo y su progreso; `openFronts` son todos los frentes vivos, con `engaged` marcando cuál tiene el reloj. Léela después de start_quest para CONFIRMAR que la Battle quedó activa: si `activeBattle.questId` es el de la quest que iniciaste, quedó. Si el reino viene vacío pero el jugador afirma estar en campaña, lee consistency.instance: casi siempre significa que su partida vive en otra instancia de Torreón (local frente a nube), no que el estado se haya perdido.",
       inputSchema: {},
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     async () => {
-      const snapshot = await service.snapshot();
-      return toolResult("Estado actual del reino recuperado.", { snapshot });
+      const view = await service.dungeonMasterState();
+      return toolResult(dungeonMasterSummary(view), view);
     },
   );
 
@@ -161,10 +164,26 @@ export function createMcpServer(service: QuestService): McpServer {
     },
     async ({ questId, durationMinutes }) => {
       const quest = await service.start(questId, durationMinutes);
+      // CONFIRMACIÓN INEQUÍVOCA, RELEÍDA DEL REINO.
+      //
+      // No basta con que `start` no lance: el Dungeon Master necesita poder
+      // afirmarle al jugador que la Battle quedó activa. Aquí se vuelve a leer
+      // el reino y se dice qué frente tiene el reloj. Si no coincide con la
+      // quest que se pidió, esto NO responde como si hubiera ido bien.
+      const view = await service.dungeonMasterState();
+      if (view.activeBattle?.questId !== quest.id) {
+        throw new Error(
+          `«${quest.title}» no quedó como frente comprometido al releer el reino. ` +
+            `El reloj lo tiene ${view.activeBattle ? `«${view.activeBattle.title}» (${view.activeBattle.questId})` : "nadie"}. No informes al jugador de que la batalla comenzó.`,
+        );
+      }
       const battle = (await service.snapshot()).battle;
       return toolResult(
-        `La batalla «${quest.title}» comenzó: ${battle?.durationMinutes ?? quest.durationMinutes} min hasta ${quest.battle?.deadlineAt}, contra ${battle?.enemies.map((enemy) => `${enemy.name} (${enemy.maxHealth})`).join(", ")}.`,
-        { quest, battle },
+        `CONFIRMADO: la Battle «${quest.title}» está ACTIVA. activeBattleId=${view.activeBattle.questId}, ` +
+          `${view.activeBattle.remainingMinutes} min hasta ${view.activeBattle.endsAt}, ` +
+          `contra ${battle?.enemies.map((enemy) => `${enemy.name} (${enemy.maxHealth})`).join(", ")}. ` +
+          `El jugador ya lo ve en Batallas y tiene un aviso.`,
+        { quest, battle, activeBattle: view.activeBattle },
       );
     },
   );

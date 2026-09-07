@@ -289,6 +289,7 @@ export interface RealmEvent {
     | "quest_revised"
     | "quest_accepted"
     | "quest_started"
+    | "battle_started"
     | "quest_amendment_proposed"
     | "quest_amended"
     | "quest_waiting_external"
@@ -899,6 +900,7 @@ export interface RealmState {
 export type NotificationType =
   | "quest_created"
   | "campaign_created"
+  | "battle_started"
   | "quest_amendment_proposed"
   | "battle_recontract_proposed"
   | "quest_waiting_external"

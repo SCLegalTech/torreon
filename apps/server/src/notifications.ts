@@ -150,6 +150,26 @@ export function specFromEvent(state: RealmState, event: RealmEvent): Notificatio
         priority: "normal",
         version: 1,
       };
+    /**
+     * EL FRENTE ARRANCÓ, Y SE NOTA.
+     *
+     * Iniciar una Battle no generaba ningún aviso: el jugador abría la app y
+     * no había ni rastro de que el Dungeon Master hubiera comprometido un
+     * frente. El aviso se emite DESPUÉS de que la mutación persistió, y su id
+     * es estable por (entidad, tipo, intento), así que un reintento del DM no
+     * crea un segundo aviso.
+     */
+    case "battle_started":
+      return {
+        type: "battle_started",
+        title: "El reloj corre en un frente nuevo",
+        body: quest?.title ?? event.message,
+        entityType: "quest",
+        entityId,
+        screen: "battle",
+        priority: "high",
+        version: quest?.battle?.attempt ?? 1,
+      };
     case "campaign_created":
       return {
         type: "campaign_created",

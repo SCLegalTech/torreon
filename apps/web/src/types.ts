@@ -237,6 +237,7 @@ export type NotificationEntityType = "quest" | "campaign" | "act" | "saga" | "ob
 export type NotificationType =
   | "quest_created"
   | "campaign_created"
+  | "battle_started"
   | "quest_amendment_proposed"
   | "battle_recontract_proposed"
   | "quest_waiting_external"

@@ -15,6 +15,7 @@ export const notificationEntityType = z.enum(["quest", "campaign", "act", "saga"
 export const notificationType = z.enum([
   "quest_created",
   "campaign_created",
+  "battle_started",
   "quest_amendment_proposed",
   "battle_recontract_proposed",
   "quest_waiting_external",
