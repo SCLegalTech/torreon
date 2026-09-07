@@ -1,0 +1,33 @@
+# Guardián de la constitución.
+#
+# Las pruebas de arquitectura (apps/server/src/architecture.test.ts) sólo sirven
+# si alguien las ejecuta. Hasta ahora dependían de que una persona se acordara:
+# por eso `quick-battles-finance.test.ts > F-001` llevaba días en rojo sin que
+# nadie lo notara.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Tipos
+        run: npm run typecheck
+
+      # Incluye las 47 pruebas de aptitud arquitectónica. Una en rojo NO se
+      # relaja: se respeta el límite o se cambia la constitución con un ADR.
+      - name: Pruebas
+        run: npm test

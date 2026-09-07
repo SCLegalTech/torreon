@@ -1,5 +1,10 @@
 # Torreón
 
+> **¿Vas a tocar el código?** Empieza por [CLAUDE.md](CLAUDE.md) y por la
+> [constitución del proyecto](docs/arquitectura/01-CONSTITUCION.md). La base
+> arquitectónica completa —auditoría, arquitectura objetivo, contrato para
+> Unity, hoja de ruta y ADR— está en [docs/arquitectura/](docs/arquitectura/).
+
 MVP de **Real Gameplay**: Códice convierte cualquier propósito real en una quest, el servidor MCP guarda el contrato y únicamente la evidencia validada modifica la batalla. El alcance exacto está en [docs/MVP-SLICE-1.md](docs/MVP-SLICE-1.md).
 
 ## Ejecutar el MVP

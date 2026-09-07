@@ -35,8 +35,8 @@ export interface QuestAmendment {
 }
 
 export interface RewardProfile {
-  xpMax: number;
-  auraMax: number;
+  xpMax?: number;
+  auraMax?: number;
   masteryDomain?: string;
 }
 
@@ -51,7 +51,12 @@ export interface CharacterStats {
   treasure: { currency: "COP"; amount: number };
 }
 
-export type BattleStatus = "pending" | "active" | "suspended_external" | "awaiting_replan" | "awaiting_recovery" | "won";
+export type BattleStatus = "active" | "suspended_external" | "awaiting_replan" | "awaiting_recovery" | "won";
+/**
+ * Una Quest del mapa puede no tener Battle todavía. Ese `pending` es del
+ * NODO, no de la Battle: el Core nunca persiste una Battle en `pending`.
+ */
+export type QuestNodeBattleStatus = BattleStatus | "pending";
 export type CompanionId = "opus" | "codex" | "claude" | "gemini";
 export type InventoryItemId = "revive_tonic" | "health_potion";
 
@@ -149,7 +154,7 @@ export interface QuestNode {
   durationMinutes: number;
   validatedImpact: number;
   percent: number;
-  battleStatus: BattleStatus;
+  battleStatus: QuestNodeBattleStatus;
   /** Sólo por dependencia declarada. NUNCA por posición en la lista. */
   locked: boolean;
   lockedBy?: string;

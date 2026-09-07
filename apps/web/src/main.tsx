@@ -321,7 +321,6 @@ const NOTICE_ICON: Record<string, string> = {
 const BUCKET_LABEL: Record<NotificationView["bucket"], string> = { hoy: "HOY", ayer: "AYER", anteriores: "ANTERIORES" };
 
 const FRONT_STATE_LABEL: Record<BattleStatus, string> = {
-  pending: "SIN EMPEZAR",
   active: "RELOJ CORRIENDO",
   suspended_external: "ESPERA EXTERNA",
   awaiting_replan: "PLAZO VENCIDO",
