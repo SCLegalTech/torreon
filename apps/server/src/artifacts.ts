@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { copyFile, mkdir, stat, readFile, writeFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import type { ArtifactKind, EvidenceArtifact } from "./domain.js";
+import { isoAt } from "./clock.js";
 
 const MIME_BY_EXTENSION: Record<string, string> = {
   ".pdf": "application/pdf",
@@ -60,13 +61,14 @@ function excerptFrom(buffer: Buffer, mimeType: string): string | undefined {
  * (existe, pesa, su hash, su tipo) antes de que nadie emita un veredicto.
  */
 export async function ingestArtifact(
+  nowMs: number,
   input: ArtifactInput,
   questId: string,
   stepId: string,
   dataDir: string,
 ): Promise<EvidenceArtifact> {
   const id = randomUUID();
-  const createdAt = new Date().toISOString();
+  const createdAt = isoAt(nowMs);
   const base = { id, questId, stepId, stepIds: [stepId], kind: input.kind, createdAt };
 
   // Entrega desde el juego: los bytes vienen en el cuerpo, no en el disco.
@@ -205,12 +207,12 @@ export interface WitnessInput {
  * dejar constancia de quién lo hizo. Es distinto de una declaracion a secas:
  * aqui hubo un artefacto y hubo un testigo que lo miro.
  */
-export function witnessArtifact(input: WitnessInput, questId: string, stepId: string): EvidenceArtifact {
+export function witnessArtifact(input: WitnessInput, questId: string, stepId: string, nowMs: number): EvidenceArtifact {
   const observed = input.observed.trim();
   if (observed.length < 10) {
     throw new Error("El testigo debe describir qué vio en el artefacto, no solo afirmar que existe.");
   }
-  const createdAt = new Date().toISOString();
+  const createdAt = isoAt(nowMs);
   return {
     id: randomUUID(),
     questId,

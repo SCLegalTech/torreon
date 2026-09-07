@@ -39,11 +39,11 @@ import { buildAfterActionReport, storeAfterActionReport, upsertPlaybook } from "
  * Códice NO ocupa slot de héroe. Es Dungeon Master, intérprete y orquestador.
  */
 
-const now = () => new Date().toISOString();
 const LEDGER_LIMIT = 800;
 const DEEDS_PER_HERO = 30;
+import { isoAt } from "./clock.js";
 
-export function ensureHero(state: RealmState, heroId: HeroId, timestamp = now()): HeroCareerState {
+export function ensureHero(state: RealmState, heroId: HeroId, timestamp: string): HeroCareerState {
   state.heroes ??= {};
   const existing = state.heroes[heroId];
   if (existing) return existing;
@@ -53,7 +53,7 @@ export function ensureHero(state: RealmState, heroId: HeroId, timestamp = now())
 }
 
 /** Deja el roster base reconocido sin fabricarle estadísticas a nadie. */
-export function ensureRoster(state: RealmState, timestamp = now()): void {
+export function ensureRoster(state: RealmState, timestamp: string): void {
   for (const heroId of ALL_HERO_IDS) ensureHero(state, heroId, timestamp);
 }
 
@@ -85,10 +85,10 @@ export interface HeroXpGrant {
  * La clave describe el hecho real («assist:<id>», «quest_completed:<id>»), así
  * que el mismo hecho nunca puede pagar dos veces.
  */
-export function grantHeroXp(state: RealmState, heroId: HeroId, amount: number, key: string): HeroXpGrant | null {
+export function grantHeroXp(state: RealmState, heroId: HeroId, amount: number, key: string, timestamp: string): HeroXpGrant | null {
   if (amount <= 0) return null;
   if (!claimOnce(state, `xp:${heroId}:${key}`)) return null;
-  const hero = ensureHero(state, heroId);
+  const hero = ensureHero(state, heroId, timestamp);
   const before = levelProgress(hero.xp).level;
   hero.xp += Math.round(amount);
   const after = levelProgress(hero.xp).level;
@@ -97,19 +97,19 @@ export function grantHeroXp(state: RealmState, heroId: HeroId, amount: number, k
 }
 
 /** Una maestría sube por outcome validado relacionado. Nunca por un número mágico. */
-export function grantMastery(state: RealmState, heroId: HeroId, domain: string | undefined, key: string): void {
+export function grantMastery(state: RealmState, heroId: HeroId, domain: string | undefined, key: string, timestamp: string): void {
   const clean = domain?.trim();
   if (!clean) return;
   if (!claimOnce(state, `mastery:${heroId}:${clean}:${key}`)) return;
-  const hero = ensureHero(state, heroId);
+  const hero = ensureHero(state, heroId, timestamp);
   hero.masteries[clean] = (hero.masteries[clean] ?? 0) + 1;
 }
 
 /** Una hazaña SIEMPRE cita un hecho: quest, paso, herramienta y veredicto. */
-export function recordDeed(state: RealmState, deed: Omit<HeroDeed, "id" | "createdAt">, key: string): HeroDeed | null {
+export function recordDeed(state: RealmState, deed: Omit<HeroDeed, "id" | "createdAt">, key: string, timestamp: string): HeroDeed | null {
   if (!claimOnce(state, `deed:${deed.heroId}:${key}`)) return null;
-  const hero = ensureHero(state, deed.heroId);
-  const record: HeroDeed = { ...deed, id: randomUUID(), createdAt: now() };
+  const hero = ensureHero(state, deed.heroId, timestamp);
+  const record: HeroDeed = { ...deed, id: randomUUID(), createdAt: timestamp };
   hero.deeds.unshift(record);
   hero.deeds = hero.deeds.slice(0, DEEDS_PER_HERO);
   hero.lastQuestId = deed.questId;
@@ -247,9 +247,9 @@ export { heroKindOf };
 // existe— NO SE INVENTA: simplemente no cuenta.
 // ---------------------------------------------------------------------------
 
-export function backfillHeroCareer(state: RealmState): boolean {
+export function backfillHeroCareer(state: RealmState, nowMs: number): boolean {
   if (state.heroesBackfilledAt) return false;
-  const timestamp = now();
+  const timestamp = isoAt(nowMs);
   ensureRoster(state, timestamp);
 
   // 1. ASISTENCIAS REALES, una por ejecución.
@@ -286,7 +286,7 @@ export function backfillHeroCareer(state: RealmState): boolean {
       hero.stats.executions += 1;
       hero.stats.successfulExecutions += 1;
     }
-    grantHeroXp(state, assist.companion, XP_REWARDS.agentExecution, `execution:${assist.id}`);
+    grantHeroXp(state, assist.companion, XP_REWARDS.agentExecution, `execution:${assist.id}`, timestamp);
     recordDeed(
       state,
       {
@@ -299,6 +299,7 @@ export function backfillHeroCareer(state: RealmState): boolean {
         outcome: "participated",
       },
       `assist:${assist.id}`,
+      timestamp,
     );
 
     if (assist.status === "contribution_validated") {
@@ -306,8 +307,8 @@ export function backfillHeroCareer(state: RealmState): boolean {
         hero.stats.validatedAssists += 1;
         hero.stats.supportedImpact += assist.bonusDamage ?? 0;
       }
-      grantHeroXp(state, assist.companion, XP_REWARDS.agentValidatedAssist, `validated_assist:${assist.id}`);
-      grantMastery(state, assist.companion, HERO_DEFAULT_MASTERY[assist.companion], `assist:${assist.id}`);
+      grantHeroXp(state, assist.companion, XP_REWARDS.agentValidatedAssist, `validated_assist:${assist.id}`, timestamp);
+      grantMastery(state, assist.companion, HERO_DEFAULT_MASTERY[assist.companion], `assist:${assist.id}`, timestamp);
       recordDeed(
         state,
         {
@@ -320,6 +321,7 @@ export function backfillHeroCareer(state: RealmState): boolean {
           outcome: "verified",
         },
         `validated:${assist.id}`,
+        timestamp,
       );
       assisted.add(`${assist.companion}:${quest.id}`);
     }
@@ -345,6 +347,7 @@ export function backfillHeroCareer(state: RealmState): boolean {
           outcome: "victory",
         },
         `quest_victory:${quest.id}`,
+        timestamp,
       );
     }
   }
@@ -357,7 +360,7 @@ export function backfillHeroCareer(state: RealmState): boolean {
       if (quest.battle && claimOnce(state, `battle_entered:${heroId}:${quest.id}`)) {
         hero.stats.battlesEntered += 1;
       }
-      if (quest.battle) grantHeroXp(state, heroId, XP_REWARDS.battleEntered, `battle_entered:${quest.id}`);
+      if (quest.battle) grantHeroXp(state, heroId, XP_REWARDS.battleEntered, `battle_entered:${quest.id}`, timestamp);
       if (quest.status !== "completed") continue;
       if (claimOnce(state, `quest_completed:${heroId}:${quest.id}`)) {
         hero.stats.questsCompleted += 1;
@@ -365,8 +368,8 @@ export function backfillHeroCareer(state: RealmState): boolean {
         if (quest.battle) hero.stats.battlesWon += 1;
         hero.lastQuestId = quest.id;
       }
-      grantHeroXp(state, heroId, XP_REWARDS.questCompleted, `quest_completed:${quest.id}`);
-      grantMastery(state, heroId, quest.rewardProfile?.masteryDomain, `quest:${quest.id}`);
+      grantHeroXp(state, heroId, XP_REWARDS.questCompleted, `quest_completed:${quest.id}`, timestamp);
+      grantMastery(state, heroId, quest.rewardProfile?.masteryDomain, `quest:${quest.id}`, timestamp);
       recordDeed(
         state,
         {
@@ -377,6 +380,7 @@ export function backfillHeroCareer(state: RealmState): boolean {
           outcome: "victory",
         },
         `quest_victory:${quest.id}`,
+        timestamp,
       );
     }
   }
@@ -386,14 +390,14 @@ export function backfillHeroCareer(state: RealmState): boolean {
     for (const heroId of PARTY_HERO_IDS) {
       const hero = ensureHero(state, heroId, timestamp);
       if (claimOnce(state, `campaign_completed:${heroId}:${campaign.id}`)) hero.stats.campaignsCompleted += 1;
-      grantHeroXp(state, heroId, XP_REWARDS.campaignCompleted, `campaign_completed:${campaign.id}`);
+      grantHeroXp(state, heroId, XP_REWARDS.campaignCompleted, `campaign_completed:${campaign.id}`, timestamp);
     }
   }
 
   // 3. MEMORIA DE BATALLA de lo ya ganado: duraciones reales frente a pactadas.
   for (const quest of state.quests) {
     if (quest.status !== "completed" || !quest.battle) continue;
-    const report = storeAfterActionReport(state, buildAfterActionReport(state, quest));
+    const report = storeAfterActionReport(state, buildAfterActionReport(state, quest, nowMs));
     upsertPlaybook(state, quest, report);
   }
 

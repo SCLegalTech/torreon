@@ -6,6 +6,7 @@ import type { QuestPlanInput } from "./domain.js";
 import { buildEncounter, HORDE_POOL, HORDE_TOTAL_HEALTH } from "./horde.js";
 import { QuestService } from "./quest-service.js";
 import { JsonRealmStore } from "./store.js";
+import { fixedClock } from "./clock.js";
 
 /**
  * EL RELOJ ES PARTE DEL ENEMIGO — Y LA HORDA NO DESCANSA.
@@ -61,11 +62,20 @@ describe("Battle con tiempo real", () => {
   let store: JsonRealmStore;
   let service: QuestService;
 
+  /**
+   * EL RELOJ DEL REINO SE PLANTA (artículo 8, ADR-0006).
+   *
+   * Estas pruebas medían el reloj de pared y resbalaban bajo carga: la misma
+   * prueba pasaba aislada y fallaba en la suite completa. Con el instante
+   * inyectado, «pasaron cinco minutos» significa exactamente cinco minutos.
+   */
+  const INSTANTE = "2026-05-11T09:00:00.000Z";
+
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-timer-"));
-    store = new JsonRealmStore(join(directory, "state.json"));
+    store = new JsonRealmStore(join(directory, "state.json"), fixedClock(INSTANTE));
     await store.init();
-    service = new QuestService(store, undefined, directory, "torreon-timer-test");
+    service = new QuestService(store, undefined, directory, "torreon-timer-test", fixedClock(INSTANTE));
   });
 
   afterEach(async () => {

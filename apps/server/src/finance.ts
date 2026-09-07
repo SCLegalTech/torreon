@@ -23,10 +23,8 @@ import type {
  * Tesorería. Nunca se otorgan monedas ficticias por gastar dinero real.
  */
 
-const now = () => new Date().toISOString();
-
 /** "YYYY-MM" del período de una fecha. La unidad de conciliación es el mes. */
-export function periodOf(dateIso: string | number | Date = Date.now()): string {
+export function periodOf(dateIso: string | number | Date): string {
   return new Date(dateIso).toISOString().slice(0, 7);
 }
 
@@ -44,6 +42,7 @@ const FREQUENCY_DAYS: Partial<Record<ObligationFrequency, number>> = {
   weekly: 7,
   biweekly: 14,
 };
+import { isoAt } from "./clock.js";
 
 /**
  * Próximo vencimiento a partir de `from`. Sin regla comprobable devuelve null:
@@ -52,7 +51,7 @@ const FREQUENCY_DAYS: Partial<Record<ObligationFrequency, number>> = {
 export function nextDueDateFor(
   frequency: ObligationFrequency,
   dueRule: ObligationDueRule,
-  from: Date = new Date(),
+  from: Date,
 ): string | null {
   if (dueRule.type === "date" && dueRule.date) {
     const target = new Date(dueRule.date);
@@ -82,7 +81,7 @@ export function nextDueDateFor(
 }
 
 /** Avanza el vencimiento un ciclo de la frecuencia desde `from`. */
-export function advanceDueDate(obligation: RecurringObligation, from: Date = new Date()): string | null {
+export function advanceDueDate(obligation: RecurringObligation, from: Date): string | null {
   const days = FREQUENCY_DAYS[obligation.frequency];
   if (days) {
     const candidate = new Date(from.getTime());
@@ -104,8 +103,8 @@ export interface RecurringObligationInput {
   autoProposeBattle?: boolean;
 }
 
-export function buildRecurringObligation(input: RecurringObligationInput): RecurringObligation {
-  const timestamp = now();
+export function buildRecurringObligation(input: RecurringObligationInput, nowMs: number): RecurringObligation {
+  const timestamp = isoAt(nowMs);
   const dueRule: ObligationDueRule = input.dueRule ?? { type: "unknown" };
   const expectedAmount =
     input.expectedAmount === undefined || input.expectedAmount === null
@@ -121,7 +120,7 @@ export function buildRecurringObligation(input: RecurringObligationInput): Recur
     currency: "COP",
     provider: input.provider?.trim().slice(0, 120) || undefined,
     dueRule,
-    nextDueDate: nextDueDateFor(input.frequency, dueRule),
+    nextDueDate: nextDueDateFor(input.frequency, dueRule, new Date(nowMs)),
     lastPaidPeriod: null,
     active: input.active ?? true,
     autoProposeBattle: input.autoProposeBattle ?? true,
@@ -142,8 +141,8 @@ export interface FinancialTransactionInput {
   status?: FinancialTransaction["status"];
 }
 
-export function buildFinancialTransaction(input: FinancialTransactionInput): FinancialTransaction {
-  const occurredAt = input.occurredAt ? new Date(input.occurredAt).toISOString() : now();
+export function buildFinancialTransaction(input: FinancialTransactionInput, nowMs: number): FinancialTransaction {
+  const occurredAt = input.occurredAt ? new Date(input.occurredAt).toISOString() : isoAt(nowMs);
   return {
     id: randomUUID(),
     direction: input.direction,
@@ -156,7 +155,7 @@ export function buildFinancialTransaction(input: FinancialTransactionInput): Fin
     evidenceArtifactId: input.evidenceArtifactId,
     note: input.note?.trim().slice(0, 500) || undefined,
     status: input.status ?? "confirmed",
-    createdAt: now(),
+    createdAt: isoAt(nowMs),
   };
 }
 
@@ -166,7 +165,7 @@ export function buildFinancialTransaction(input: FinancialTransactionInput): Fin
  */
 export function obligationPeriodStatus(
   obligation: RecurringObligation,
-  nowMs = Date.now(),
+  nowMs: number,
 ): "paid" | "pending" | "upcoming" {
   const current = periodOf(nowMs);
   if (obligation.lastPaidPeriod === current) return "paid";
@@ -177,7 +176,7 @@ export function obligationPeriodStatus(
   return periodOf(due) <= current ? "pending" : "upcoming";
 }
 
-export function obligationViewFor(obligation: RecurringObligation, nowMs = Date.now()): ObligationView {
+export function obligationViewFor(obligation: RecurringObligation, nowMs: number): ObligationView {
   return {
     id: obligation.id,
     name: obligation.name,
@@ -196,7 +195,7 @@ export function obligationViewFor(obligation: RecurringObligation, nowMs = Date.
   };
 }
 
-export function treasuryViewFor(state: RealmState, nowMs = Date.now()): TreasuryView {
+export function treasuryViewFor(state: RealmState, nowMs: number): TreasuryView {
   const financial: FinancialState = state.financial;
   const recurring = (state.recurringObligations ?? [])
     .map((obligation) => obligationViewFor(obligation, nowMs))

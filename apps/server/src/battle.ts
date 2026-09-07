@@ -143,7 +143,7 @@ export function battleStatusOf(quest: Quest): BattleStatus | "pending" {
  * No inventa nada: sólo impide que un estado a medias sobreviva a un fallo, a
  * un redeploy o a una migración. Se aplica al leer y al cerrar una Battle.
  */
-export function reconcileBattleProjection(quest: Quest, nowMs = Date.now()): boolean {
+export function reconcileBattleProjection(quest: Quest, nowMs: number): boolean {
   const record = quest.battle;
   if (!record) return false;
   const authoritative = battleStatusOf(quest);

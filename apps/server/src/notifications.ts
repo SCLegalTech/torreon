@@ -24,10 +24,9 @@ import { obligationPeriodStatus, periodOf } from "./finance.js";
  * polling, un redeploy o un `resend` no crean un segundo registro.
  */
 
-const now = () => new Date().toISOString();
-
 /** Una Quest en estos estados ya no pide nada: ni avisos, ni atención. */
 const CLOSED_QUEST_STATUS = new Set(["completed", "abandoned"]);
+import { isoAt } from "./clock.js";
 
 export function notificationKey(
   type: NotificationType,
@@ -82,7 +81,7 @@ export interface NotificationSpec {
  * Añade un registro si su `key` no existe todavía (ni siquiera archivado).
  * Devuelve el registro nuevo, o el existente si ya estaba.
  */
-export function addNotification(state: RealmState, spec: NotificationSpec): NotificationRecord {
+export function addNotification(state: RealmState, spec: NotificationSpec, nowMs: number): NotificationRecord {
   state.notifications ??= [];
   const version = spec.version ?? 1;
   const key = notificationKey(spec.type, spec.entityType, spec.entityId, version);
@@ -102,7 +101,7 @@ export function addNotification(state: RealmState, spec: NotificationSpec): Noti
     priority: spec.priority ?? "normal",
     deepLink: { screen: spec.screen ?? screenFor(spec.entityType), entityId: spec.entityId },
     version,
-    createdAt: now(),
+    createdAt: isoAt(nowMs),
     readAt: null,
     archivedAt: null,
     push: { lastAttemptAt: null, lastStatus: "unknown", attempts: 0 },
@@ -110,7 +109,7 @@ export function addNotification(state: RealmState, spec: NotificationSpec): Noti
   };
   state.notifications.unshift(record);
   state.notifications = state.notifications.slice(0, 200);
-  attemptPush(record);
+  attemptPush(record, nowMs);
   return record;
 }
 
@@ -121,8 +120,8 @@ export function addNotification(state: RealmState, spec: NotificationSpec): Noti
  * `unknown` porque nadie puede confirmar que el jugador lo vio. `resend` sólo
  * abre un intento nuevo; nunca crea un segundo registro ni un domain event.
  */
-export function attemptPush(record: NotificationRecord, status: PushStatus = "unknown"): NotificationRecord {
-  record.push.lastAttemptAt = now();
+export function attemptPush(record: NotificationRecord, nowMs: number, status: PushStatus = "unknown"): NotificationRecord {
+  record.push.lastAttemptAt = isoAt(nowMs);
   record.push.lastStatus = status;
   record.push.attempts += 1;
   return record;
@@ -210,9 +209,9 @@ export function specFromEvent(state: RealmState, event: RealmEvent): Notificatio
   }
 }
 
-export function notifyFromEvent(state: RealmState, event: RealmEvent): void {
+export function notifyFromEvent(state: RealmState, event: RealmEvent, nowMs: number): void {
   const spec = specFromEvent(state, event);
-  if (spec) addNotification(state, spec);
+  if (spec) addNotification(state, spec, nowMs);
 }
 
 /**
@@ -223,7 +222,7 @@ export function notifyFromEvent(state: RealmState, event: RealmEvent): void {
  * No convierte años de `events[]` en miles de notificaciones. Idempotente por
  * `key`: correrlo dos veces no duplica nada.
  */
-export function backfillNotifications(state: RealmState, nowMs = Date.now()): boolean {
+export function backfillNotifications(state: RealmState, nowMs: number): boolean {
   state.notifications ??= [];
   const before = state.notifications.length;
 
@@ -235,7 +234,9 @@ export function backfillNotifications(state: RealmState, nowMs = Date.now()): bo
     // la Battle y nunca el de la Quest.
     if (CLOSED_QUEST_STATUS.has(quest.status)) continue;
     if (quest.status === "draft") {
-      addNotification(state, {
+      addNotification(
+        state,
+        {
         type: "quest_created",
         title: "Un nuevo pacto aguarda tu sello",
         body: quest.title,
@@ -243,10 +244,14 @@ export function backfillNotifications(state: RealmState, nowMs = Date.now()): bo
         entityId: quest.id,
         version: 1,
         backfilled: true,
-      });
+        },
+        nowMs,
+      );
     }
     if (quest.status === "waiting_external") {
-      addNotification(state, {
+      addNotification(
+        state,
+        {
         type: "quest_waiting_external",
         title: "Un frente quedó bloqueado por un tercero",
         body: `«${quest.title}» espera una condición externa.`,
@@ -255,10 +260,14 @@ export function backfillNotifications(state: RealmState, nowMs = Date.now()): bo
         priority: "high",
         version: quest.version,
         backfilled: true,
-      });
+        },
+        nowMs,
+      );
     }
     if (quest.battle && ["awaiting_replan", "awaiting_recovery"].includes(quest.battle.status)) {
-      addNotification(state, {
+      addNotification(
+        state,
+        {
         type: "battle_lost",
         title: "El plazo venció: puedes replanificar",
         body: `El frente de «${quest.title}» sigue abierto. Nada de lo validado se pierde.`,
@@ -268,10 +277,14 @@ export function backfillNotifications(state: RealmState, nowMs = Date.now()): bo
         version: quest.battle.attempt,
         screen: "battle",
         backfilled: true,
-      });
+        },
+        nowMs,
+      );
     }
     if (quest.amendments.some((amendment) => amendment.status === "proposed")) {
-      addNotification(state, {
+      addNotification(
+        state,
+        {
         type: "quest_amendment_proposed",
         title: "El campo de batalla puede cambiar",
         body: quest.amendments.find((amendment) => amendment.status === "proposed")!.reason,
@@ -281,10 +294,14 @@ export function backfillNotifications(state: RealmState, nowMs = Date.now()): bo
         version: quest.version,
         screen: "battle",
         backfilled: true,
-      });
+        },
+        nowMs,
+      );
     }
     if (quest.battle?.pendingRecontract) {
-      addNotification(state, {
+      addNotification(
+        state,
+        {
         type: "battle_recontract_proposed",
         title: "Nuevo pacto temporal propuesto",
         body: quest.battle.pendingRecontract.reason,
@@ -294,13 +311,17 @@ export function backfillNotifications(state: RealmState, nowMs = Date.now()): bo
         version: quest.version,
         screen: "battle",
         backfilled: true,
-      });
+        },
+        nowMs,
+      );
     }
   }
 
   for (const campaign of state.campaigns) {
     if (campaign.status === "draft") {
-      addNotification(state, {
+      addNotification(
+        state,
+        {
         type: "campaign_created",
         title: "Una nueva campaña espera tu sello",
         body: campaign.title,
@@ -308,13 +329,17 @@ export function backfillNotifications(state: RealmState, nowMs = Date.now()): bo
         entityId: campaign.id,
         version: 1,
         backfilled: true,
-      });
+        },
+        nowMs,
+      );
     }
   }
 
   for (const obligation of state.recurringObligations ?? []) {
     if (obligation.active && obligationPeriodStatus(obligation, nowMs) === "pending") {
-      addNotification(state, {
+      addNotification(
+        state,
+        {
         type: "recurring_obligation_due",
         title: obligation.direction === "income" ? "Un ingreso recurrente aguarda registro" : "Una obligación recurrente aguarda",
         body: `${obligation.name}: período ${periodOf(nowMs)} pendiente.`,
@@ -324,7 +349,9 @@ export function backfillNotifications(state: RealmState, nowMs = Date.now()): bo
         version: Number(periodOf(nowMs).replace("-", "")),
         screen: "treasury",
         backfilled: true,
-      });
+        },
+        nowMs,
+      );
     }
   }
 
@@ -348,7 +375,7 @@ export interface NotificationQuery {
   includeArchived?: boolean;
 }
 
-export function notificationViewsFor(state: RealmState, query: NotificationQuery = {}, nowMs = Date.now()): NotificationView[] {
+export function notificationViewsFor(state: RealmState, nowMs: number, query: NotificationQuery = {}): NotificationView[] {
   const limit = Math.min(200, Math.max(1, query.limit ?? 50));
   return (state.notifications ?? [])
     .filter((record) => (query.includeArchived ? true : !record.archivedAt))
@@ -391,8 +418,8 @@ export function unreadCount(state: RealmState): number {
 // ---------------------------------------------------------------------------
 
 /** Archiva todo aviso activo de una entidad. Devuelve cuántos jubiló. */
-export function settleNotificationsFor(state: RealmState, entityId: string): number {
-  const timestamp = now();
+export function settleNotificationsFor(state: RealmState, entityId: string, nowMs: number): number {
+  const timestamp = isoAt(nowMs);
   let settled = 0;
   for (const record of state.notifications ?? []) {
     if (record.entityId !== entityId || record.archivedAt) continue;
@@ -411,12 +438,12 @@ export function settleNotificationsFor(state: RealmState, entityId: string): num
  * porque los reinos que YA tienen el ruido acumulado —el de Bigle, sin ir más
  * lejos— tienen que limpiarse solos sin migración ni intervención del jugador.
  */
-export function settleClosedNotifications(state: RealmState): boolean {
+export function settleClosedNotifications(state: RealmState, nowMs: number): boolean {
   let settled = 0;
   for (const quest of state.quests) {
     const closed = CLOSED_QUEST_STATUS.has(quest.status) || quest.battle?.status === "won";
     if (!closed) continue;
-    settled += settleNotificationsFor(state, quest.id);
+    settled += settleNotificationsFor(state, quest.id, nowMs);
   }
   return settled > 0;
 }

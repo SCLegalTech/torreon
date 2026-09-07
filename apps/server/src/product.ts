@@ -48,11 +48,11 @@ export const PLAN_PROFILES: Record<Entitlements["plan"], Entitlements> = {
 };
 
 /** "YYYY-MM-DD" en UTC. El período de conteo rota sin borrar historia. */
-export function usagePeriodKey(nowMs = Date.now()): string {
+export function usagePeriodKey(nowMs: number): string {
   return new Date(nowMs).toISOString().slice(0, 10);
 }
 
-export function freshUsage(nowMs = Date.now()): UsageCounters {
+export function freshUsage(nowMs: number): UsageCounters {
   return {
     period: usagePeriodKey(nowMs),
     battlesStartedToday: 0,
@@ -69,7 +69,7 @@ export function freshUsage(nowMs = Date.now()): UsageCounters {
  * Rota los contadores cuando cambia el día. No borra: empieza un período nuevo.
  * Devuelve `true` si hubo rotación (para que el llamador sepa que debe persistir).
  */
-export function rolloverUsage(usage: UsageCounters, nowMs = Date.now()): boolean {
+export function rolloverUsage(usage: UsageCounters, nowMs: number): boolean {
   const period = usagePeriodKey(nowMs);
   if (usage.period === period) return false;
   usage.period = period;

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { QuestPlanInput } from "./domain.js";
 import { QuestService } from "./quest-service.js";
 import { JsonRealmStore } from "./store.js";
+import { fixedClock } from "./clock.js";
 
 /**
  * NOT EVERY REAL ACTION IS A CAMPAIGN.
@@ -181,11 +182,27 @@ describe("Tesorería viva", () => {
   let directory: string;
   let service: QuestService;
 
+  /**
+   * EL RELOJ ES UNA DEPENDENCIA (artículo 8, ADR-0006).
+   *
+   * Antes, estas pruebas leían el reloj de pared y `F-001` fallaba 25 días de
+   * cada 30. Ahora el reino se planta el día 2, antes del corte del día 5, y el
+   * vencimiento se puede afirmar cualquier día del año.
+   */
+  const ANTES_DEL_CORTE = "2026-03-02T12:00:00.000Z";
+
+  async function realmAt(instante: string): Promise<QuestService> {
+    const carpeta = await mkdtemp(join(tmpdir(), "torreon-treasury-"));
+    const store = new JsonRealmStore(join(carpeta, "state.json"), fixedClock(instante));
+    await store.init();
+    return new QuestService(store, undefined, carpeta, "torreon-treasury-test", fixedClock(instante));
+  }
+
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "torreon-treasury-"));
-    const store = new JsonRealmStore(join(directory, "state.json"));
+    const store = new JsonRealmStore(join(directory, "state.json"), fixedClock(ANTES_DEL_CORTE));
     await store.init();
-    service = new QuestService(store, undefined, directory, "torreon-treasury-test");
+    service = new QuestService(store, undefined, directory, "torreon-treasury-test", fixedClock(ANTES_DEL_CORTE));
   });
 
   afterEach(async () => {
@@ -204,6 +221,31 @@ describe("Tesorería viva", () => {
     expect(obligation.lastPaidPeriod).toBeNull();
     const { obligations } = await service.getFinancialObligations();
     expect(obligations.find((o) => o.id === obligation.id)?.periodStatus).toBe("pending");
+  });
+
+  /**
+   * F-001b: LO QUE HOY HACE EL REINO, DICHO SIN ADORNOS.
+   *
+   * Registrar una obligación DESPUÉS de su día de corte estrena el período
+   * siguiente: el mes en curso no queda «pendiente», queda fuera. Es la
+   * conducta actual y esta prueba la fija para que nadie la cambie por
+   * accidente; si el reino debe considerar «vencido» el arriendo de este mes,
+   * eso es una decisión de producto y va con su propio cambio y su ADR.
+   */
+  it("F-001b: una obligación registrada después de su día de corte estrena el período siguiente", async () => {
+    const tarde = await realmAt("2026-03-20T12:00:00.000Z");
+    const obligation = await tarde.createRecurringObligation({
+      name: "Arriendo apartamento",
+      direction: "expense",
+      category: "housing",
+      frequency: "monthly",
+      provider: "Home",
+      dueRule: { type: "day_of_month", day: 5 },
+    });
+    const { obligations } = await tarde.getFinancialObligations();
+    const view = obligations.find((o) => o.id === obligation.id);
+    expect(view?.periodStatus).toBe("upcoming");
+    expect(obligation.nextDueDate?.slice(0, 7)).toBe("2026-04");
   });
 
   it("F-002/F-003: un pago validado concilia el período y la misma evidencia no lo duplica", async () => {
@@ -228,7 +270,9 @@ describe("Tesorería viva", () => {
     const { obligations } = await service.getFinancialObligations();
     const view = obligations.find((o) => o.id === obligation.id)!;
     expect(view.periodStatus).toBe("paid");
-    expect(view.lastPaidPeriod).toBe(new Date().toISOString().slice(0, 7));
+    // El período conciliado es el del reloj del reino, no el del calendario
+    // de quien ejecuta la prueba.
+    expect(view.lastPaidPeriod).toBe(ANTES_DEL_CORTE.slice(0, 7));
 
     const replay = await service.recordFinancialTransaction({
       direction: "expense",

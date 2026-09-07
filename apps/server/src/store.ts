@@ -9,10 +9,10 @@ import { backfillEncounter } from "./horde.js";
 import { backfillNotifications, settleClosedNotifications } from "./notifications.js";
 import { freshParty, refreshPartyDisplay } from "./party.js";
 import { DEV_ENTITLEMENTS, freshUsage, rolloverUsage } from "./product.js";
+import { isoAt, systemClock, type Clock } from "./clock.js";
 
-const now = () => new Date().toISOString();
 
-export function createInitialState(): RealmState {
+export function createInitialState(nowMs: number): RealmState {
   return {
     version: 1,
     realmId: randomUUID(),
@@ -50,30 +50,35 @@ export function createInitialState(): RealmState {
     recurringObligations: [],
     financialTransactions: [],
     entitlements: { ...DEV_ENTITLEMENTS },
-    usage: freshUsage(),
+    usage: freshUsage(nowMs),
     evidence: [],
     artifacts: [],
     lifeEvents: [],
     gameEvents: [],
-    updatedAt: now(),
+    updatedAt: isoAt(nowMs),
   };
 }
 
 export class JsonRealmStore {
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly statePath: string) {}
+  constructor(
+    private readonly statePath: string,
+    /** El reloj es una dependencia: el almacén tampoco lo consulta por su cuenta. */
+    private readonly clock: Clock = systemClock,
+  ) {}
 
   async init(): Promise<void> {
     await mkdir(dirname(this.statePath), { recursive: true });
     try {
       await readFile(this.statePath, "utf8");
     } catch {
-      await this.write(createInitialState());
+      await this.write(createInitialState(this.clock.now()));
     }
   }
 
   async read(): Promise<RealmState> {
+    const nowMs = this.clock.now();
     const raw = await readFile(this.statePath, "utf8");
     const state = JSON.parse(raw) as RealmState;
     // Reinos creados antes de que existiera la identidad reciben una al leerse.
@@ -110,8 +115,8 @@ export class JsonRealmStore {
     // Capa de producto: se completan los campos que falten sin pisar los puestos.
     state.entitlements = { ...DEV_ENTITLEMENTS, ...(state.entitlements ?? {}) };
     // La telemetría nueva empieza en cero sin pisar lo ya contado hoy.
-    state.usage = { ...freshUsage(), ...(state.usage ?? {}) };
-    rolloverUsage(state.usage);
+    state.usage = { ...freshUsage(nowMs), ...(state.usage ?? {}) };
+    rolloverUsage(state.usage, nowMs);
     // Reinos anteriores a la hoja de personaje empiezan en cero, no en inventado.
     state.character ??= { xp: 0, aura: 0, mastery: {}, rewardedQuestIds: [] };
     state.inventory ??= { items: [] };
@@ -168,7 +173,7 @@ export class JsonRealmStore {
         refreshPartyDisplay(battle.party);
         // UNA SOLA FUENTE AUTORITATIVA. Nunca `won` en una vista y `active` en
         // otra: si el contrato está validado, la Battle está ganada aquí también.
-        reconcileBattleProjection(quest);
+        reconcileBattleProjection(quest, nowMs);
       }
       for (const step of quest.steps) {
         step.impactAwarded ??= step.status === "completed" ? step.weight : 0;
@@ -181,17 +186,17 @@ export class JsonRealmStore {
     }
     // El roster base se reconoce siempre; sus contadores siguen en cero hasta
     // que alguien pelee de verdad. B-003: conocido no es haber participado.
-    ensureRoster(state);
+    ensureRoster(state, isoAt(nowMs));
     // Un reino con historia previa recupera su carrera UNA vez, desde datos
     // autoritativos y deduplicando reintentos. Nunca inventa lo que no consta.
-    backfillHeroCareer(state);
+    backfillHeroCareer(state, nowMs);
     // BACKFILL SEGURO: sólo estado accionable ahora, idempotente por `key`.
     // Los registros nuevos persisten en la siguiente mutación; mientras tanto
     // el snapshot ya los ve, así que el jugador nunca «pierde» un pacto.
-    backfillNotifications(state);
+    backfillNotifications(state, nowMs);
     // Y lo contrario del backfill: lo que ya no pide nada se jubila. Un frente
     // ganado o abandonado no puede seguir llamando a la puerta.
-    settleClosedNotifications(state);
+    settleClosedNotifications(state, nowMs);
     return state;
   }
 
@@ -199,7 +204,7 @@ export class JsonRealmStore {
     const operation = this.queue.then(async () => {
       const state = await this.read();
       const result = await mutation(state);
-      state.updatedAt = now();
+      state.updatedAt = this.clock.iso();
       await this.write(state);
       return { result, state };
     });
@@ -210,7 +215,7 @@ export class JsonRealmStore {
 
   async reset(): Promise<RealmState> {
     const operation = this.queue.then(async () => {
-      const state = createInitialState();
+      const state = createInitialState(this.clock.now());
       await this.write(state);
       return state;
     });

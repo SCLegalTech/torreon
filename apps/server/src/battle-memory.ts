@@ -22,7 +22,6 @@ import { HERO_DISPLAY_NAME } from "./progression.js";
  * un contrato ya aceptado: cambiar el pacto sigue exigiendo el sello del jugador.
  */
 
-const now = () => new Date().toISOString();
 const REPORT_LIMIT = 100;
 const LESSON_LIMIT = 200;
 const PLAYBOOK_LIMIT = 60;
@@ -34,6 +33,7 @@ const STOPWORDS = new Set([
   "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
   "septiembre", "octubre", "noviembre", "diciembre",
 ]);
+import { isoAt } from "./clock.js";
 
 /**
  * Firma normalizada de una actividad.
@@ -73,13 +73,13 @@ function liveUnexpectedRequirements(state: RealmState, questId: string): number 
  * Reloj ACTIVO real de la Battle, sumando todos los intentos y descontando la
  * espera ajena al jugador. Esperar a un tercero no es haber trabajado.
  */
-export function activeDurationMs(quest: Quest): { activeMs: number; externalWaitMs: number } {
+export function activeDurationMs(quest: Quest, nowMs: number): { activeMs: number; externalWaitMs: number } {
   const record = quest.battle;
   if (!record) return { activeMs: 0, externalWaitMs: 0 };
   const externalWaitMs = record.suspendedMs ?? 0;
   const total = record.attempts.reduce((sum, attempt) => {
     const started = Date.parse(attempt.startedAt);
-    const ended = attempt.endedAt ? Date.parse(attempt.endedAt) : Date.parse(record.endedAt ?? now());
+    const ended = attempt.endedAt ? Date.parse(attempt.endedAt) : Date.parse(record.endedAt ?? isoAt(nowMs));
     return sum + Math.max(0, ended - started);
   }, 0);
   return { activeMs: Math.max(0, total - externalWaitMs), externalWaitMs };
@@ -123,9 +123,9 @@ function lessonsFor(report: Omit<AfterActionReport, "lessons">): string[] {
  * No requiere LLM: se arma desde el registro de la Battle, las asistencias y
  * los hechos ya validados. La narrativa, si llega, va encima.
  */
-export function buildAfterActionReport(state: RealmState, quest: Quest): AfterActionReport {
+export function buildAfterActionReport(state: RealmState, quest: Quest, nowMs: number): AfterActionReport {
   const record = quest.battle;
-  const { activeMs, externalWaitMs } = activeDurationMs(quest);
+  const { activeMs, externalWaitMs } = activeDurationMs(quest, nowMs);
   const assists = (state.companionAssists ?? []).filter((assist) => assist.questId === quest.id);
   const executions = (state.companionExecutions ?? []).filter((execution) => execution.questId === quest.id);
   const validated = assists.filter((assist) => assist.status === "contribution_validated");
@@ -158,7 +158,7 @@ export function buildAfterActionReport(state: RealmState, quest: Quest): AfterAc
     hordeNeutralized: Boolean(record && record.enemies.every((enemy) => enemy.status === "ko")),
     result: "victory" as const,
     outcome: quest.outcome,
-    createdAt: now(),
+    createdAt: isoAt(nowMs),
   };
 
   return { ...base, lessons: lessonsFor(base) };
@@ -179,7 +179,7 @@ export function storeAfterActionReport(state: RealmState, report: AfterActionRep
   const signature = signatureOf(report.questTitle);
   for (const text of report.lessons) {
     if (state.battleLessons.some((lesson) => lesson.signature === signature && lesson.text === text)) continue;
-    const lesson: BattleLesson = { id: randomUUID(), questId: report.questId, signature, text, createdAt: now() };
+    const lesson: BattleLesson = { id: randomUUID(), questId: report.questId, signature, text, createdAt: report.createdAt };
     state.battleLessons.unshift(lesson);
   }
   state.battleLessons = state.battleLessons.slice(0, LESSON_LIMIT);
@@ -219,7 +219,7 @@ export function upsertPlaybook(state: RealmState, quest: Quest, report: AfterAct
     existing.preferredCompanions = Array.from(new Set([...existing.preferredCompanions, ...report.companionsUsed]));
     existing.knownFriction = Array.from(new Set([...existing.knownFriction, ...report.lessons])).slice(0, 8);
     existing.timesUsed += 1;
-    existing.updatedAt = now();
+    existing.updatedAt = report.createdAt;
     return existing;
   }
 
@@ -233,8 +233,8 @@ export function upsertPlaybook(state: RealmState, quest: Quest, report: AfterAct
     preferredCompanions: report.companionsUsed,
     knownFriction: report.lessons.slice(0, 8),
     timesUsed: 1,
-    createdAt: now(),
-    updatedAt: now(),
+    createdAt: report.createdAt,
+    updatedAt: report.createdAt,
   };
   state.playbooks.unshift(playbook);
   state.playbooks = state.playbooks.slice(0, PLAYBOOK_LIMIT);

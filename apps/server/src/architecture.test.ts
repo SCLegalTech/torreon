@@ -28,6 +28,8 @@ const serverSource = (file: string) => read(`apps/server/src/${file}`);
 const CORE_MODULES = [
   "domain.ts",
   "read-models.ts",
+  "realm-events.ts",
+  "treasury-flow.ts",
   "battle.ts",
   "party.ts",
   "horde.ts",
@@ -99,7 +101,7 @@ describe("Artículo IV — el monolito sólo puede encoger", () => {
    * presupuesto es su marca máxima histórica: cada extracción debe BAJARLO.
    * Nunca se sube. Si una función nueva no cabe, es que no vive aquí.
    */
-  const BUDGET = 2922;
+  const BUDGET = 2792;
 
   it(`quest-service.ts no supera las ${BUDGET} líneas`, () => {
     const lines = serverSource("quest-service.ts").split("\n").length;
@@ -108,6 +110,31 @@ describe("Artículo IV — el monolito sólo puede encoger", () => {
       `quest-service.ts tiene ${lines} líneas y el presupuesto es ${BUDGET}. ` +
         "Extrae un módulo del Núcleo en vez de ensanchar el servicio, y baja este número.",
     ).toBeLessThanOrEqual(BUDGET);
+  });
+});
+
+describe("Artículo VIII — el Núcleo recibe el instante, no lo consulta", () => {
+  /**
+   * `new Date()` y `Date.now()` dentro del Núcleo son un reloj cableado: el
+   * dominio deja de poder probarse en cualquier fecha —`F-001` pasaba los días
+   * 1 a 5 del mes y fallaba los otros 25— y las pruebas de tiempo real resbalan
+   * bajo carga. El instante ENTRA como dato (ADR-0006).
+   *
+   * `clock.ts` es la excepción evidente: es el sitio donde vive el reloj.
+   */
+  const CLOCK_FREE = [...CORE_MODULES, "artifacts.ts", "quest-service.ts"];
+
+  it.each(CLOCK_FREE)("%s no consulta el reloj de pared", (file) => {
+    const source = serverSource(file);
+    const leaks = [...source.matchAll(/(new Date\(\)|Date\.now\(\))/g)].map((match) => match[1]);
+    expect(
+      leaks,
+      `${file} lee el reloj por su cuenta (${leaks.join(", ")}). Recibe \`nowMs\` o usa el Clock inyectado.`,
+    ).toEqual([]);
+  });
+
+  it("clock.ts es el único sitio donde vive el reloj de pared", () => {
+    expect(serverSource("clock.ts")).toContain("Date.now()");
   });
 });
 
