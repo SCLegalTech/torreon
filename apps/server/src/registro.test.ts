@@ -163,24 +163,59 @@ describe("Registrarse en el reino", () => {
       .send({ label: "ChatGPT del portátil" })
       .expect(201);
 
-    const llamada = () =>
+    // Lo que importa no es saludar: es EJECUTAR.
+    const ejecutar = () =>
       request(app)
         .post(`/mcp/${agente.token}`)
         .set("accept", "application/json, text/event-stream")
-        .send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "x", version: "1" } } });
+        .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_realm_state", arguments: {} } });
 
-    expect((await llamada()).status).toBe(200);
+    const conAcceso = await ejecutar().expect(200);
+    expect(conAcceso.text).toContain("activeBattle");
 
     await request(app).delete(`/v1/agents/${agente.agent.id}`).set("authorization", `Bearer ${diego.token}`).expect(200);
 
-    expect((await llamada()).status).toBe(401);
+    const cortado = await ejecutar().expect(200);
+    expect(cortado.text).not.toContain("activeBattle");
+    expect(cortado.text).toContain("CONCEDER ACCESO");
   });
 
-  it("sin credencial, MCP no habla con nadie", async () => {
-    const respuesta = await request(app)
-      .post("/mcp")
+  /**
+   * UN 401 SECO DEJA AL AGENTE SIN SABER QUÉ HACER.
+   *
+   * Contestar 401 a TODO —incluido el saludo del protocolo— hacía que el
+   * cliente viera un fallo de transporte y no un motivo. ChatGPT llegó a
+   * deshabilitar el conector entero, y desde fuera parecía que el
+   * descubrimiento funcionaba y la ejecución se rompía sola.
+   */
+  const rpc = (metodo: string, params: unknown, ruta = "/mcp") =>
+    request(app)
+      .post(ruta)
       .set("accept", "application/json, text/event-stream")
-      .send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "x", version: "1" } } });
+      .send({ jsonrpc: "2.0", id: 1, method: metodo, params });
+
+  it("sin concesión, el protocolo saluda y las herramientas se listan", async () => {
+    await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "x", version: "1" } }).expect(200);
+    const lista = await rpc("tools/list", {}).expect(200);
+    expect(lista.text).toContain("get_realm_state");
+  });
+
+  it("sin concesión, ejecutar dice CÓMO conseguirla en vez de romperse", async () => {
+    const respuesta = await rpc("tools/call", { name: "get_realm_state", arguments: {} }).expect(200);
+    const cuerpo = respuesta.text;
+    expect(cuerpo).toContain("AMIGOS");
+    expect(cuerpo).toContain("CONCEDER ACCESO");
+    expect(cuerpo).toContain('"isError":true');
+  });
+
+  it("y aun así no ejecuta nada: el reino no sale por ahí", async () => {
+    const respuesta = await rpc("tools/call", { name: "get_realm_state", arguments: {} }).expect(200);
+    expect(respuesta.text).not.toContain("activeBattle");
+    expect(respuesta.text).not.toContain("openFronts");
+  });
+
+  it("sin credencial, cualquier otra cosa sigue cerrada", async () => {
+    const respuesta = await rpc("resources/list", {});
     expect(respuesta.status).toBe(401);
   });
 

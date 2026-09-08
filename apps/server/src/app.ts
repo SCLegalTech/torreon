@@ -821,7 +821,43 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
     // El token compartido deja de valer: la credencial dice de QUIÉN es el
     // reino que este agente va a tocar, y el jugador puede cortarla sola.
     if (identityEnabled()) {
-      if (!req.caller) {
+      /**
+       * UN 401 SECO DEJA AL AGENTE SIN SABER QUÉ HACER.
+       *
+       * Sin credencial, el servidor contestaba 401 a TODO —incluido el saludo
+       * del protocolo—. El cliente veía un fallo de transporte, no un motivo:
+       * ChatGPT llegó a deshabilitar el conector entero, y desde fuera parecía
+       * que el descubrimiento funcionaba y la ejecución «se rompía sola».
+       *
+       * Ahora el protocolo se saluda y las herramientas se listan sin
+       * credencial —un esquema no es el reino de nadie— y lo que se niega es
+       * EJECUTAR, con un texto que dice exactamente cómo conseguir acceso. El
+       * agente puede leerlo y repetírselo al jugador.
+       *
+       * Esto no abre nada: sin concesión no se ejecuta una sola herramienta.
+       */
+      const metodo = String((req.body as { method?: unknown } | undefined)?.method ?? "");
+      if (!req.caller && metodo === "tools/call") {
+        res.json({
+          jsonrpc: "2.0",
+          id: (req.body as { id?: unknown }).id ?? null,
+          result: {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text:
+                  "Este agente todavía no tiene acceso al reino de nadie, así que no puede ejecutar nada. " +
+                  "El jugador lo concede desde Torreón: pantalla AMIGOS → «Tus agentes» → CONCEDER ACCESO. " +
+                  "Ahí sale la dirección lista para pegar en este conector, con la llave incluida. " +
+                  "Dile eso al jugador y no vuelvas a intentar la llamada hasta que la cambie.",
+              },
+            ],
+          },
+        });
+        return;
+      }
+      if (!req.caller && metodo !== "initialize" && metodo !== "tools/list" && !metodo.startsWith("notifications/") && metodo !== "ping") {
         res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "Este agente no tiene una concesión válida." }, id: null });
         return;
       }
