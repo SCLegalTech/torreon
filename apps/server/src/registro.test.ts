@@ -214,6 +214,44 @@ describe("Registrarse en el reino", () => {
     expect(respuesta.text).not.toContain("openFronts");
   });
 
+  /**
+   * UNA RUTA MAL PUESTA NO PUEDE TUMBAR EL REINO AL ARRANCAR.
+   *
+   * Express lanza al REGISTRAR un patrón inválido: el servidor moría antes de
+   * escuchar y desde fuera parecía que el despliegue no había levantado.
+   */
+  it("una ruta de MCP inválida no impide arrancar: se ignora y se sirve por /mcp", async () => {
+    process.env.TORREON_MCP_PATH = "ruta sin barra: invalida";
+    try {
+      const conRutaMala = createHttpApp(kingdom.realmOf(), kingdom);
+      const respuesta = await request(conRutaMala)
+        .post("/mcp")
+        .set("accept", "application/json, text/event-stream")
+        .send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+      expect(respuesta.status).toBe(200);
+    } finally {
+      delete process.env.TORREON_MCP_PATH;
+    }
+  });
+
+  it("una ruta secreta válida sí se respeta, y la de siempre desaparece", async () => {
+    process.env.TORREON_MCP_PATH = "/mcp/una-ruta-larga-y-secreta";
+    try {
+      const conRutaSecreta = createHttpApp(kingdom.realmOf(), kingdom);
+      const escondido = await request(conRutaSecreta)
+        .post("/mcp/una-ruta-larga-y-secreta")
+        .set("accept", "application/json, text/event-stream")
+        .send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+      expect(escondido.status).toBe(200);
+
+      // Y `/mcp` deja de confirmar que aquí vive un Torreón.
+      const puertaVieja = await request(conRutaSecreta).post("/mcp").send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+      expect(puertaVieja.status).toBe(404);
+    } finally {
+      delete process.env.TORREON_MCP_PATH;
+    }
+  });
+
   it("sin credencial, cualquier otra cosa sigue cerrada", async () => {
     const respuesta = await rpc("resources/list", {});
     expect(respuesta.status).toBe(401);

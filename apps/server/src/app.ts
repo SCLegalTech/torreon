@@ -780,7 +780,24 @@ export function createHttpApp(service: QuestService, kingdom?: Kingdom) {
   // Para ese caso el endpoint puede montarse en una ruta secreta: la URL actúa
   // como la llave. Es más débil que una cabecera —las URLs se filtran en logs e
   // historiales— pero evita que el MCP quede colgando de un nombre adivinable.
-  const mcpPath = process.env.TORREON_MCP_PATH?.trim() || "/mcp";
+  /**
+   * UNA RUTA MAL PUESTA NO PUEDE TUMBAR EL REINO AL ARRANCAR.
+   *
+   * Express rechaza un patrón de ruta inválido lanzando, y eso ocurre al
+   * REGISTRAR la ruta: un `TORREON_MCP_PATH` con un espacio, dos puntos o sin
+   * la barra inicial mata el servidor antes de escuchar, y desde fuera parece
+   * que el despliegue «no levantó». Mejor ignorar el valor raro, decirlo en el
+   * arranque, y servir por `/mcp`.
+   */
+  const rutaMcpDeclarada = process.env.TORREON_MCP_PATH?.trim();
+  const rutaValida = rutaMcpDeclarada && /^\/[A-Za-z0-9/_-]{1,200}$/.test(rutaMcpDeclarada) && !rutaMcpDeclarada.endsWith("/");
+  if (rutaMcpDeclarada && !rutaValida) {
+    process.stderr.write(
+      `TORREON_MCP_PATH no es una ruta válida (${rutaMcpDeclarada.length} caracteres). Debe empezar por «/» y llevar sólo letras, dígitos, «/», «_» y «-». Se usa /mcp.
+`,
+    );
+  }
+  const mcpPath = rutaValida ? rutaMcpDeclarada : "/mcp";
 
   /**
    * LA CREDENCIAL DEL AGENTE, TAMBIÉN EN LA RUTA.
